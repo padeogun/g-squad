@@ -1101,20 +1101,27 @@ select test.ok((select church_id from public.app_users where id = test.id('newle
 select test.lives(format('insert into public.role_assignments (user_id, role, unit_id) values (%L, %L, %L)',
                          test.id('newlead'), 'unit_lead', test.id('A3')),
                   'S1: Coordinator makes the new leader a Unit Lead');
-select test.throws(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('newlead'), 'teci_coordinator'),
-                   'S1: Coordinator cannot give a senior role (Resident Pastor only)');
-select test.throws(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('newlead'), 'operations_lead'),
-                   'S1: Coordinator cannot create an Operations Lead');
-select test.throws(format('delete from public.role_assignments where user_id = %L and role = %L', test.id('ops'), 'operations_lead'),
-                   'S1: Coordinator cannot remove the Operations Lead role');
+-- Migration 18: the Coordinator now gives and removes senior roles, except the Resident Pastor role.
+select test.lives(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('newlead'), 'teci_coordinator'),
+                  'M18: Coordinator gives a senior role');
+select test.lives(format('delete from public.role_assignments where user_id = %L and role = %L', test.id('newlead'), 'teci_coordinator'),
+                  'M18: Coordinator removes a senior role');
+select test.lives(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('newlead'), 'operations_lead'),
+                  'M18: Coordinator gives the Operations Lead role');
+select test.lives(format('delete from public.role_assignments where user_id = %L and role = %L', test.id('newlead'), 'operations_lead'),
+                  'M18: Coordinator removes the Operations Lead role');
+select test.throws(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('newlead'), 'resident_pastor'),
+                   'M18: Coordinator cannot give the Resident Pastor role');
+select test.throws(format('delete from public.role_assignments where user_id = %L and role = %L', test.id('rp'), 'resident_pastor'),
+                   'M18: Coordinator cannot remove the Resident Pastor role');
 select test.throws(format('delete from public.role_assignments where user_id = %L', test.id('coord')),
                    'S1: Coordinator cannot change their own roles');
 select test.ok((select count(distinct user_id) from public.role_assignments) >= 10,
                'S1: Coordinator sees every leader''s roles in their church');
 select test.ok(not exists (select 1 from public.role_assignments where user_id = test.id('b_ops')),
                'S1: Coordinator sees no roles from another church');
-select test.throws(format('update public.app_users set is_active = false where id = %L', test.id('ops')),
-                   'S1: Coordinator cannot switch off the Operations Lead''s account');
+select test.throws(format('update public.app_users set is_active = false where id = %L', test.id('rp')),
+                   'M18: Coordinator cannot switch off the Resident Pastor''s account');
 select test.throws(format('update public.app_users set church_id = %L where id = %L', test.id('churchB'), test.id('newlead')),
                    'S1: an account cannot be moved to another church');
 select test.lives(format('update public.app_users set display_name = %L where id = %L', 'New Lead (Hospitality)', test.id('newlead')),
@@ -1163,10 +1170,7 @@ select test.login('rp'); set role authenticated;
 select test.lives(format('update public.app_users set is_active = false where id = %L', test.id('pastoral')),
                   'K02: Resident Pastor switches off a senior leader''s account');
 reset role;
-select test.login('coord'); set role authenticated;
-select test.throws(format('update public.app_users set is_active = true where id = %L', test.id('pastoral')),
-                   'K02: Coordinator cannot switch a senior leader''s account back on');
-reset role;
+-- (Migration 18: the Coordinator may now do this too, so only the Operations Lead is checked here.)
 select test.login('ops'); set role authenticated;
 select test.throws(format('update public.app_users set is_active = true where id = %L', test.id('pastoral')),
                    'K02: Operations Lead cannot switch a senior leader''s account back on');
@@ -1181,9 +1185,9 @@ reset role;
 -- K03: a Purpose Head is protected while Purpose Heads read pastoral notes.
 select test.login('');
 update public.church_settings set purpose_heads_read_pastoral = true where church_id = test.id('churchA');
-select test.login('coord'); set role authenticated;
+select test.login('ops'); set role authenticated;
 select test.throws(format('update public.app_users set is_active = false where id = %L', test.id('ph')),
-                   'K03: Coordinator cannot switch off a Purpose Head who reads pastoral notes');
+                   'K03: Operations Lead cannot switch off a Purpose Head who reads pastoral notes');
 select test.throws(format('delete from public.app_users where id = %L', test.id('ph')),
                    'K03: ... nor delete that account');
 reset role;
@@ -1206,14 +1210,14 @@ reset role;
 -- Role rows: an UPDATE is checked like a removal plus a grant.
 select test.login('coord'); set role authenticated;
 select test.throws(format('update public.role_assignments set role = %L, unit_id = null where user_id = %L and role = %L',
-                          'pastoral_lead', test.id('ul_b'), 'unit_lead'),
-                   'K: Coordinator cannot turn a Unit Lead row into a senior role');
+                          'resident_pastor', test.id('ul_b'), 'unit_lead'),
+                   'K/M18: Coordinator cannot turn a Unit Lead row into the Resident Pastor role');
 select test.throws(format('update public.role_assignments set user_id = %L where user_id = %L and role = %L',
                           test.id('coord'), test.id('finance'), 'finance'),
                    'K: Coordinator cannot move someone''s role row to themselves');
 select test.throws(format('update public.role_assignments set is_active = false where user_id = %L and role = %L',
-                          test.id('ops'), 'operations_lead'),
-                   'K: Coordinator cannot switch off the Operations Lead role row');
+                          test.id('rp'), 'resident_pastor'),
+                   'K/M18: Coordinator cannot switch off the Resident Pastor role row');
 select test.throws(format('update public.role_assignments set church_id = %L where user_id = %L',
                           test.id('churchB'), test.id('finance')),
                    'K: a role row cannot be moved to another church');
@@ -1510,6 +1514,39 @@ select app.anonymise_expired_people();
 select test.ok((select status = 'ended' and ended_on = current_date - 800
                 from public.unit_memberships where person_id = test.id('longgone')),
                'N02: the nightly job ends the membership, dated when the person left');
+
+-- =====================================================================================
+-- Migration 18 (decision of 23 Oct 2026): the G-Squad Coordinator has full access, except
+-- the Resident Pastor role and account.
+-- =====================================================================================
+select test.login('coord'); set role authenticated;
+select test.lives(format('select * from public.get_pastoral_notes(%L)', test.id('p1')), 'M18: Coordinator reads pastoral notes');
+select test.lives(format('insert into public.pastoral_notes (person_id, note) values (%L, %L)', test.id('p1'), 'Checked in after the service.'),
+                  'M18: Coordinator adds a pastoral note');
+select test.lives($q$update public.units set regular_monthly_need = 3 where name = 'Hospitality'$q$, 'M18: Coordinator edits a unit');
+select test.ok((select regular_monthly_need from public.units where name = 'Hospitality' and church_id = test.id('churchA')) = 3,
+               'M18: ... and the change is saved');
+select test.lives($q$insert into public.purposes (name) values ('Coordinator purpose')$q$, 'M18: Coordinator adds a purpose');
+select test.lives($q$update public.teci_stages set description = 'Foundations' where stage_no = 1$q$, 'M18: Coordinator edits a TECi stage');
+select test.lives($q$insert into public.project_types (name) values ('Coordinator type')$q$, 'M18: Coordinator adds a project type');
+select test.lives('update public.church_settings set serving_limit_per_month = 3', 'M18: Coordinator changes a church setting');
+select test.lives('update public.church_settings set purpose_heads_read_pastoral = false', 'M18: Coordinator sets who reads pastoral notes');
+select test.lives(format('update public.app_users set is_active = false where id = %L', test.id('pastoral')),
+                  'M18: Coordinator switches off a senior leader''s account');
+select test.lives(format('update public.app_users set is_active = true where id = %L', test.id('pastoral')),
+                  'M18: ... and back on');
+select test.throws(format('update public.app_users set is_active = false where id = %L', test.id('coord')),
+                   'M18: Coordinator still cannot switch off their own account');
+select test.throws(format('delete from public.role_assignments where user_id = %L', test.id('coord')),
+                   'M18: Coordinator still cannot change their own roles');
+reset role;
+
+-- The Operations Lead's limits are unchanged: no pastoral notes, no senior roles.
+select test.login('ops'); set role authenticated;
+select test.throws(format('select * from public.get_pastoral_notes(%L)', test.id('p1')), 'M18: Operations Lead still cannot read pastoral notes');
+select test.throws(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('finance'), 'pastoral_lead'),
+                   'M18: Operations Lead still cannot give a senior role');
+reset role;
 
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail

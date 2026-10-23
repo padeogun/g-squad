@@ -115,12 +115,17 @@ export function validateInvite(body: unknown): { ok: true; value: InviteRequest 
 export function checkGrants(callerRoles: AppRole[], requested: RoleRequest[]): string | null {
   const has = (r: AppRole) => callerRoles.includes(r);
   if (!INVITER_ROLES.some(has)) return 'Only the Operations Lead, the G-Squad Coordinator or the Resident Pastor can invite leaders';
+  // Migration 18 (decision of 23 Oct 2026): the G-Squad Coordinator gives senior roles too,
+  // except the Resident Pastor role, which stays with the Resident Pastor.
   for (const r of requested) {
-    if (SENIOR_ROLES.includes(r.role) && !has('resident_pastor')) {
-      return 'Only the Resident Pastor can give this role';
+    if (r.role === 'resident_pastor' && !has('resident_pastor')) {
+      return 'Only the Resident Pastor can give the Resident Pastor role';
     }
-    if (r.role === 'operations_lead' && !has('resident_pastor') && !has('operations_lead')) {
-      return 'Only the Resident Pastor or an Operations Lead can give the Operations Lead role';
+    if (SENIOR_ROLES.includes(r.role) && !has('resident_pastor') && !has('gsquad_coordinator')) {
+      return 'Only the Resident Pastor or the G-Squad Coordinator can give this role';
+    }
+    if (r.role === 'operations_lead' && !has('resident_pastor') && !has('operations_lead') && !has('gsquad_coordinator')) {
+      return 'Only the Resident Pastor, an Operations Lead or the G-Squad Coordinator can give the Operations Lead role';
     }
   }
   return null;

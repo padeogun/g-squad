@@ -62,16 +62,21 @@ describe('checkGrants', () => {
     expect(checkGrants([], unitLead)).toMatch(/Only the Operations Lead/);
   });
 
-  it('keeps senior roles for the Resident Pastor', () => {
-    for (const role of ['resident_pastor', 'gsquad_coordinator', 'teci_coordinator', 'pastoral_lead'] as const) {
-      expect(checkGrants(['operations_lead'], [{ role }])).toMatch(/Resident Pastor/);
-      expect(checkGrants(['gsquad_coordinator'], [{ role }])).toMatch(/Resident Pastor/);
+  // Migration 18: senior roles are given by the Resident Pastor or the G-Squad Coordinator;
+  // the Resident Pastor role by the Resident Pastor only.
+  it('lets the Coordinator give senior roles, but not the Resident Pastor role', () => {
+    for (const role of ['gsquad_coordinator', 'teci_coordinator', 'pastoral_lead'] as const) {
+      expect(checkGrants(['operations_lead'], [{ role }])).toMatch(/Resident Pastor or the G-Squad Coordinator/);
+      expect(checkGrants(['gsquad_coordinator'], [{ role }])).toBeNull();
       expect(checkGrants(['resident_pastor'], [{ role }])).toBeNull();
     }
+    expect(checkGrants(['gsquad_coordinator'], [{ role: 'resident_pastor' }])).toMatch(/Resident Pastor role/);
+    expect(checkGrants(['operations_lead'], [{ role: 'resident_pastor' }])).toMatch(/Resident Pastor role/);
+    expect(checkGrants(['resident_pastor'], [{ role: 'resident_pastor' }])).toBeNull();
   });
 
-  it('keeps the Operations Lead role from the Coordinator', () => {
-    expect(checkGrants(['gsquad_coordinator'], [{ role: 'operations_lead' }])).toMatch(/Operations Lead role/);
+  it('lets the Coordinator and Operations Leads give the Operations Lead role', () => {
+    expect(checkGrants(['gsquad_coordinator'], [{ role: 'operations_lead' }])).toBeNull();
     expect(checkGrants(['operations_lead'], [{ role: 'operations_lead' }])).toBeNull();
   });
 });

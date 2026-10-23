@@ -52,8 +52,9 @@ Units, purposes and people come from importing the G-Squad 2027 Volunteer Model 
 - **Approvals are recorded automatically.** The app can't write `approved_by` or `approved_at` itself. Approving is a status change, and the database checks who is making it.
 - **Who grants roles (from the security review).**
   - No one can change their own roles.
-  - Only the Resident Pastor grants Resident Pastor, G-Squad Coordinator, TECi Coordinator and Pastoral Lead. Purpose Head is added to that list when Purpose Heads may read pastoral notes.
-  - Only the Resident Pastor can switch on Purpose Heads reading pastoral notes.
+  - The Resident Pastor and the G-Squad Coordinator grant the senior roles: G-Squad Coordinator, TECi Coordinator, Pastoral Lead, and Purpose Head while Purpose Heads may read pastoral notes (migration 18). The Resident Pastor role itself is granted, removed and switched off by the Resident Pastor only.
+  - The Resident Pastor or G-Squad Coordinator switches Purpose Heads reading pastoral notes on or off.
+  - The G-Squad Coordinator has full access (migration 18): member records, faith fields, pastoral notes, reference forms, settings and senior roles. Member records are otherwise edited only by the person's Team Lead (migration 16).
   - The Operations Lead can't see audit entries about faith fields, pastoral notes or one-to-ones.
 - **Adding members to a unit (from the security review).** A Unit Lead can add only people they entered themselves. Adding an existing member of another unit goes through the Operations Lead, so a lead can't reach someone's details just by adding them.
 - **The system convention.** A change with no signed-in user (the service role, or a scheduled job) skips the role checks. Signed-out visitors (`anon`) have no access to anything, so they can't use this route.
