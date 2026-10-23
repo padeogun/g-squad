@@ -2159,6 +2159,71 @@ select test.throws($q$select public.create_member('{"first_name":"No","surname":
                    'M22: a Team Lead still adds members to a team');
 reset role;
 
+-- ---------- Security review 13 ----------------------------------------------------------
+-- S01: a Team Lead who becomes the Deputy of the same team stops reading the one-to-ones they
+-- wrote (ul_a wrote one for s3_member above). Restored afterwards.
+select test.login('nobody');
+update public.role_assignments set is_active = false where user_id = test.id('ul_a') and role = 'unit_lead' and unit_id = test.id('A1');
+insert into public.role_assignments (church_id, user_id, role, unit_id) values (test.id('churchA'), test.id('ul_a'), 'deputy_unit_lead', test.id('A1'));
+select test.login('ul_a'); set role authenticated;
+select test.ok(not exists (select 1 from public.one_to_ones where unit_id = test.id('A1')),
+               'S13/S01: a former Team Lead who is now the Deputy no longer reads the one-to-ones they wrote');
+select test.ok(not exists (select 1 from jsonb_array_elements(public.unit_dashboard(test.id('A1')) -> 'members') m
+                           where m ->> 'last_one_to_one' is not null),
+               'S13/S01: ... nor their dates on the unit dashboard');
+reset role;
+select test.login('nobody');
+delete from public.role_assignments where user_id = test.id('ul_a') and role = 'deputy_unit_lead' and unit_id = test.id('A1');
+update public.role_assignments set is_active = true where user_id = test.id('ul_a') and role = 'unit_lead' and unit_id = test.id('A1');
+select test.login('ul_a'); set role authenticated;
+select test.ok(exists (select 1 from public.one_to_ones where unit_id = test.id('A1')),
+               'S13/S01: ... and reads them again as the Team Lead');
+reset role;
+
+-- S02: one Team Lead label per team even when the trigger's check is skipped or raced (a
+-- system change skips it; two requests at once both pass it). The unique index decides.
+select test.login('nobody');
+select test.throws(format($q$update public.unit_memberships set church_role_id = (select id from public.church_roles where church_id = %L and default_key = 'team_lead')
+                             where unit_id = %L and status <> 'ended'$q$, test.id('churchA'), test.id('A1')),
+                   'S13/S02: two live memberships of a team cannot both carry the Team Lead label');
+-- S05: no membership is flagged team leader without the Team Lead label.
+select test.ok(not exists (select 1 from public.unit_memberships m
+                           where m.is_team_leader and not exists (select 1 from public.church_roles r
+                                                                  where r.id = m.church_role_id and r.default_key = 'team_lead')),
+               'S13/S05: the team leader flag always matches the Team Lead label');
+-- S03: the Purpose Head rule serialises changes per person (two sessions are needed to race
+-- it, so this checks the lock is there; the race itself was reproduced by hand).
+select test.ok((select prosrc ~ 'pg_advisory_xact_lock' from pg_proc where oid = 'app.role_rules()'::regprocedure),
+               'S13/S03: role changes for one person are serialised');
+
+-- S04: the TECi route records a name, email and stage only.
+select test.login('teci'); set role authenticated;
+select test.throws(format($q$select public.create_member('{"first_name":"Too","surname":"Much","birth_day":3,"birth_month":4,"marital_status":"married","teci_stage_id":"%s"}', null)$q$,
+                          (select id from public.teci_stages where church_id = test.id('churchA') and stage_no = 1)),
+                   'S13/S04: the TECi Coordinator cannot record birthdays or family details');
+select test.throws(format($q$insert into public.people (first_name, surname, area, teci_stage_id) values ('Too', 'Much', 'Salford', %L)$q$,
+                          (select id from public.teci_stages where church_id = test.id('churchA') and stage_no = 1)),
+                   'S13/S04: ... nor other details by a direct insert');
+select test.lives(format($q$select public.create_member('{"first_name":"Just","surname":"Enough","email":"just.enough@example.org","teci_stage_id":"%s"}', null)$q$,
+                         (select id from public.teci_stages where church_id = test.id('churchA') and stage_no = 1)),
+                  'S13/S04: ... but records a name, email and stage');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.lives(format($q$select public.create_member('{"first_name":"Ops","surname":"Graduate","area":"Rochdale","teci_stage_id":"%s"}', null)$q$,
+                         (select id from public.teci_stages where church_id = test.id('churchA') and stage_no = 1)),
+                  'S13/S04: the Operations Lead''s full member entry is unchanged');
+reset role;
+
+-- S07: the default role names are kept for the default roles.
+select test.login('coord'); set role authenticated;
+select test.throws(format($q$insert into public.church_roles (name, unit_id) values ('team lead', %L)$q$, test.id('A1')),
+                   'S13/S07: a team''s own role cannot be called Team Lead');
+select test.lives(format($q$insert into public.church_roles (name, unit_id) values ('Vision mixer', %L)$q$, test.id('A1')),
+                  'S13/S07: a team''s own role with its own name is fine');
+select test.throws($q$update public.church_roles set name = 'Deputy Team Lead' where name = 'Vision mixer'$q$,
+                   'S13/S07: ... but it cannot be renamed to a default role''s name');
+reset role;
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;

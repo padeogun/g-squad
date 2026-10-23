@@ -70,12 +70,16 @@ export function Teci() {
         G-Squad members in or through TEC's training programme, and whether each stage has been verified.
       </SectionHeading>
 
-      <div className="tec-stats">
-        <StatTile label="In or through TECi" value={inTeci.length} tone="brand" />
-        <StatTile label="Verified" value={inTeci.length - unverified.length} />
-        <StatTile label="Awaiting verification" value={unverified.length} tone={unverified.length ? 'danger' : 'default'} />
-        <StatTile label="Not started" value={all.length - inTeci.length} />
-      </div>
+      {/* SECURITY REVIEW 13 (S08): the counts appear only once the list has loaded. Before, a
+          failed or slow load showed four zeros, which reads as "no one is awaiting verification". */}
+      {people.data && (
+        <div className="tec-stats">
+          <StatTile label="In or through TECi" value={inTeci.length} tone="brand" />
+          <StatTile label="Verified" value={inTeci.length - unverified.length} />
+          <StatTile label="Awaiting verification" value={unverified.length} tone={unverified.length ? 'danger' : 'default'} />
+          <StatTile label="Not started" value={all.length - inTeci.length} />
+        </div>
+      )}
 
       {mayAdd && <AddGraduate stages={stages.data ?? []} />}
 
@@ -171,8 +175,8 @@ function AddGraduate({ stages }: { stages: { id: string; stage_no: number; name:
     <Card title="Add a TECi graduate" tone="tint">
       <form className="app-form" onSubmit={onSubmit} noValidate>
         <p className="type-caption" style={{ margin: 0 }}>
-          For someone joining G-Squad after completing a TECi level who is not in a team yet. Their Team Lead adds the rest of
-          their details when they join a team.
+          For someone joining G-Squad after completing a TECi level who is not in a team yet. Only their name, email address and
+          stage are recorded here; the Operations Lead adds them to a team, and their Team Lead then completes their details.
         </p>
         <div className="tec-fields">
           <TextField id="g-first" label="First name" required maxLength={100} value={v.first_name} onChange={(e) => setV({ ...v, first_name: e.target.value })} />

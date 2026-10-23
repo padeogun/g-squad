@@ -228,6 +228,18 @@ function EditPanel({
   return (
     <Card title={row ? `Edit ${def.singular}` : `Add a ${def.singular}`} tone="tint">
       <form className="app-form" onSubmit={onSubmit} noValidate>
+        {/* SECURITY REVIEW 13 (S09): say why some fields are greyed out, rather than leaving
+            locked controls unexplained (screen readers only announce "dimmed"). */}
+        {row && def.protectedRows && row[def.protectedRows.flag] != null && (
+          <p className="type-caption" style={{ margin: 0 }}>
+            This is one of the app's default {def.title.toLowerCase()}. Only{' '}
+            {def.fields
+              .filter((f) => def.protectedRows!.editable.includes(f.key))
+              .map((f) => `"${f.label}"`)
+              .join(' and ')}{' '}
+            can be changed; it cannot be renamed, switched off or removed.
+          </p>
+        )}
         <div className="tec-fields">
           {def.fields.map((f) => (
             <Field

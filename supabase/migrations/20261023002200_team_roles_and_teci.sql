@@ -34,6 +34,21 @@ alter table public.role_assignments add constraint role_scope_ok check (
   (role not in ('purpose_head','unit_lead','deputy_unit_lead') and purpose_id is null and unit_id is null)
 );
 
+-- SECURITY REVIEW 13 (S05): existing co-leads would make the index below fail with a bare
+-- "could not create unique index" error. Stop with a message that says what to fix first
+-- (choosing who stays Team Lead is TEC's decision, not the migration's).
+do $$
+declare v_units text;
+begin
+  select string_agg(u.name, ', ' order by u.name) into v_units
+  from public.units u
+  where (select count(*) from public.role_assignments ra
+         where ra.unit_id = u.id and ra.role = 'unit_lead' and ra.is_active) > 1;
+  if v_units is not null then
+    raise exception 'Migration 22 needs one Team Lead per team. These teams have more than one active unit_lead: %. Switch off all but one first.', v_units;
+  end if;
+end $$;
+
 -- 3. One active Team Lead per unit (backstop for the friendlier check in the trigger below).
 create unique index role_assignments_one_team_lead
   on public.role_assignments (unit_id) where role = 'unit_lead' and is_active;
@@ -160,6 +175,19 @@ as $$
                                 'gsquad_coordinator','operations_lead','pastoral_lead']::public.app_role[])
 $$;
 
+-- SECURITY REVIEW 13 (S01): one-to-ones, re-created whole from migration 3. The writer read
+-- their own one-to-ones whatever role they now held, so a Team Lead who became the Deputy of
+-- the same team kept reading them (and their dates on the unit dashboard), against the
+-- decision that the Deputy does not see one-to-ones. The writer now reads them except while
+-- they are that unit's Deputy. (Purpose Head, Coordinator and Resident Pastor as before.)
+create or replace function app.can_read_one_to_one(p_unit uuid, p_lead uuid) returns boolean
+language sql stable security definer set search_path = ''
+as $$
+  select (p_lead = (select auth.uid()) and not app.is_unit_deputy_of(p_unit))
+      or app.has_any_role(array['resident_pastor','gsquad_coordinator']::public.app_role[])
+      or app.is_purpose_head_of_unit(p_unit)
+$$;
+
 create or replace function app.can_view_unit(p_unit uuid) returns boolean
 language sql stable security definer set search_path = ''
 as $$
@@ -195,9 +223,28 @@ as $$
 declare
   v_functions public.app_role[] := array['gsquad_coordinator','operations_lead']::public.app_role[];
   v_holders   public.app_role[] := array['purpose_head','resident_pastor']::public.app_role[];
+  v_people    uuid[];
+  v_person    uuid;
 begin
   -- Service role / SQL editor: bootstrapping and data fixes are not limited.
   if app.is_system() then return null; end if;
+
+  -- SECURITY REVIEW 13 (S03): two requests at the same time (one giving Operations Lead, the
+  -- other removing the same person's Purpose Head) each saw the other's row as not yet
+  -- committed, so both passed and left the function with no holder. One lock per person,
+  -- held to the end of the transaction, makes the second wait; its checks below then run on a
+  -- fresh snapshot (this function is volatile) and see the first one's change. Locks are
+  -- taken in a fixed order so an UPDATE that moves a row between two people cannot deadlock.
+  if tg_op = 'INSERT' then
+    v_people := array[new.user_id];
+  elsif tg_op = 'DELETE' then
+    v_people := array[old.user_id];
+  else
+    v_people := array[least(old.user_id, new.user_id), greatest(old.user_id, new.user_id)];
+  end if;
+  foreach v_person in array v_people loop
+    perform pg_advisory_xact_lock(hashtextextended('gsquad.role_rules:' || v_person::text, 0));
+  end loop;
 
   if tg_op <> 'DELETE' and new.is_active then
     -- 5. The Coordinator and Operations Lead functions need a Purpose Head or Resident Pastor.
@@ -304,6 +351,15 @@ language plpgsql security definer set search_path = ''
 as $$
 begin
   if app.is_system() then return coalesce(new, old); end if;
+  -- SECURITY REVIEW 13 (S07): a team-specific role could be called "Team Lead" (the name
+  -- index is per team), so a second person could be shown as a team's Team Lead without the
+  -- default label that the no-co-leads rule counts. The default names are kept for the defaults.
+  if tg_op <> 'DELETE' and new.default_key is null
+     and (tg_op = 'INSERT' or lower(new.name) <> lower(old.name))
+     and exists (select 1 from public.church_roles r
+                 where r.church_id = new.church_id and r.default_key is not null and lower(r.name) = lower(btrim(new.name))) then
+    raise exception 'That name belongs to one of the default team roles; choose another' using errcode = '23505';
+  end if;
   if tg_op = 'INSERT' then
     if new.default_key is not null and current_setting('gsquad.default_roles', true) is distinct from 'on' then
       raise exception 'The default team roles are created by the app' using errcode = '42501';
@@ -368,6 +424,32 @@ grant execute on function app.membership_role_guard() to service_role;
 create trigger unit_memberships_role_guard before insert or update on public.unit_memberships
   for each row execute function app.membership_role_guard();
 
+-- SECURITY REVIEW 13 (S02): the trigger's "already has a Team Lead" check reads committed rows
+-- only, so two changes at the same moment (two tabs, or the Team Lead and the Operations Lead)
+-- both passed and the team had two Team Leads. A unique index cannot be raced.
+-- SECURITY REVIEW 13 (S05): before it, existing memberships are brought into line. Their
+-- is_team_leader flag was set by the old checkbox and would otherwise stay true without the
+-- label (still shown as "(lead)" and blocking the label on My Unit) until the row next changed.
+do $$
+declare v_units text;
+begin
+  -- Two labelled Team Leads can exist only if a church already had a church-wide role called
+  -- "Team Lead", which add_default_team_roles adopted. Say so plainly rather than guess.
+  select string_agg(u.name, ', ' order by u.name) into v_units
+  from public.units u
+  where (select count(*) from public.unit_memberships m
+         join public.church_roles r on r.id = m.church_role_id and r.default_key = 'team_lead'
+         where m.unit_id = u.id and m.status <> 'ended') > 1;
+  if v_units is not null then
+    raise exception 'Migration 22 needs one Team Lead per team. These teams have more than one member with the Team Lead role: %. Change all but one first.', v_units;
+  end if;
+end $$;
+update public.unit_memberships m
+   set is_team_leader = coalesce((select r.default_key = 'team_lead' from public.church_roles r where r.id = m.church_role_id), false)
+ where m.is_team_leader is distinct from coalesce((select r.default_key = 'team_lead' from public.church_roles r where r.id = m.church_role_id), false);
+create unique index unit_memberships_one_team_lead
+  on public.unit_memberships (unit_id) where is_team_leader and status <> 'ended';
+
 -- -------------------------------------------------------------------------------------
 -- 6. TECi: verification and adding TECi graduates who are not yet in a team.
 -- -------------------------------------------------------------------------------------
@@ -403,6 +485,21 @@ begin
     -- The TECi Coordinator adds members who have completed a TECi level.
     if new.teci_stage_id is null and not app.has_any_role(array['unit_lead','operations_lead']::public.app_role[]) then
       raise exception 'Choose the TECi stage they have completed' using errcode = '22023';
+    end if;
+    -- SECURITY REVIEW 13 (S04): the TECi route records the minimum: name, email and the stage.
+    -- create_member (and a direct insert) accepted birthdays, marital status, anniversaries,
+    -- area, availability and so on from the TECi Coordinator, who cannot edit or correct the
+    -- record afterwards (only the G-Squad Coordinator can until they join a team). The rest is
+    -- added once the Operations Lead has put them in a team and their Team Lead can edit them.
+    if not app.has_any_role(array['unit_lead','operations_lead']::public.app_role[])
+       and (new.birth_day is not null or new.birth_month is not null or new.marital_status is not null
+            or new.anniversary_day is not null or new.anniversary_month is not null or new.area is not null
+            or new.greatness_community_id is not null or new.available_hours_month is not null
+            or coalesce(cardinality(new.preferred_times), 0) > 0 or new.date_left is not null
+            or new.status <> 'active' or new.celebration_opt_in
+            or new.consent_notice_version is not null or new.consent_at is not null) then
+      raise exception 'The TECi Coordinator records only a name, email address and TECi stage; the rest is added when they join a team'
+        using errcode = '42501';
     end if;
     if new.teci_verified_at is not null and new.teci_stage_id is not null and app.has_role('teci_coordinator') then
       new.teci_verified_at := now();
