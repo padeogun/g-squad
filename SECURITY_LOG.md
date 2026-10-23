@@ -464,3 +464,43 @@ Independent review of the latest commit on `slice-1b-reference` ("Member edit ri
 3. **Re-joining a unit now goes through the Operations Lead** (or the Resident Pastor). A Unit Lead who ends a membership by mistake must ask them to re-open it.
 4. **A Unit Lead can still enter a person and leave them out of every unit** by inserting into `people` directly rather than through `create_member`. Such a record is then invisible to them; only church-wide readers see it. Consider a periodic report of members with no unit.
 5. **Sample data only** until the DPIA is signed (unchanged).
+
+## Review 9: Anonymised members leave their units, 23 Oct 2026
+
+Independent review of the latest commit on `slice-1b-reference` ("Anonymised members leave their units (migration 17)"), which acts on residual risk 2 of review 8. Every fix is marked `SECURITY REVIEW FIX Nnn` in an inline comment. Migration 17 had not been applied anywhere, so the fix is made in it directly.
+
+### Scope
+
+- `supabase/migrations/20261023001700_anonymised_leave_units.sql`: `app.anonymise` (compared line by line with migration 11's version), its grants, and the backfill.
+- The callers: `public.anonymise_person` (migration 9) and `app.anonymise_expired_people` (migration 12) with its pg_cron schedule.
+- The triggers on `unit_memberships`: `app.membership_guard` (migration 8), `app.membership_not_anonymised` (migration 15) and `app.membership_reopen_guard` (migration 16), run from the RPC as a signed-in Operations Lead (not the system shortcut).
+- Everything that reads memberships: `app.can_read_person`, the membership policies, `app.unit_capacity` / `capacity_calendar`, `v_engagement`, `app.raise_automatic_flags`, `export_person`, `useMemberships` in `src/data/people.ts`.
+- The new "M17" checks in `supabase/tests/10_access_and_rules.sql`.
+
+### Findings
+
+| ID | Severity | Finding | Fix | File |
+|----|----------|---------|-----|------|
+| N01 | Low | **The new checks did not exercise the real paths.** The M17 checks call `app.anonymise` as the database owner, where `app.is_system()` is true and every membership trigger returns at once. Neither the Operations Lead's erasure request (`anonymise_person`, where the triggers run in full), a pending membership, the nightly job, nor the function's grants were checked. (Read-through found no fault in those paths; the gap was in the evidence.) | 8 database checks: `app.anonymise` is not executable by `anon` or `authenticated` and the Operations Lead cannot call it directly; `anonymise_person` stays granted to signed-in users only; as the Operations Lead (`test.login('ops')`, `set role authenticated`) it ends an active and a pending membership and is logged; the Unit Lead then no longer sees the person at all; the nightly job ends a long-gone leaver's membership. | tests |
+| N02 | Low | **Memberships were ended "today", not when the person left.** The nightly job anonymises people a year or more after `date_left`, and the backfill covers people anonymised in the past; both set `ended_on = current_date`, recording them as serving in the unit long after they had gone (UK GDPR accuracy). No count uses `ended_on` today, so no figure was wrong, but any future "unit history" or turnover report would be. | `ended_on` is the person's `date_left` (which `app.anonymise` sets just before, defaulting to today), kept on or after `joined_on`, in both the function and the backfill. 1 database check. | migration 17 |
+
+### Checked and found sound
+
+- **Nothing dropped from `app.anonymise`.** A diff against migration 11 shows the body identical apart from the new membership update: the anonymising marker on and off, every wiped column of `people`, the deletes of faith, pastoral notes, one-to-ones, recognitions, holidays, check-in flags and email tokens, the clearing of community support roles and `app_users.person_id`, and F14's wipe of override reasons. No migration between 11 and 17 re-created it. `security definer` and `search_path = ''` are kept.
+- **Grants.** `create or replace` keeps the existing grants; migration 17 restates them as intended by migration 9: no `public`, `anon` or `authenticated`, `service_role` only. `anonymise_person` (Operations Lead, own church, logged as `anonymise_request`) and `anonymise_expired_people` (service role and pg_cron as owner, logged as `anonymise_retention`) still reach it as the function owner; both now checked.
+- **Triggers on the update.** `membership_guard` (non-system path): person, unit and church are unchanged; `approved_by` is untouched; the pending-to-active and re-activation branches do not apply to `ended`; `ended_on` is set by the function. `membership_reopen_guard` only acts when an *ended* row is re-opened. `membership_not_anonymised` is `before insert` only. The update runs after `people` is anonymised, and none of the triggers objects to that. The backfill runs as the owner (system) and meets the `status`/`ended_on` check constraint.
+- **Audit and history.** `unit_memberships` has no row-audit trigger; the single `anonymise_request` / `anonymise_retention` entry records the action, as before. Rows are ended, not deleted, so serving history (assignments) and the membership history stay as anonymous records; assignments still count for the Values and engagement figures as before.
+- **Counts and views.** `unit_capacity` already counted only `active` memberships of `active` people, and an anonymised person is always `left`, so capacity is unchanged for every month. `v_engagement` does not read memberships (a `left` person was already "left"). The `many_units` flag counts `active` people only. `useMemberships` (team lists and My Unit) shows only live memberships, so "Former member" no longer appears, which is the purpose of the change.
+- **Visibility narrows, as intended.** `app.can_read_person` gives a Unit Lead or Purpose Head sight of a person only through a live membership, so after anonymising they no longer read the Former member's row at all; church-wide readers still do. Pending requests of an anonymised person are ended too, so none is left for the Resident Pastor to approve (approving would also have been refused by L02/M01).
+
+### Test results
+
+- `scripts/db-test.sh` (local Postgres 16): **317 of 317 checks passed** (309 before, plus 8 for N01 and N02).
+- `scripts/db-types.sh`: `src/lib/database.types.ts` regenerated; no change (only `app` functions and data changed).
+- `npm run check`: lint clean, **60 of 60 unit tests pass**, build succeeds.
+
+### Residual risks and actions for TEC
+
+1. **Future rota slots are not cancelled.** An anonymised person's `planned` assignments stay on rotas as "Former member" (they existed before this change too). Consider cancelling future planned slots when anonymising, or showing them to the rota owner as gaps to fill.
+2. **A Unit Lead loses sight of the person behind past slots** in their unit once the membership ends (as for anyone who leaves a unit under Decision 2); past assignments remain as anonymous counts.
+3. **Sample data only** until the DPIA is signed (unchanged).

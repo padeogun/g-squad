@@ -1471,6 +1471,46 @@ select test.ok(not exists (select 1 from public.unit_memberships where unit_id =
                'M17: the Former member is not on the Unit Lead''s team list');
 reset role;
 
+-- Security review 9: the same through the paths used for real, where the triggers on
+-- unit_memberships run in full (not the owner/system shortcut above).
+do $$
+declare v uuid; w uuid;
+begin
+  insert into public.people (church_id, first_name, surname) values (test.id('churchA'), 'Erasure', 'Request') returning id into v;
+  insert into public.unit_memberships (church_id, person_id, unit_id, joined_on) values (test.id('churchA'), v, test.id('A1'), current_date - 30);
+  insert into public.unit_memberships (church_id, person_id, unit_id, status) values (test.id('churchA'), v, test.id('A2'), 'pending_approval');
+  insert into test.ids values ('erasure', v);
+  insert into public.people (church_id, first_name, surname, status, date_joined, date_left)
+    values (test.id('churchA'), 'Long', 'Gone', 'left', current_date - 2000, current_date - 800) returning id into w;
+  insert into public.unit_memberships (church_id, person_id, unit_id, joined_on) values (test.id('churchA'), w, test.id('A1'), current_date - 2000);
+  insert into test.ids values ('longgone', w);
+end $$;
+select test.ok(not has_function_privilege('authenticated', 'app.anonymise(uuid)', 'execute')
+               and not has_function_privilege('anon', 'app.anonymise(uuid)', 'execute'),
+               'N01: app.anonymise is not callable by anon or signed-in users');
+select test.ok(has_function_privilege('authenticated', 'public.anonymise_person(uuid)', 'execute')
+               and not has_function_privilege('anon', 'public.anonymise_person(uuid)', 'execute'),
+               'N01: anonymise_person stays open to signed-in users only (it checks the role itself)');
+select test.login('ops'); set role authenticated;
+select test.throws(format('select app.anonymise(%L)', test.id('erasure')), 'N01: the Ops Lead cannot call app.anonymise directly');
+select test.lives(format('select public.anonymise_person(%L)', test.id('erasure')),
+                  'N01: the Ops Lead anonymises a member with live and pending memberships');
+reset role;
+select test.ok((select count(*) = 2 and bool_and(status = 'ended' and ended_on = current_date)
+                from public.unit_memberships where person_id = test.id('erasure')),
+               'N01: anonymise_person ends active and pending memberships');
+select test.ok(exists (select 1 from public.audit_log where action = 'anonymise_request' and record_id = test.id('erasure')),
+               'N01: the erasure request is logged');
+select test.login('ul_a'); set role authenticated;
+select test.ok(not exists (select 1 from public.people where id = test.id('erasure')),
+               'N01: the Unit Lead no longer sees the Former member at all');
+reset role;
+select test.login('nobody');
+select app.anonymise_expired_people();
+select test.ok((select status = 'ended' and ended_on = current_date - 800
+                from public.unit_memberships where person_id = test.id('longgone')),
+               'N02: the nightly job ends the membership, dated when the person left');
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;

@@ -32,8 +32,14 @@ begin
   update public.app_users set person_id = null where person_id = p_person;
   -- Decision of 23 Oct 2026: an anonymised person leaves every unit, so "Former member" no
   -- longer appears on any team list. Serving history (assignments) stays as anonymous counts.
-  update public.unit_memberships set status = 'ended', ended_on = coalesce(ended_on, current_date)
-   where person_id = p_person and status <> 'ended';
+  -- SECURITY REVIEW FIX N02: date the end to when the person left (set just above), not to
+  -- today. The nightly job (R8) anonymises people a year or more after they left; ending their
+  -- membership "today" would record them as serving long after they had gone (accuracy).
+  -- greatest() keeps the end on or after the joining date for oddly entered records.
+  update public.unit_memberships m
+     set status = 'ended',
+         ended_on = greatest(m.joined_on, coalesce((select p.date_left from public.people p where p.id = p_person), current_date))
+   where m.person_id = p_person and m.status <> 'ended';
   -- SECURITY REVIEW FIX F14: the free-text override reason can describe the person's
   -- circumstances; wipe it with the rest of their personal details.
   update public.assignments set override_reason = null where person_id = p_person and override_reason is not null;
@@ -44,7 +50,8 @@ revoke all on function app.anonymise(uuid) from public, anon, authenticated;
 grant execute on function app.anonymise(uuid) to service_role;
 
 -- Backfill: end the live memberships of anyone already anonymised.
+-- SECURITY REVIEW FIX N02: as above, the end date is when the person left, not today.
 update public.unit_memberships m
-   set status = 'ended', ended_on = coalesce(m.ended_on, current_date)
+   set status = 'ended', ended_on = greatest(m.joined_on, coalesce(p.date_left, current_date))
   from public.people p
  where p.id = m.person_id and p.anonymised_at is not null and m.status <> 'ended';
