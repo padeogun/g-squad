@@ -31,9 +31,11 @@ export const ALL_ROLES: readonly AppRole[] = [
   'finance',
 ];
 
-// Roles only the Resident Pastor may give (migration 10, F01). Purpose Head joins this list
-// while Purpose Heads may read pastoral notes; the database checks that setting, so here we
-// treat Purpose Head as senior too and let the Resident Pastor grant it (the safe direction).
+// Senior roles (migration 10, F01): since migration 18 given by the Resident Pastor or the
+// G-Squad Coordinator, except the Resident Pastor role itself (Resident Pastor only).
+// SECURITY REVIEW FIX P02: this comment said "only the Resident Pastor"; corrected.
+// Purpose Head joins this list while Purpose Heads may read pastoral notes; the database checks
+// that setting, so here we treat Purpose Head as senior too (the safe direction).
 export const SENIOR_ROLES: readonly AppRole[] = [
   'resident_pastor',
   'gsquad_coordinator',

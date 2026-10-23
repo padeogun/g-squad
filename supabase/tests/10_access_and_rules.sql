@@ -1548,6 +1548,95 @@ select test.throws(format('insert into public.role_assignments (user_id, role) v
                    'M18: Operations Lead still cannot give a senior role');
 reset role;
 
+-- =====================================================================================
+-- Security review 10 (migration 18), SECURITY REVIEW FIX P03: the Resident Pastor safeguard
+-- against every route tried in the review, the other new rights, the limits that stay, and
+-- two Coordinators acting against each other.
+-- =====================================================================================
+-- Fixture (as the system): a former Resident Pastor whose role row was switched off; a
+-- switched-off account that still holds an active Resident Pastor row; a second Coordinator;
+-- an open check-in flag.
+select test.login('');
+do $$
+declare v uuid; u text;
+begin
+  foreach u in array array['oldrp','coord2'] loop
+    v := gen_random_uuid();
+    insert into auth.users (id, email) values (v, u || '@example.org');
+    insert into public.app_users (id, church_id, display_name) values (v, test.id('churchA'), initcap(u));
+    insert into test.ids values (u, v);
+  end loop;
+  insert into public.role_assignments (church_id, user_id, role, is_active)
+  values (test.id('churchA'), test.id('finance'), 'resident_pastor', false);
+  insert into public.role_assignments (church_id, user_id, role) values (test.id('churchA'), test.id('oldrp'), 'resident_pastor');
+  update public.app_users set is_active = false where id = test.id('oldrp');
+  insert into public.role_assignments (church_id, user_id, role) values (test.id('churchA'), test.id('coord2'), 'gsquad_coordinator');
+  insert into public.checkin_flags (church_id, person_id, source, raised_by) values (test.id('churchA'), test.id('p1'), 'manual', test.id('ops'))
+  returning id into v;
+  insert into test.ids values ('flag1', v);
+end $$;
+
+select test.login('coord'); set role authenticated;
+-- The Resident Pastor role and account: every route is refused.
+select test.throws(format('update public.role_assignments set is_active = true where user_id = %L and role = %L', test.id('finance'), 'resident_pastor'),
+                   'P03: Coordinator cannot switch a former Resident Pastor''s role row back on');
+select test.throws(format('update public.app_users set is_active = true where id = %L', test.id('oldrp')),
+                   'P03: Coordinator cannot switch on an account that holds the Resident Pastor role');
+select test.throws(format('delete from public.app_users where id = %L', test.id('rp')),
+                   'P03: Coordinator cannot delete the Resident Pastor''s account');
+select test.throws(format('update public.role_assignments set user_id = %L where user_id = %L and role = %L', test.id('teci'), test.id('rp'), 'resident_pastor'),
+                   'P03: Coordinator cannot move the Resident Pastor role row to someone else');
+select test.throws(format('update public.role_assignments set role = %L where user_id = %L and role = %L', 'resident_pastor', test.id('coord2'), 'gsquad_coordinator'),
+                   'P03: Coordinator cannot turn another senior role into the Resident Pastor role');
+-- What stays outside the Coordinator's access.
+select test.ok((select count(*) from public.audit_log) = 0, 'P03: Coordinator still cannot read the audit log');
+with u as (update public.core_values set name = 'Changed' where letter = 'A' returning 1)
+select test.ok(count(*) = 0, 'P03: Coordinator cannot change the ASHLIE core values (Resident Pastor only)') from u;
+select test.throws(format('select public.export_person(%L)', test.id('p1')), 'P03: export_person stays with the Operations Lead and Resident Pastor');
+select test.throws(format('select public.anonymise_person(%L)', test.id('p1')), 'P03: anonymise_person stays with the Operations Lead');
+-- The other new rights.
+with u as (update public.checkin_flags set status = 'closed' where id = test.id('flag1') returning closed_by)
+select test.ok(count(*) = 1 and bool_and(closed_by = test.id('coord')), 'P03: Coordinator closes a check-in flag (recorded as closer)') from u;
+select test.lives($q$insert into public.church_roles (name) values ('Coordinator role')$q$, 'P03: Coordinator adds a team role');
+select test.lives($q$insert into public.leadership_stages (sort_order, name) values (49, 'Coordinator stage')$q$, 'P03: Coordinator adds a leadership stage');
+select test.lives($q$insert into public.reusable_blocks (name, body) values ('Coordinator block', 'Text')$q$, 'P03: Coordinator adds a reusable block');
+reset role;
+
+-- Other roles' limits are unchanged.
+select test.login('ops'); set role authenticated;
+with u as (update public.checkin_flags set status = 'open' where id = test.id('flag1') returning 1)
+select test.ok(count(*) = 0, 'P03: Operations Lead still cannot re-open or close check-in flags') from u;
+with u as (update public.teci_stages set description = 'Ops' where stage_no = 1 returning 1)
+select test.ok(count(*) = 0, 'P03: Operations Lead still cannot edit TECi stages') from u;
+select test.throws(format('update public.app_users set is_active = false where id = %L', test.id('coord2')),
+                   'P03: Operations Lead still cannot switch off a Coordinator''s account');
+reset role;
+select test.login('pastoral'); set role authenticated;
+with u as (update public.checkin_flags set status = 'open' where id = test.id('flag1') returning 1)
+select test.ok(count(*) = 1, 'P03: Pastoral Lead still re-opens and closes check-in flags') from u;
+reset role;
+
+-- Two Coordinators: one can switch the other off (accepted by the decision), neither can touch
+-- the Resident Pastor, and the Resident Pastor can always put things right.
+select test.login('coord2'); set role authenticated;
+select test.lives(format('update public.app_users set is_active = false where id = %L', test.id('coord')),
+                  'P03: a Coordinator can switch off another Coordinator''s account');
+select test.throws(format('update public.app_users set is_active = false where id = %L', test.id('rp')),
+                   'P03: ... but not the Resident Pastor''s');
+reset role;
+select test.login('coord'); set role authenticated;
+select test.throws(format('select * from public.get_pastoral_notes(%L)', test.id('p1')),
+                   'P03: a switched-off Coordinator loses pastoral notes at once');
+with u as (delete from public.role_assignments where user_id = test.id('coord2') returning 1)
+select test.ok(count(*) = 0, 'P03: a switched-off Coordinator cannot strike back') from u;
+reset role;
+select test.login('rp'); set role authenticated;
+select test.lives(format('update public.app_users set is_active = true where id = %L', test.id('coord')),
+                  'P03: the Resident Pastor switches the Coordinator back on');
+select test.lives(format('delete from public.role_assignments where user_id = %L', test.id('coord2')),
+                  'P03: ... and removes the other Coordinator''s role');
+reset role;
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;
