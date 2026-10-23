@@ -15,12 +15,14 @@ export type PersonInsert = Database['public']['Tables']['people']['Insert'];
 export type Membership = Database['public']['Tables']['unit_memberships']['Row'];
 export type Faith = Database['public']['Functions']['get_person_faith']['Returns'][number];
 
-// Columns shown in lists and the form (never select('*') on people: anonymised and consent
-// columns are not needed on screen).
+// Columns shown in lists and the form (never select('*') on people: consent columns are not
+// needed on screen). anonymised_at is fetched only so anonymised records can be left out.
+// SECURITY REVIEW FIX L07: created_by (a leader's account id) is no longer fetched; no screen
+// uses it, and the database checks it.
 const PERSON_COLUMNS =
   'id, first_name, other_names, surname, date_joined, date_left, status, birth_day, birth_month, email, area, ' +
   'marital_status, anniversary_day, anniversary_month, teci_stage_id, greatness_community_id, ' +
-  'newsletter_subscribed, celebration_opt_in, created_by, anonymised_at';
+  'newsletter_subscribed, celebration_opt_in, anonymised_at';
 
 export const usePeople = () =>
   useQuery({
@@ -92,17 +94,35 @@ export interface FaithInput {
   speaks_in_tongues_date: string | null;
 }
 
-export async function saveFaith(personId: string, f: FaithInput): Promise<void> {
-  // A date is kept only while its tick is set (the table has the same rule).
+// A date is kept only while its tick is set (the table has the same rule).
+export function cleanFaith(f: FaithInput): FaithInput {
+  return {
+    ...f,
+    water_baptism_date: f.water_baptism ? f.water_baptism_date : null,
+    holy_spirit_baptism_date: f.holy_spirit_baptism ? f.holy_spirit_baptism_date : null,
+    speaks_in_tongues_date: f.speaks_in_tongues ? f.speaks_in_tongues_date : null,
+  };
+}
+
+export async function saveFaith(personId: string, input: FaithInput): Promise<void> {
+  const f = cleanFaith(input);
   const { error } = await supabase.rpc('set_person_faith', {
     p_person: personId,
     p_salvation_date: f.salvation_date as string,
     p_water_baptism: f.water_baptism,
-    p_water_baptism_date: (f.water_baptism ? f.water_baptism_date : null) as string,
+    p_water_baptism_date: f.water_baptism_date as string,
     p_holy_spirit_baptism: f.holy_spirit_baptism,
-    p_holy_spirit_baptism_date: (f.holy_spirit_baptism ? f.holy_spirit_baptism_date : null) as string,
+    p_holy_spirit_baptism_date: f.holy_spirit_baptism_date as string,
     p_speaks_in_tongues: f.speaks_in_tongues,
-    p_speaks_in_tongues_date: (f.speaks_in_tongues ? f.speaks_in_tongues_date : null) as string,
+    p_speaks_in_tongues_date: f.speaks_in_tongues_date as string,
   });
   if (error) throw error;
+}
+
+// Only the columns that changed, so an edit never re-sends (and so never overwrites, or trips
+// a column rule on) fields the leader did not touch. Pure, so it is unit-tested.
+export function changedColumns<T extends Record<string, unknown>>(before: T, after: T): Partial<T> {
+  const out: Partial<T> = {};
+  for (const k of Object.keys(after) as (keyof T)[]) if (before[k] !== after[k]) out[k] = after[k];
+  return out;
 }

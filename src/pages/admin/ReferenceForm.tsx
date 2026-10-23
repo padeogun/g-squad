@@ -94,7 +94,9 @@ function FormScreen({ def }: { def: FormDef }) {
         </Notice>
       )}
 
-      {canEdit && editing !== null && (
+      {/* SECURITY REVIEW FIX L08: open the panel only for "add" or a row that is still in the
+          list. A row removed meanwhile used to open an empty panel that INSERTED a new row. */}
+      {canEdit && editing !== null && (editing === '' || rows.data?.some((r) => r.id === editing)) && (
         <EditPanel
           def={def}
           row={editing ? rows.data?.find((r) => r.id === editing) : undefined}

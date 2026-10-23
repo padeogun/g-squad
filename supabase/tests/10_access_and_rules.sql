@@ -1206,6 +1206,90 @@ select test.throws(format('insert into public.role_assignments (user_id, role, u
                    'K: a role cannot point at another church''s unit');
 reset role;
 
+-- =====================================================================================
+-- Slice 1b/1c (migration 15, Review 7): what the member screens do, end to end.
+-- =====================================================================================
+-- L01: the old app path (INSERT ... RETURNING on people) is refused by people_read.
+select test.login('ul_a'); set role authenticated;
+select test.throws($q$insert into public.people (first_name, surname) values ('Ret', 'Urning') returning id$q$,
+                   'L01: INSERT ... RETURNING on people is refused (why the app uses create_member)');
+-- A Unit Lead adds a member to their own unit, with faith fields, in one call.
+select test.lives(format($q$select public.create_member(
+    jsonb_build_object('first_name', 'Lia', 'surname', 'Newmember', 'email', '  Lia@Example.ORG ',
+                       'birth_day', 5, 'birth_month', 6, 'marital_status', 'single',
+                       'anniversary_day', 1, 'anniversary_month', 1,
+                       'id', %L, 'church_id', %L, 'created_by', %L, 'anonymised_at', now()),
+    %L, null, false, null, jsonb_build_object('water_baptism', true, 'water_baptism_date', '2026-01-04'))$q$,
+    test.id('p1'), test.id('churchB'), test.id('ops'), test.id('A1')),
+  'L01: Unit Lead adds a member, their membership and faith fields to their own unit');
+select test.ok((select water_baptism from public.get_person_faith(
+                  (select id from public.people where surname = 'Newmember'))),
+               'L01: ... and reads back the faith fields (active membership in their unit)');
+reset role;
+select test.ok((select p.created_by = test.id('ul_a') and p.church_id = test.id('churchA') and p.anonymised_at is null
+                       and p.id <> test.id('p1') and p.email = 'lia@example.org'
+                       and p.anniversary_day is null and p.status = 'active'
+                from public.people p where p.surname = 'Newmember'),
+               'L01: id, church, creator and anonymised_at in the payload are ignored; email lower-cased; no anniversary unless married');
+select test.ok((select m.status = 'active' and m.unit_id = test.id('A1') from public.unit_memberships m
+                join public.people p on p.id = m.person_id where p.surname = 'Newmember'),
+               'L01: the membership is in the chosen unit and active');
+
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$select public.create_member('{"first_name":"Dup","surname":"Email","email":"LIA@example.org"}', %L)$q$, test.id('A1')),
+                   'L01: an email already recorded (any case) is refused');
+select test.throws(format($q$select public.create_member('{"first_name":"Ota","surname":"Atomic"}', %L)$q$, test.id('A2')),
+                   'L01: Unit Lead cannot add a member to another unit');
+select test.throws(format($q$select public.create_member(jsonb_build_object('first_name','Teci','surname','Atomic','teci_stage_id',%L), %L)$q$,
+                          (select id from public.teci_stages where church_id = test.id('churchA') limit 1), test.id('A1')),
+                   'L01: Unit Lead cannot set a TECi stage on a new member');
+select test.throws(format('update public.people set teci_stage_id = %L where surname = %L',
+                          (select id from public.teci_stages where church_id = test.id('churchA') limit 1), 'Newmember'),
+                   'L01: Unit Lead cannot set a TECi stage on an existing member');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.throws(format($q$select public.create_member('{"first_name":"Fai","surname":"Atomic"}', %L, null, false, null, '{"water_baptism":true}')$q$, test.id('A2')),
+                   'L01: Operations Lead cannot record faith fields while adding a member');
+select test.lives(format($q$select public.create_member('{"first_name":"Opa","surname":"Added"}', %L)$q$, test.id('A2')),
+                  'L01: Operations Lead adds a member to any unit (no faith fields)');
+reset role;
+select test.login('b_ops'); set role authenticated;
+select test.throws(format($q$select public.create_member('{"first_name":"Cross","surname":"Atomic"}', %L)$q$, test.id('A1')),
+                   'L01: another church''s Operations Lead cannot add a member to this church''s unit');
+reset role;
+select test.ok(not exists (select 1 from public.people where surname in ('Atomic', 'Email')),
+               'L01: a refused create_member leaves no person behind (one transaction)');
+
+-- My Unit: a Unit Lead changes team role, stage and leader flag in their unit only.
+select test.login('ul_a'); set role authenticated;
+do $$
+declare n int;
+begin
+  update public.unit_memberships
+     set church_role_id = null, is_team_leader = true,
+         leadership_stage_id = (select id from public.leadership_stages order by sort_order limit 1)
+   where unit_id = test.id('A1') and person_id = (select id from public.people where surname = 'Newmember');
+  get diagnostics n = row_count;
+  perform test.ok(n = 1, 'My Unit: Unit Lead changes role, stage and leader flag in their own unit');
+  update public.unit_memberships set is_team_leader = true where unit_id = test.id('A2');
+  get diagnostics n = row_count;
+  perform test.ok(n = 0, 'My Unit: Unit Lead cannot change a membership of another unit');
+end $$;
+select test.ok(not exists (select 1 from public.people where id = test.id('p2')),
+               'Members: Unit Lead does not see a member of another unit');
+reset role;
+
+-- L02: anonymised records stay closed.
+select app.anonymise((select id from public.people where surname = 'Added'));
+select test.login('ops'); set role authenticated;
+select test.throws(format($q$update public.people set first_name = 'Opa', email = 'opa@example.org' where id = %L$q$,
+                          (select id from public.people where anonymised_at is not null and first_name = 'Former' limit 1)),
+                   'L02: an anonymised record cannot be filled in again');
+select test.throws(format('insert into public.unit_memberships (person_id, unit_id) values (%L, %L)',
+                          (select id from public.people where anonymised_at is not null and first_name = 'Former' limit 1), test.id('A3')),
+                   'L02: an anonymised person cannot be added to a unit');
+reset role;
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;

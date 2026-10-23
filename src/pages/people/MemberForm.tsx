@@ -5,8 +5,8 @@
 //   * faith fields in their own panel, read and saved only through get_person_faith /
 //     set_person_faith, which check access and log every view and change;
 //   * the TECi stage is set by the TECi Coordinator (the database refuses others).
-// Saving a new member: the person, then their unit membership, then faith fields (a Unit
-// Lead may record faith fields only once the person is in their unit).
+// Saving a new member: one call to create_member, which adds the person, their unit
+// membership and any faith fields in a single transaction (all or nothing).
 // -------------------------------------------------------------------------------------
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -15,7 +15,17 @@ import { TEC } from '../../design-system';
 import { supabase } from '../../lib/supabase';
 import { friendlyError } from '../../data/errors';
 import { byId, useChurchRoles, useCommunities, useLeadershipStages, useTeciStages, useUnits } from '../../data/reference';
-import { fetchFaith, fullName, saveFaith, useMemberships, usePerson, type FaithInput, type Person } from '../../data/people';
+import {
+  changedColumns,
+  cleanFaith,
+  fetchFaith,
+  fullName,
+  saveFaith,
+  useMemberships,
+  usePerson,
+  type FaithInput,
+  type Person,
+} from '../../data/people';
 import { FAITH_READERS, hasRole, ledUnitIds, useMe } from '../../auth/useMe';
 import { NotFound } from '../NotFound';
 
@@ -147,7 +157,9 @@ export function MemberForm() {
   const isNew = !id;
   const person = usePerson(id);
   if (!isNew && person.isPending) return <p>Loading…</p>;
-  if (!isNew && !person.data) return <NotFound />;
+  // SECURITY REVIEW FIX L02: an anonymised record is not opened as a form (the database now
+  // refuses any change to it as well).
+  if (!isNew && (!person.data || person.data.anonymised_at)) return <NotFound />;
   return <MemberFormInner key={id ?? 'new'} person={person.data ?? undefined} />;
 }
 
@@ -170,22 +182,34 @@ function MemberFormInner({ person }: { person?: Person }) {
   const canSetTeci = hasRole(me.data, 'teci_coordinator', 'operations_lead');
   const isOps = hasRole(me.data, 'operations_lead');
   const myUnits = ledUnitIds(me.data);
-  const mayRecordFaith = hasRole(me.data, ...FAITH_READERS) || myUnits.length > 0;
 
   // Unit for a NEW member: a Unit Lead picks one of their units; the Operations Lead any unit.
   const unitChoices = (units.data ?? []).filter((u) => u.is_active && (isOps || myUnits.includes(u.id)));
   const [unitId, setUnitId] = useState(() => (myUnits.length === 1 ? myUnits[0] : ''));
+  // SECURITY REVIEW FIX L05: for a new member, the faith panel is offered only when the chosen
+  // unit is one this leader leads (an Operations Lead who also leads another unit could not
+  // record them, and the whole save would fail).
+  const mayRecordFaith = hasRole(me.data, ...FAITH_READERS) || (person ? myUnits.length > 0 : myUnits.includes(unitId));
   const [roleId, setRoleId] = useState('');
   const [isLeader, setIsLeader] = useState(false);
   const [stageId, setStageId] = useState('');
 
+  // SECURITY REVIEW FIX L04: faith fields (special category data) are loaded only when the
+  // leader asks to see them, not every time a record is opened to change an email address.
+  // Each load is a logged view, so the audit log then shows real looks, and the fields are not
+  // on screen by default.
+  const [showFaith, setShowFaith] = useState(false);
   // Faith fields: loaded through the logged function for an existing member.
   const faith = useQuery({
     queryKey: ['faith', person?.id],
-    enabled: !!person && mayRecordFaith,
-    // A view is logged each time, so don't re-fetch in the background.
+    enabled: !!person && mayRecordFaith && showFaith,
+    // A view is logged each time, so don't re-fetch in the background (staleTime) and drop the
+    // copy as soon as the form closes (gcTime 0: nothing is kept in the cache to reappear).
     staleTime: Infinity,
     gcTime: 0,
+    // SECURITY REVIEW FIX L04: no automatic retry. A retried call whose first answer was lost
+    // would log a second view; the leader can retry by hand.
+    retry: false,
     queryFn: () => fetchFaith(person!.id),
   });
   // The faith fields being edited: null until the leader changes something, so the form shows
@@ -204,30 +228,42 @@ function MemberFormInner({ person }: { person?: Person }) {
   const faithTouched = edited !== null;
   const setFaith = <K extends keyof FaithInput>(k: K, val: FaithInput[K]) => setEdited({ ...f, [k]: val });
   const faithRestricted = faith.data === 'restricted';
+  // SECURITY REVIEW FIX L03: if loading failed, the fields must not be shown as empty and
+  // editable: one tick would then save over the real record with blanks.
+  const faithReady = !person || faith.isSuccess;
 
   const save = useMutation({
     mutationFn: async () => {
-      let personId = person?.id;
-      if (person) {
+      const sendFaith = mayRecordFaith && faithTouched && faithReady && !faithRestricted;
+      if (!person) {
+        // SECURITY REVIEW FIX L01: one transaction (public.create_member, migration 15). Before,
+        // three calls: the first (insert ... select) was always refused by row-level security,
+        // and any failure after it left a person with no unit that the leader could neither
+        // see in a unit nor remove. The function runs as the leader, so every rule still applies.
+        const { data, error } = await supabase.rpc('create_member', {
+          p_person: toPersonRow(v, canSetTeci),
+          p_unit: unitId,
+          p_church_role: (roleId || null) as string,
+          p_is_team_leader: isLeader,
+          p_leadership_stage: (stageId || null) as string,
+          p_faith: sendFaith ? { ...cleanFaith(f) } : null,
+        });
+        if (error) throw error;
+        return data;
+      }
+      // SECURITY REVIEW FIX L06: send only the columns that changed. Re-sending the whole row
+      // overwrote fields other leaders had changed meanwhile, and made a faith-only change by
+      // the Resident Pastor (who reads but does not edit member records) fail before the faith
+      // fields were saved.
+      const patch = changedColumns(toPersonRow(fromPerson(person), canSetTeci), toPersonRow(v, canSetTeci));
+      if (Object.keys(patch).length > 0) {
         // .select().single(): an update refused by row-level security returns no row; this
         // turns that into an error instead of a silent "saved".
-        const { error } = await supabase.from('people').update(toPersonRow(v, canSetTeci)).eq('id', person.id).select('id').single();
+        const { error } = await supabase.from('people').update(patch).eq('id', person.id).select('id').single();
         if (error) throw error;
-      } else {
-        const { data, error } = await supabase.from('people').insert(toPersonRow(v, canSetTeci)).select('id').single();
-        if (error) throw error;
-        personId = data.id;
-        const { error: mErr } = await supabase.from('unit_memberships').insert({
-          person_id: personId,
-          unit_id: unitId,
-          church_role_id: roleId || null,
-          is_team_leader: isLeader,
-          leadership_stage_id: stageId || null,
-        });
-        if (mErr) throw new Error(`Saved ${v.first_name}, but adding them to the unit failed: ${friendlyError(mErr)}`);
       }
-      if (mayRecordFaith && faithTouched && !faithRestricted) await saveFaith(personId!, f);
-      return personId!;
+      if (sendFaith) await saveFaith(person.id, f);
+      return person.id;
     },
     onSuccess: (pid) => {
       qc.invalidateQueries({ queryKey: ['people'] });
@@ -389,9 +425,22 @@ function MemberFormInner({ person }: { person?: Person }) {
           </Card>
         )}
 
+        {mayRecordFaith && faithRestricted && (
+          <Notice tone="info" title="Faith journey">
+            Only the Resident Pastor, G-Squad Coordinator, TECi Coordinator and the person's own Unit Lead see these fields.
+          </Notice>
+        )}
         {mayRecordFaith && !faithRestricted && (
           <RestrictedPanel title="Faith journey" audience="Resident Pastor, G-Squad Coordinator, TECi Coordinator and their Unit Lead">
-            {faith.isPending && person ? (
+            {person && !showFaith ? (
+              <Button type="button" variant="secondary" size="sm" onClick={() => setShowFaith(true)}>
+                Show faith journey
+              </Button>
+            ) : person && faith.isError ? (
+              <Notice tone="danger" title="Faith journey not loaded">
+                {friendlyError(faith.error)}
+              </Notice>
+            ) : !faithReady ? (
               <p>Loading…</p>
             ) : (
               <div className="tec-fields">
@@ -407,7 +456,10 @@ function MemberFormInner({ person }: { person?: Person }) {
 
         {save.isError && (
           <Notice tone="danger" title="Not saved">
-            {friendlyError(save.error)}
+            {/* SECURITY REVIEW FIX L06: on this form a duplicate (23505) can only be the email address. */}
+            {(save.error as { code?: string }).code === '23505'
+              ? 'A member with that email address is already recorded.'
+              : friendlyError(save.error)}
           </Notice>
         )}
         <div className="tec-row" style={{ padding: 0 }}>
