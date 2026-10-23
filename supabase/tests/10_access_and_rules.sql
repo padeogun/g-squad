@@ -43,6 +43,8 @@ grant execute on all functions in schema test to authenticated, service_role, an
 -- Sign in as a fixture user (sets the JWT "sub" claim used by auth.uid()).
 create function test.login(p text) returns void language sql as
   $$ select set_config('request.jwt.claim.sub', coalesce(test.id(p)::text, ''), false) $$;
+-- (Some checks switch user inside a block that already runs as authenticated.)
+grant execute on function test.login(text) to authenticated;
 
 -- ---------- fixture (as the database owner: triggers treat this as a system change) ----
 do $$
@@ -196,10 +198,16 @@ select test.login('rp'); set role authenticated;
 select test.throws('select count(*) from public.person_faith', 'No one reads the faith table directly');
 reset role;
 
+-- Decision of 23 Oct 2026 (migration 16): faith fields are recorded by the G-Squad Coordinator
+-- and the person's Team Lead only; the TECi Coordinator and Resident Pastor read them.
 select test.login('teci'); set role authenticated;
+select test.throws(format('select public.set_person_faith(%L, null, true, null, false, null, false, null)', test.id('p2')),
+                   'M16: TECi Coordinator cannot record faith fields');
+reset role;
+select test.login('coord'); set role authenticated;
 select test.lives(format('select public.set_person_faith(%L, %L, false, null, true, %L, false, null)',
                          test.id('p2'), current_date - 30, date_trunc('month', current_date)::date + 1),
-                  'TECi Coordinator records faith fields');
+                  'G-Squad Coordinator records faith fields');
 reset role;
 
 select test.ok(exists (select 1 from public.audit_log where action = 'view_faith' and record_id = test.id('p1')),
@@ -272,9 +280,12 @@ begin
                              test.id('rota'), test.id('p1'), test.id('A1'), s + 21), 'R2: Ops Lead needs a written reason to override');
   perform test.lives(format('insert into public.assignments (project_id, person_id, unit_id, serve_date, override_reason) values (%L,%L,%L,%L,%L)',
                             test.id('rota'), test.id('p1'), test.id('A1'), s + 21, 'Covering a sudden absence'), 'R2: Ops Lead override with reason');
-  -- R10 holiday.
+  -- R10 holiday. Holidays are recorded by the Team Lead (migration 16: the Operations Lead no
+  -- longer edits member records), so switch to p3's Unit Lead for this one insert.
+  perform test.login('ul_a');
   perform test.lives(format('insert into public.holidays (person_id, starts_on, ends_on) values (%L,%L,%L)', test.id('p3'), s, s + 1),
                      'Holiday recorded');
+  perform test.login('ops');
   perform test.throws(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) values (%L,%L,%L,%L)',
                              test.id('rota'), test.id('p3'), test.id('A1'), s), 'R10: no slot while on holiday');
 end $$;
@@ -282,6 +293,8 @@ reset role;
 select test.ok(exists (select 1 from public.audit_log where action = 'override_limit'), 'R2: override is logged');
 
 -- Personal limit from available hours: 6 hours at 3 hours a slot = 2.
+-- (A fixture change as the database owner: sign out first so the guards treat it as system.)
+select test.login('nobody');
 update public.people set available_hours_month = 6 where id = test.id('p2');
 select test.ok(app.personal_limit(test.id('p2')) = 2, 'R10: available hours lower the personal limit');
 
@@ -552,7 +565,7 @@ select test.ok((select bool_and(provolatile = 'v') from pg_proc
                'F03: logged faith and pastoral reads are VOLATILE');
 
 -- F04: audit log never names changed faith columns, and the Ops Lead cannot see faith audit rows.
-select test.login('teci'); set role authenticated;
+select test.login('coord'); set role authenticated;
 select public.set_person_faith(test.id('p1'), current_date - 400, true, date_trunc('month', current_date)::date + 2, true, current_date - 10, false, null);
 reset role;
 select test.ok((select detail from public.audit_log where table_name = 'person_faith' and action = 'update' order by id desc limit 1) = '{}'::jsonb,
@@ -682,10 +695,13 @@ select test.login('ul_a'); set role authenticated;
 select test.throws(format('update public.one_to_ones set unit_id = %L', test.id('A3')), 'F16: a one-to-one cannot move to another unit');
 reset role;
 
--- F17: input bounds.
-select test.login('ops'); set role authenticated;
+-- F17: input bounds (as the G-Squad Coordinator, who may edit member records).
+select test.login('coord'); set role authenticated;
 select test.throws(format('update public.people set preferred_times = array_fill(%L::text, array[11]) where id = %L', 'Sunday', test.id('p1')),
                    'F17: preferred_times is bounded');
+reset role;
+-- Project inputs and service segments are the Operations Lead's to edit.
+select test.login('ops'); set role authenticated;
 select test.throws($q$update public.project_inputs set link_url = 'https://example.org/a b' where title = 'Volunteer plan'$q$,
                    'F17: link URLs cannot contain spaces');
 select test.throws($q$update public.service_segments set sub_points = array_fill('x'::text, array[21])$q$,
@@ -1085,20 +1101,27 @@ select test.ok((select church_id from public.app_users where id = test.id('newle
 select test.lives(format('insert into public.role_assignments (user_id, role, unit_id) values (%L, %L, %L)',
                          test.id('newlead'), 'unit_lead', test.id('A3')),
                   'S1: Coordinator makes the new leader a Unit Lead');
-select test.throws(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('newlead'), 'teci_coordinator'),
-                   'S1: Coordinator cannot give a senior role (Resident Pastor only)');
-select test.throws(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('newlead'), 'operations_lead'),
-                   'S1: Coordinator cannot create an Operations Lead');
-select test.throws(format('delete from public.role_assignments where user_id = %L and role = %L', test.id('ops'), 'operations_lead'),
-                   'S1: Coordinator cannot remove the Operations Lead role');
+-- Migration 18: the Coordinator now gives and removes senior roles, except the Resident Pastor role.
+select test.lives(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('newlead'), 'teci_coordinator'),
+                  'M18: Coordinator gives a senior role');
+select test.lives(format('delete from public.role_assignments where user_id = %L and role = %L', test.id('newlead'), 'teci_coordinator'),
+                  'M18: Coordinator removes a senior role');
+select test.lives(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('newlead'), 'operations_lead'),
+                  'M18: Coordinator gives the Operations Lead role');
+select test.lives(format('delete from public.role_assignments where user_id = %L and role = %L', test.id('newlead'), 'operations_lead'),
+                  'M18: Coordinator removes the Operations Lead role');
+select test.throws(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('newlead'), 'resident_pastor'),
+                   'M18: Coordinator cannot give the Resident Pastor role');
+select test.throws(format('delete from public.role_assignments where user_id = %L and role = %L', test.id('rp'), 'resident_pastor'),
+                   'M18: Coordinator cannot remove the Resident Pastor role');
 select test.throws(format('delete from public.role_assignments where user_id = %L', test.id('coord')),
                    'S1: Coordinator cannot change their own roles');
 select test.ok((select count(distinct user_id) from public.role_assignments) >= 10,
                'S1: Coordinator sees every leader''s roles in their church');
 select test.ok(not exists (select 1 from public.role_assignments where user_id = test.id('b_ops')),
                'S1: Coordinator sees no roles from another church');
-select test.throws(format('update public.app_users set is_active = false where id = %L', test.id('ops')),
-                   'S1: Coordinator cannot switch off the Operations Lead''s account');
+select test.throws(format('update public.app_users set is_active = false where id = %L', test.id('rp')),
+                   'M18: Coordinator cannot switch off the Resident Pastor''s account');
 select test.throws(format('update public.app_users set church_id = %L where id = %L', test.id('churchB'), test.id('newlead')),
                    'S1: an account cannot be moved to another church');
 select test.lives(format('update public.app_users set display_name = %L where id = %L', 'New Lead (Hospitality)', test.id('newlead')),
@@ -1147,10 +1170,7 @@ select test.login('rp'); set role authenticated;
 select test.lives(format('update public.app_users set is_active = false where id = %L', test.id('pastoral')),
                   'K02: Resident Pastor switches off a senior leader''s account');
 reset role;
-select test.login('coord'); set role authenticated;
-select test.throws(format('update public.app_users set is_active = true where id = %L', test.id('pastoral')),
-                   'K02: Coordinator cannot switch a senior leader''s account back on');
-reset role;
+-- (Migration 18: the Coordinator may now do this too, so only the Operations Lead is checked here.)
 select test.login('ops'); set role authenticated;
 select test.throws(format('update public.app_users set is_active = true where id = %L', test.id('pastoral')),
                    'K02: Operations Lead cannot switch a senior leader''s account back on');
@@ -1165,9 +1185,9 @@ reset role;
 -- K03: a Purpose Head is protected while Purpose Heads read pastoral notes.
 select test.login('');
 update public.church_settings set purpose_heads_read_pastoral = true where church_id = test.id('churchA');
-select test.login('coord'); set role authenticated;
+select test.login('ops'); set role authenticated;
 select test.throws(format('update public.app_users set is_active = false where id = %L', test.id('ph')),
-                   'K03: Coordinator cannot switch off a Purpose Head who reads pastoral notes');
+                   'K03: Operations Lead cannot switch off a Purpose Head who reads pastoral notes');
 select test.throws(format('delete from public.app_users where id = %L', test.id('ph')),
                    'K03: ... nor delete that account');
 reset role;
@@ -1190,20 +1210,431 @@ reset role;
 -- Role rows: an UPDATE is checked like a removal plus a grant.
 select test.login('coord'); set role authenticated;
 select test.throws(format('update public.role_assignments set role = %L, unit_id = null where user_id = %L and role = %L',
-                          'pastoral_lead', test.id('ul_b'), 'unit_lead'),
-                   'K: Coordinator cannot turn a Unit Lead row into a senior role');
+                          'resident_pastor', test.id('ul_b'), 'unit_lead'),
+                   'K/M18: Coordinator cannot turn a Unit Lead row into the Resident Pastor role');
 select test.throws(format('update public.role_assignments set user_id = %L where user_id = %L and role = %L',
                           test.id('coord'), test.id('finance'), 'finance'),
                    'K: Coordinator cannot move someone''s role row to themselves');
 select test.throws(format('update public.role_assignments set is_active = false where user_id = %L and role = %L',
-                          test.id('ops'), 'operations_lead'),
-                   'K: Coordinator cannot switch off the Operations Lead role row');
+                          test.id('rp'), 'resident_pastor'),
+                   'K/M18: Coordinator cannot switch off the Resident Pastor role row');
 select test.throws(format('update public.role_assignments set church_id = %L where user_id = %L',
                           test.id('churchB'), test.id('finance')),
                    'K: a role row cannot be moved to another church');
 select test.throws(format('insert into public.role_assignments (user_id, role, unit_id) values (%L, %L, %L)',
                           test.id('ul_b'), 'unit_lead', test.id('B1')),
                    'K: a role cannot point at another church''s unit');
+reset role;
+
+-- =====================================================================================
+-- Slice 1b/1c (migration 15, Review 7): what the member screens do, end to end.
+-- =====================================================================================
+-- L01: the old app path (INSERT ... RETURNING on people) is refused by people_read.
+select test.login('ul_a'); set role authenticated;
+select test.throws($q$insert into public.people (first_name, surname) values ('Ret', 'Urning') returning id$q$,
+                   'L01: INSERT ... RETURNING on people is refused (why the app uses create_member)');
+-- A Unit Lead adds a member to their own unit, with faith fields, in one call.
+select test.lives(format($q$select public.create_member(
+    jsonb_build_object('first_name', 'Lia', 'surname', 'Newmember', 'email', '  Lia@Example.ORG ',
+                       'birth_day', 5, 'birth_month', 6, 'marital_status', 'single',
+                       'anniversary_day', 1, 'anniversary_month', 1,
+                       'id', %L, 'church_id', %L, 'created_by', %L, 'anonymised_at', now()),
+    %L, null, false, null, jsonb_build_object('water_baptism', true, 'water_baptism_date', '2026-01-04'))$q$,
+    test.id('p1'), test.id('churchB'), test.id('ops'), test.id('A1')),
+  'L01: Unit Lead adds a member, their membership and faith fields to their own unit');
+select test.ok((select water_baptism from public.get_person_faith(
+                  (select id from public.people where surname = 'Newmember'))),
+               'L01: ... and reads back the faith fields (active membership in their unit)');
+reset role;
+select test.ok((select p.created_by = test.id('ul_a') and p.church_id = test.id('churchA') and p.anonymised_at is null
+                       and p.id <> test.id('p1') and p.email = 'lia@example.org'
+                       and p.anniversary_day is null and p.status = 'active'
+                from public.people p where p.surname = 'Newmember'),
+               'L01: id, church, creator and anonymised_at in the payload are ignored; email lower-cased; no anniversary unless married');
+select test.ok((select m.status = 'active' and m.unit_id = test.id('A1') from public.unit_memberships m
+                join public.people p on p.id = m.person_id where p.surname = 'Newmember'),
+               'L01: the membership is in the chosen unit and active');
+
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$select public.create_member('{"first_name":"Dup","surname":"Email","email":"LIA@example.org"}', %L)$q$, test.id('A1')),
+                   'L01: an email already recorded (any case) is refused');
+select test.throws(format($q$select public.create_member('{"first_name":"Ota","surname":"Atomic"}', %L)$q$, test.id('A2')),
+                   'L01: Unit Lead cannot add a member to another unit');
+select test.throws(format($q$select public.create_member(jsonb_build_object('first_name','Teci','surname','Atomic','teci_stage_id',%L), %L)$q$,
+                          (select id from public.teci_stages where church_id = test.id('churchA') limit 1), test.id('A1')),
+                   'L01: Unit Lead cannot set a TECi stage on a new member');
+select test.throws(format('update public.people set teci_stage_id = %L where surname = %L',
+                          (select id from public.teci_stages where church_id = test.id('churchA') limit 1), 'Newmember'),
+                   'L01: Unit Lead cannot set a TECi stage on an existing member');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.throws(format($q$select public.create_member('{"first_name":"Fai","surname":"Atomic"}', %L, null, false, null, '{"water_baptism":true}')$q$, test.id('A2')),
+                   'L01: Operations Lead cannot record faith fields while adding a member');
+select test.lives(format($q$select public.create_member('{"first_name":"Opa","surname":"Added"}', %L)$q$, test.id('A2')),
+                  'L01: Operations Lead adds a member to any unit (no faith fields)');
+reset role;
+select test.login('b_ops'); set role authenticated;
+select test.throws(format($q$select public.create_member('{"first_name":"Cross","surname":"Atomic"}', %L)$q$, test.id('A1')),
+                   'L01: another church''s Operations Lead cannot add a member to this church''s unit');
+reset role;
+select test.ok(not exists (select 1 from public.people where surname in ('Atomic', 'Email')),
+               'L01: a refused create_member leaves no person behind (one transaction)');
+
+-- My Unit: a Unit Lead changes team role, stage and leader flag in their unit only.
+select test.login('ul_a'); set role authenticated;
+do $$
+declare n int;
+begin
+  update public.unit_memberships
+     set church_role_id = null, is_team_leader = true,
+         leadership_stage_id = (select id from public.leadership_stages order by sort_order limit 1)
+   where unit_id = test.id('A1') and person_id = (select id from public.people where surname = 'Newmember');
+  get diagnostics n = row_count;
+  perform test.ok(n = 1, 'My Unit: Unit Lead changes role, stage and leader flag in their own unit');
+  update public.unit_memberships set is_team_leader = true where unit_id = test.id('A2');
+  get diagnostics n = row_count;
+  perform test.ok(n = 0, 'My Unit: Unit Lead cannot change a membership of another unit');
+end $$;
+select test.ok(not exists (select 1 from public.people where id = test.id('p2')),
+               'Members: Unit Lead does not see a member of another unit');
+reset role;
+
+-- L02: anonymised records stay closed.
+select app.anonymise((select id from public.people where surname = 'Added'));
+select test.login('coord'); set role authenticated;
+select test.throws(format($q$update public.people set first_name = 'Opa', email = 'opa@example.org' where id = %L$q$,
+                          (select id from public.people where anonymised_at is not null and first_name = 'Former' limit 1)),
+                   'L02: an anonymised record cannot be filled in again');
+select test.throws(format('insert into public.unit_memberships (person_id, unit_id) values (%L, %L)',
+                          (select id from public.people where anonymised_at is not null and first_name = 'Former' limit 1), test.id('A3')),
+                   'L02: an anonymised person cannot be added to a unit');
+reset role;
+
+-- =====================================================================================
+-- Migration 16 (decisions of 23 Oct 2026): who edits member records; Unit Leads see their
+-- current units only.
+-- =====================================================================================
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$select public.create_member('{"first_name":"Mo","surname":"Mover"}', %L)$q$, test.id('A1')),
+                  'M16: a Unit Lead still adds a new member to their own unit');
+select test.lives(format($q$update public.people set area = 'M7' where surname = 'Mover'$q$), 'M16: their Team Lead edits the record');
+select test.ok((select area from public.people where surname = 'Mover') = 'M7', 'M16: ... and the change is saved');
+reset role;
+
+select test.login('coord'); set role authenticated;
+select test.lives($q$update public.people set area = 'M8' where surname = 'Mover'$q$, 'M16: the G-Squad Coordinator edits the record');
+reset role;
+select test.ok((select area from public.people where surname = 'Mover') = 'M8', 'M16: ... and the change is saved');
+
+-- The Resident Pastor and Operations Lead can read the record but their edits change nothing.
+select test.login('rp'); set role authenticated;
+select test.ok(exists (select 1 from public.people where surname = 'Mover'), 'M16: Resident Pastor can still read the record');
+update public.people set area = 'RP' where surname = 'Mover';
+reset role;
+select test.ok((select area from public.people where surname = 'Mover') = 'M8', 'M16: Resident Pastor cannot edit a member record');
+select test.login('ops'); set role authenticated;
+update public.people set area = 'OPS' where surname = 'Mover';
+reset role;
+select test.ok((select area from public.people where surname = 'Mover') = 'M8', 'M16: Operations Lead cannot edit a member record');
+
+-- The TECi Coordinator sets the TECi stage only.
+select test.login('teci'); set role authenticated;
+select test.lives(format($q$update public.people set teci_stage_id = %L where surname = 'Mover'$q$,
+                         (select id from public.teci_stages where church_id = test.id('churchA') and stage_no = 1)),
+                  'M16: TECi Coordinator sets the TECi stage');
+select test.throws($q$update public.people set area = 'TECI' where surname = 'Mover'$q$,
+                   'M16: TECi Coordinator cannot change other fields');
+reset role;
+select test.login('coord'); set role authenticated;
+select test.throws(format($q$update public.people set teci_stage_id = null where surname = 'Mover'$q$),
+                   'M16: only the TECi Coordinator changes an existing TECi stage');
+reset role;
+
+-- Decision 2: once Mo moves from A1 to A2, A1's Unit Lead no longer sees or edits them.
+select test.login('ops'); set role authenticated;
+select test.lives($q$update public.unit_memberships set status = 'ended'
+                    where person_id = (select id from public.people where surname = 'Mover')$q$,
+                  'M16: Operations Lead ends the old membership');
+select test.lives(format($q$insert into public.unit_memberships (person_id, unit_id)
+                            select id, %L from public.people where surname = 'Mover'$q$, test.id('A2')),
+                  'M16: Operations Lead adds them to another unit');
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.ok(not exists (select 1 from public.people where surname = 'Mover'),
+               'M16: the old Unit Lead no longer sees someone they entered after they move');
+update public.people set area = 'OLD' where surname = 'Mover';
+reset role;
+select test.ok((select area from public.people where surname = 'Mover') = 'M8', 'M16: ... and cannot edit them');
+select test.login('ul_b'); set role authenticated;
+select test.ok(exists (select 1 from public.people where surname = 'Mover'), 'M16: the new Unit Lead sees them');
+reset role;
+
+-- A Unit Lead cannot pull an existing member of another unit into their own (F05 still holds),
+-- even knowing their id (taken here as the owner, since the Unit Lead can no longer see them).
+insert into test.ids select 'mover', id from public.people where surname = 'Mover';
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$insert into public.unit_memberships (person_id, unit_id) values (%L, %L)$q$,
+                          test.id('mover'), test.id('A1')),
+                   'M16: a Unit Lead cannot add an existing member of another unit');
+reset role;
+
+-- =====================================================================================
+-- Security review 8 (SECURITY REVIEW FIX Mnn in migration 16).
+-- =====================================================================================
+-- M01: the old Unit Lead cannot re-open Mo's ended membership of their unit to get them back.
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$update public.unit_memberships set status = 'active' where person_id = %L and unit_id = %L$q$,
+                          test.id('mover'), test.id('A1')),
+                   'M01: a Unit Lead cannot re-open an ended membership');
+select test.ok(not exists (select 1 from public.people where id = test.id('mover')), 'M01: ... and still cannot see them');
+reset role;
+-- Ending a membership and live-membership changes are still the Unit Lead's.
+select test.login('ul_b'); set role authenticated;
+select test.lives(format($q$update public.unit_memberships set is_team_leader = true where person_id = %L and unit_id = %L$q$,
+                         test.id('mover'), test.id('A2')),
+                  'M01: a Unit Lead still changes a live membership of their unit');
+reset role;
+-- The Operations Lead may bring someone back (as with adding to a unit, F05).
+select test.login('ops'); set role authenticated;
+select test.lives(format($q$update public.unit_memberships set status = 'active' where person_id = %L and unit_id = %L$q$,
+                         test.id('mover'), test.id('A1')),
+                  'M01: the Operations Lead can re-open an ended membership');
+reset role;
+-- ... but not for an anonymised person.
+select test.login('nobody');
+update public.unit_memberships set status = 'ended', ended_on = current_date
+ where person_id = (select id from public.people where anonymised_at is not null and first_name = 'Former' limit 1)
+   and status <> 'ended';
+insert into test.ids select 'anon_person', id from public.people where anonymised_at is not null and first_name = 'Former' limit 1;
+select test.login('ops'); set role authenticated;
+select test.throws(format($q$update public.unit_memberships set status = 'active' where person_id = %L$q$, test.id('anon_person')),
+                   'M01: an anonymised person''s membership cannot be re-opened');
+reset role;
+
+-- M02: no faith fields written onto an anonymised record, even by the G-Squad Coordinator.
+select test.login('coord'); set role authenticated;
+select test.throws(format('select public.set_person_faith(%L, null, true, null, false, null, false, null)', test.id('anon_person')),
+                   'M02: faith fields cannot be recorded on an anonymised record');
+reset role;
+select test.ok(not exists (select 1 from public.person_faith where person_id = test.id('anon_person')),
+               'M02: ... and nothing was written');
+
+-- The TECi route gives no wider edit right to a TECi Coordinator who also leads some other unit.
+select test.login('nobody');
+insert into public.role_assignments (church_id, user_id, role, unit_id)
+values (test.id('churchA'), test.id('teci'), 'unit_lead', test.id('A3'));
+select test.login('teci'); set role authenticated;
+select test.throws(format($q$update public.people set area = 'TECI2' where id = %L$q$, test.id('mover')),
+                   'M16: TECi Coordinator who leads another unit still cannot edit this record');
+reset role;
+select test.login('nobody');
+delete from public.role_assignments where user_id = test.id('teci') and role = 'unit_lead';
+
+-- The Operations Lead adds members but does not record faith fields: the whole add is undone.
+select test.login('ops'); set role authenticated;
+select test.throws(format($q$select public.create_member('{"first_name":"Fa","surname":"Faithless"}', %L, null, false, null, '{"water_baptism":true}')$q$,
+                          test.id('A3')),
+                   'M16: the Operations Lead cannot record faith fields when adding a member');
+reset role;
+select test.ok(not exists (select 1 from public.people where surname = 'Faithless'), 'M16: ... and no half-added member is left');
+
+-- is_new_entry_of_caller: only the caller's OWN entry with no membership ever.
+select test.login('ul_a'); set role authenticated;
+select test.ok(not app.is_new_entry_of_caller(test.id('mover')), 'M16: someone entered long ago and placed in a unit is not a new entry');
+reset role;
+select test.login('ul_b'); set role authenticated;
+select test.lives(format($q$insert into public.people (id, church_id, first_name, surname) values (%L, %L, 'Or', 'Phan')$q$,
+                         '00000000-0000-4000-8000-0000000000f1', test.id('churchA')),
+                  'M16: a Unit Lead enters a person directly');
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$insert into public.unit_memberships (person_id, unit_id) values (%L, %L)$q$,
+                          '00000000-0000-4000-8000-0000000000f1', test.id('A1')),
+                   'M16: another Unit Lead cannot claim that entry');
+reset role;
+
+-- Migration 17 (decision of 23 Oct 2026): anonymising ends every unit membership, so a
+-- "Former member" no longer appears on the team list.
+do $$
+declare v uuid;
+begin
+  insert into public.people (church_id, first_name, surname) values (test.id('churchA'), 'Leaving', 'Soon') returning id into v;
+  insert into public.unit_memberships (church_id, person_id, unit_id) values (test.id('churchA'), v, test.id('A1'));
+  insert into test.ids values ('leaver', v);
+end $$;
+select test.login('nobody');
+select app.anonymise(test.id('leaver'));
+select test.ok(not exists (select 1 from public.unit_memberships where person_id = test.id('leaver') and status <> 'ended'),
+               'M17: anonymising ends the person''s unit memberships');
+select test.ok(not exists (select 1 from public.unit_memberships m join public.people p on p.id = m.person_id
+                           where p.anonymised_at is not null and m.status <> 'ended'),
+               'M17: no anonymised person has a live unit membership');
+select test.login('ul_a'); set role authenticated;
+select test.ok(not exists (select 1 from public.unit_memberships where unit_id = test.id('A1') and status <> 'ended'
+                           and person_id = test.id('leaver')),
+               'M17: the Former member is not on the Unit Lead''s team list');
+reset role;
+
+-- Security review 9: the same through the paths used for real, where the triggers on
+-- unit_memberships run in full (not the owner/system shortcut above).
+do $$
+declare v uuid; w uuid;
+begin
+  insert into public.people (church_id, first_name, surname) values (test.id('churchA'), 'Erasure', 'Request') returning id into v;
+  insert into public.unit_memberships (church_id, person_id, unit_id, joined_on) values (test.id('churchA'), v, test.id('A1'), current_date - 30);
+  insert into public.unit_memberships (church_id, person_id, unit_id, status) values (test.id('churchA'), v, test.id('A2'), 'pending_approval');
+  insert into test.ids values ('erasure', v);
+  insert into public.people (church_id, first_name, surname, status, date_joined, date_left)
+    values (test.id('churchA'), 'Long', 'Gone', 'left', current_date - 2000, current_date - 800) returning id into w;
+  insert into public.unit_memberships (church_id, person_id, unit_id, joined_on) values (test.id('churchA'), w, test.id('A1'), current_date - 2000);
+  insert into test.ids values ('longgone', w);
+end $$;
+select test.ok(not has_function_privilege('authenticated', 'app.anonymise(uuid)', 'execute')
+               and not has_function_privilege('anon', 'app.anonymise(uuid)', 'execute'),
+               'N01: app.anonymise is not callable by anon or signed-in users');
+select test.ok(has_function_privilege('authenticated', 'public.anonymise_person(uuid)', 'execute')
+               and not has_function_privilege('anon', 'public.anonymise_person(uuid)', 'execute'),
+               'N01: anonymise_person stays open to signed-in users only (it checks the role itself)');
+select test.login('ops'); set role authenticated;
+select test.throws(format('select app.anonymise(%L)', test.id('erasure')), 'N01: the Ops Lead cannot call app.anonymise directly');
+select test.lives(format('select public.anonymise_person(%L)', test.id('erasure')),
+                  'N01: the Ops Lead anonymises a member with live and pending memberships');
+reset role;
+select test.ok((select count(*) = 2 and bool_and(status = 'ended' and ended_on = current_date)
+                from public.unit_memberships where person_id = test.id('erasure')),
+               'N01: anonymise_person ends active and pending memberships');
+select test.ok(exists (select 1 from public.audit_log where action = 'anonymise_request' and record_id = test.id('erasure')),
+               'N01: the erasure request is logged');
+select test.login('ul_a'); set role authenticated;
+select test.ok(not exists (select 1 from public.people where id = test.id('erasure')),
+               'N01: the Unit Lead no longer sees the Former member at all');
+reset role;
+select test.login('nobody');
+select app.anonymise_expired_people();
+select test.ok((select status = 'ended' and ended_on = current_date - 800
+                from public.unit_memberships where person_id = test.id('longgone')),
+               'N02: the nightly job ends the membership, dated when the person left');
+
+-- =====================================================================================
+-- Migration 18 (decision of 23 Oct 2026): the G-Squad Coordinator has full access, except
+-- the Resident Pastor role and account.
+-- =====================================================================================
+select test.login('coord'); set role authenticated;
+select test.lives(format('select * from public.get_pastoral_notes(%L)', test.id('p1')), 'M18: Coordinator reads pastoral notes');
+select test.lives(format('insert into public.pastoral_notes (person_id, note) values (%L, %L)', test.id('p1'), 'Checked in after the service.'),
+                  'M18: Coordinator adds a pastoral note');
+select test.lives($q$update public.units set regular_monthly_need = 3 where name = 'Hospitality'$q$, 'M18: Coordinator edits a unit');
+select test.ok((select regular_monthly_need from public.units where name = 'Hospitality' and church_id = test.id('churchA')) = 3,
+               'M18: ... and the change is saved');
+select test.lives($q$insert into public.purposes (name) values ('Coordinator purpose')$q$, 'M18: Coordinator adds a purpose');
+select test.lives($q$update public.teci_stages set description = 'Foundations' where stage_no = 1$q$, 'M18: Coordinator edits a TECi stage');
+select test.lives($q$insert into public.project_types (name) values ('Coordinator type')$q$, 'M18: Coordinator adds a project type');
+select test.lives('update public.church_settings set serving_limit_per_month = 3', 'M18: Coordinator changes a church setting');
+select test.lives('update public.church_settings set purpose_heads_read_pastoral = false', 'M18: Coordinator sets who reads pastoral notes');
+select test.lives(format('update public.app_users set is_active = false where id = %L', test.id('pastoral')),
+                  'M18: Coordinator switches off a senior leader''s account');
+select test.lives(format('update public.app_users set is_active = true where id = %L', test.id('pastoral')),
+                  'M18: ... and back on');
+select test.throws(format('update public.app_users set is_active = false where id = %L', test.id('coord')),
+                   'M18: Coordinator still cannot switch off their own account');
+select test.throws(format('delete from public.role_assignments where user_id = %L', test.id('coord')),
+                   'M18: Coordinator still cannot change their own roles');
+reset role;
+
+-- The Operations Lead's limits are unchanged: no pastoral notes, no senior roles.
+select test.login('ops'); set role authenticated;
+select test.throws(format('select * from public.get_pastoral_notes(%L)', test.id('p1')), 'M18: Operations Lead still cannot read pastoral notes');
+select test.throws(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('finance'), 'pastoral_lead'),
+                   'M18: Operations Lead still cannot give a senior role');
+reset role;
+
+-- =====================================================================================
+-- Security review 10 (migration 18), SECURITY REVIEW FIX P03: the Resident Pastor safeguard
+-- against every route tried in the review, the other new rights, the limits that stay, and
+-- two Coordinators acting against each other.
+-- =====================================================================================
+-- Fixture (as the system): a former Resident Pastor whose role row was switched off; a
+-- switched-off account that still holds an active Resident Pastor row; a second Coordinator;
+-- an open check-in flag.
+select test.login('');
+do $$
+declare v uuid; u text;
+begin
+  foreach u in array array['oldrp','coord2'] loop
+    v := gen_random_uuid();
+    insert into auth.users (id, email) values (v, u || '@example.org');
+    insert into public.app_users (id, church_id, display_name) values (v, test.id('churchA'), initcap(u));
+    insert into test.ids values (u, v);
+  end loop;
+  insert into public.role_assignments (church_id, user_id, role, is_active)
+  values (test.id('churchA'), test.id('finance'), 'resident_pastor', false);
+  insert into public.role_assignments (church_id, user_id, role) values (test.id('churchA'), test.id('oldrp'), 'resident_pastor');
+  update public.app_users set is_active = false where id = test.id('oldrp');
+  insert into public.role_assignments (church_id, user_id, role) values (test.id('churchA'), test.id('coord2'), 'gsquad_coordinator');
+  insert into public.checkin_flags (church_id, person_id, source, raised_by) values (test.id('churchA'), test.id('p1'), 'manual', test.id('ops'))
+  returning id into v;
+  insert into test.ids values ('flag1', v);
+end $$;
+
+select test.login('coord'); set role authenticated;
+-- The Resident Pastor role and account: every route is refused.
+select test.throws(format('update public.role_assignments set is_active = true where user_id = %L and role = %L', test.id('finance'), 'resident_pastor'),
+                   'P03: Coordinator cannot switch a former Resident Pastor''s role row back on');
+select test.throws(format('update public.app_users set is_active = true where id = %L', test.id('oldrp')),
+                   'P03: Coordinator cannot switch on an account that holds the Resident Pastor role');
+select test.throws(format('delete from public.app_users where id = %L', test.id('rp')),
+                   'P03: Coordinator cannot delete the Resident Pastor''s account');
+select test.throws(format('update public.role_assignments set user_id = %L where user_id = %L and role = %L', test.id('teci'), test.id('rp'), 'resident_pastor'),
+                   'P03: Coordinator cannot move the Resident Pastor role row to someone else');
+select test.throws(format('update public.role_assignments set role = %L where user_id = %L and role = %L', 'resident_pastor', test.id('coord2'), 'gsquad_coordinator'),
+                   'P03: Coordinator cannot turn another senior role into the Resident Pastor role');
+-- What stays outside the Coordinator's access.
+select test.ok((select count(*) from public.audit_log) = 0, 'P03: Coordinator still cannot read the audit log');
+with u as (update public.core_values set name = 'Changed' where letter = 'A' returning 1)
+select test.ok(count(*) = 0, 'P03: Coordinator cannot change the ASHLIE core values (Resident Pastor only)') from u;
+select test.throws(format('select public.export_person(%L)', test.id('p1')), 'P03: export_person stays with the Operations Lead and Resident Pastor');
+select test.throws(format('select public.anonymise_person(%L)', test.id('p1')), 'P03: anonymise_person stays with the Operations Lead');
+-- The other new rights.
+with u as (update public.checkin_flags set status = 'closed' where id = test.id('flag1') returning closed_by)
+select test.ok(count(*) = 1 and bool_and(closed_by = test.id('coord')), 'P03: Coordinator closes a check-in flag (recorded as closer)') from u;
+select test.lives($q$insert into public.church_roles (name) values ('Coordinator role')$q$, 'P03: Coordinator adds a team role');
+select test.lives($q$insert into public.leadership_stages (sort_order, name) values (49, 'Coordinator stage')$q$, 'P03: Coordinator adds a leadership stage');
+select test.lives($q$insert into public.reusable_blocks (name, body) values ('Coordinator block', 'Text')$q$, 'P03: Coordinator adds a reusable block');
+reset role;
+
+-- Other roles' limits are unchanged.
+select test.login('ops'); set role authenticated;
+with u as (update public.checkin_flags set status = 'open' where id = test.id('flag1') returning 1)
+select test.ok(count(*) = 0, 'P03: Operations Lead still cannot re-open or close check-in flags') from u;
+with u as (update public.teci_stages set description = 'Ops' where stage_no = 1 returning 1)
+select test.ok(count(*) = 0, 'P03: Operations Lead still cannot edit TECi stages') from u;
+select test.throws(format('update public.app_users set is_active = false where id = %L', test.id('coord2')),
+                   'P03: Operations Lead still cannot switch off a Coordinator''s account');
+reset role;
+select test.login('pastoral'); set role authenticated;
+with u as (update public.checkin_flags set status = 'open' where id = test.id('flag1') returning 1)
+select test.ok(count(*) = 1, 'P03: Pastoral Lead still re-opens and closes check-in flags') from u;
+reset role;
+
+-- Two Coordinators: one can switch the other off (accepted by the decision), neither can touch
+-- the Resident Pastor, and the Resident Pastor can always put things right.
+select test.login('coord2'); set role authenticated;
+select test.lives(format('update public.app_users set is_active = false where id = %L', test.id('coord')),
+                  'P03: a Coordinator can switch off another Coordinator''s account');
+select test.throws(format('update public.app_users set is_active = false where id = %L', test.id('rp')),
+                   'P03: ... but not the Resident Pastor''s');
+reset role;
+select test.login('coord'); set role authenticated;
+select test.throws(format('select * from public.get_pastoral_notes(%L)', test.id('p1')),
+                   'P03: a switched-off Coordinator loses pastoral notes at once');
+with u as (delete from public.role_assignments where user_id = test.id('coord2') returning 1)
+select test.ok(count(*) = 0, 'P03: a switched-off Coordinator cannot strike back') from u;
+reset role;
+select test.login('rp'); set role authenticated;
+select test.lives(format('update public.app_users set is_active = true where id = %L', test.id('coord')),
+                  'P03: the Resident Pastor switches the Coordinator back on');
+select test.lives(format('delete from public.role_assignments where user_id = %L', test.id('coord2')),
+                  'P03: ... and removes the other Coordinator''s role');
 reset role;
 
 -- ---------- report ---------------------------------------------------------------------

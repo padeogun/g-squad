@@ -365,3 +365,190 @@ Database fixes are in a new migration, `20261023001400_security_review_6.sql`. N
 5. **Deleting accounts.** Inviters can delete (not only switch off) accounts that are not protected. Accounts that own projects, recognitions or unit memberships cannot be deleted (foreign keys), but the screen offers "Switch off" only. Consider removing DELETE from the `app_users_admin` policy, so audit history always keeps its account names.
 6. **Linking a leader to their own G-Squad record** is now done by another admin (K04). An admin could still unlink a colleague so that the colleague could recognise themselves. That needs collusion, and it shows in the audit log.
 7. **Sessions after switch-off.** A switched-off leader's token stays valid until it expires (1 hour), but it reads and changes nothing. To end it at once, sign the user out in the Supabase dashboard.
+
+---
+
+## Review 7: Reference forms, members and My Unit (slice 1b and 1c), 23 Oct 2026
+
+Independent review of the three commits on `slice-1b-reference` that are not on `slice-1a-leaders` ("reference forms", "members, member entry form and My Unit", "link colour and chip spacing"). Every fix is marked `SECURITY REVIEW FIX Lnn` in an inline comment.
+
+### Scope
+
+- Reference forms: `src/data/forms.ts`, `src/data/forms.test.ts`, `src/pages/admin/ReferenceForms.tsx` and the generic engine `src/pages/admin/ReferenceForm.tsx`.
+- Members: `src/data/people.ts`, `src/pages/people/Members.tsx`, `MemberForm.tsx` and `MyUnit.tsx`.
+- Routing and menu (`src/app/router.tsx`, `src/app/navigation.ts`) and `src/design-system/app.css`.
+- The database rules these screens rely on were read for context (migrations 3, 4, 6, 7, 8, 9 and 11: `people`, `unit_memberships`, `person_faith`, `app.can_read_person`, `app.can_edit_person`, `app.can_see_faith`, `app.people_guard`, `app.membership_guard`, `get_person_faith`, `set_person_faith`, `app.anonymise`).
+- Every query the screens make was run against the local test database as the fixture leaders (Unit Lead, Operations Lead, TECi Coordinator, Resident Pastor, another church's Operations Lead).
+
+The commits had no database changes. The fixes need one: a new migration, `20261023001500_security_review_7.sql`. Nothing was connected to a real Supabase project.
+
+### Findings
+
+| ID | Severity | Finding | Fix | File |
+|----|----------|---------|-----|------|
+| L01 | Medium | **Adding a member never worked, and its design would leave orphaned personal data.** The form inserted the person with `insert(...).select('id')`. Postgres checks the read policy on the returned row, and `app.can_read_person` cannot see a row the same statement is inserting, so *every* add was refused, even for the Operations Lead (confirmed on the test database). If that were "fixed" the obvious way, the form still made three separate calls (person, then membership, then faith fields). A failure after the first left a person with no unit: the Unit Lead could still see the record (they created it) but could not add a unit to it or remove it, pressing "Add member" again made a second copy, and the nightly retention job never anonymises an active record. | New function `public.create_member()` adds the person, the membership and any faith fields in **one transaction**: all or nothing. It is `SECURITY INVOKER`, so it runs as the leader and row-level security, the TECi and R3 guards and `set_person_faith`'s own check all still apply. It makes the id itself (no `RETURNING`), takes only the member columns (any `id`, `church_id`, `created_by` or `anonymised_at` in the payload is ignored), lower-cases the email as the unique index does, drops an anniversary unless married, and keeps status and leaving date consistent. 14 database checks, plus a unit test that no screen inserts into `people` directly. | migration 15, `MemberForm.tsx`, `people.test.ts` |
+| L02 | Medium | **An anonymised record could be filled in again.** `people_guard` stopped anyone *changing* `anonymised_at`, but not changing the other columns while it was set. The Operations Lead, or the Unit Lead who entered the person, could open `/members/<id>` (the form did not leave anonymised records out) and type the name and email back in, undoing R8 or an erasure request. An anonymised person could also be added to a unit again. | `people_guard` (re-created whole) refuses any API change to an anonymised record; a new trigger refuses a membership for an anonymised person. The system jobs are unaffected. The form shows "not found" for an anonymised record. 2 database checks. | migration 15, `MemberForm.tsx` |
+| L03 | Medium | **A failed faith load showed the fields as empty and editable.** If `get_person_faith` failed for any reason other than "not allowed" (network, timeout), the panel showed blank fields. Ticking one box then saved blanks over the person's real record: special category data lost, and the change logged as if deliberate. | The fields are shown only after a successful load. A failed load shows an error in the panel and nothing can be saved for the faith fields. | `MemberForm.tsx` |
+| L04 | Low | **Faith fields were fetched on every opening of a member record.** Each fetch is a logged view, so opening a record only to correct an email address put special category data on screen and an entry in the audit log, which then over-states real looks. The global "retry once" also applied, so a call whose first answer was lost could log twice. | Faith fields load only when the leader presses "Show faith journey". No automatic retry for this query. `staleTime: Infinity` and `gcTime: 0` were checked and do what the comment says: no background re-fetch, and the copy leaves the cache as soon as the form closes. Nothing is put in `localStorage`, `sessionStorage` or the address. | `MemberForm.tsx` |
+| L05 | Low | For a new member, the faith panel was offered to anyone who leads *any* unit. An Operations Lead who also leads unit X, adding someone to unit Y, could fill in faith fields that the database would then refuse. (With L01 the refusal now undoes the whole save, so nothing leaks; before, the person was saved and the faith fields lost.) | For a new member the panel appears only when the chosen unit is one the leader leads (or for the faith-reading roles). | `MemberForm.tsx` |
+| L06 | Low | An edit re-sent the whole member row. It overwrote changes other leaders had made meanwhile, and it made a faith-only change by the Resident Pastor fail (the Resident Pastor may read but not edit member records), so the faith fields were never saved. A duplicate email was reported as "That name is already in use". | An edit sends only the columns that changed, and skips the update when nothing changed. A duplicate on this form is reported as an email already recorded. Unit test added. | `MemberForm.tsx`, `people.ts` |
+| L07 | Low | The member lists fetched `created_by` (a leader's account id) for every person. No screen used it. | Removed from the selected columns. | `people.ts` |
+| L08 | Low | In the reference-form engine, if the row being edited disappeared from the list (removed by someone else), the edit panel opened empty and "Save" **inserted** a new row instead of updating. | The panel opens only for "add" or a row still in the list. | `ReferenceForm.tsx` |
+
+### Checked and found sound
+
+- **The generic reference-form engine cannot be pointed elsewhere.** `formId` from the address only selects one of the eight fixed entries in `forms.ts`; an unknown id shows "not found". The table name comes from that fixed list, never from the address. The add and edit payload is built only from the form's own fields (`toRow` loops over `def.fields`), so `id`, `church_id`, `created_by` and `is_active` are never in it; switch on/off sends only `is_active`, and remove deletes by id. Crafted values (for example a select value changed in the browser) still meet the database's checks, foreign keys and `*_write` policies. The test that `editRoles` matches each table's write policy still passes.
+- **Writes are checked by the database, not the screen.** Every update uses `.select('id').single()`, so a change refused by row-level security shows an error instead of a silent "saved". Confirmed on the test database: a Unit Lead's update to another unit's membership changes 0 rows; a Unit Lead cannot set or change a TECi stage (on entry or later); another church's Operations Lead cannot add to this church's unit; a Unit Lead cannot see a member of another unit.
+- **My Unit** changes only team role, leadership stage and leader flag, by membership id. `memberships_update` limits this to the unit's lead (or the Operations Lead and Resident Pastor), and `membership_guard` stops the person, unit or approval being changed.
+- **Faith fields** are read and written only through `get_person_faith` and `set_person_faith` (a unit test now fails if any source file touches `person_faith`). "Restricted" (code 42501) hides the fields and saves nothing. A refused read is not logged (the function raises before logging). Faith data is not put in the address, browser storage or the console. The Operations Lead is never offered the panel.
+- **Data minimisation.** Birthday and anniversary are day and month only; anniversary is cleared unless married (now also in `create_member`); area only, no address. Email is trimmed and lower-cased in both the form and the function, matching `people_email_unique (church_id, lower(email))`. Status and leaving date always agree with `left_consistent`.
+- **No injection paths.** No `dangerouslySetInnerHTML` or `innerHTML`; links use ids only (`/members/<uuid>`); `window.confirm` shows a name as plain text; no data is turned into an `href`; no CSV export in this slice. Error messages go through `friendlyError`, which passes on only our own rule messages.
+- **Other churches.** Every query relies on row-level security for the church (`app.current_church_id()`); no screen filters by church itself or assumes a single church.
+- **Routing.** `/admin` and the reference forms are readable by every leader (as the read policies allow); editing is offered only to the owning role and enforced by the database.
+
+### Test results
+
+- `scripts/db-test.sh` (local Postgres 16): **275 of 275 checks passed** (257 before, plus 18 for L01, L02 and the My Unit and Members queries).
+- `scripts/db-types.sh`: `src/lib/database.types.ts` regenerated (adds `create_member`).
+- `npm run check`: lint clean, **60 of 60 unit tests pass** (4 new), build succeeds.
+
+### Residual risks and actions for TEC
+
+1. **Email addresses can be confirmed by guessing.** Because email is unique in the church, a Unit Lead who types an address already recorded for someone outside their unit is told it exists. This follows from the unique index. Accept it, or make the index apply only within a unit's members.
+2. **A Unit Lead keeps sight of everyone they entered** (`created_by`), even after the person moves to another unit. This is migration 3's design (so a new entry is visible before it has a unit). Consider limiting it to people with no live membership.
+3. **Faith panel on save.** After saving changes with the faith panel open, the fields load again, which logs one more view. Acceptable; it shows what was saved.
+4. **Removing a leadership stage or team role** clears it from every membership (`on delete set null`) without warning. Not a data-protection issue, but the Operations Lead may prefer "switch off" for these lists too.
+5. **The Resident Pastor can read but not edit member records** (`app.can_edit_person`). The form still shows the fields as editable; a save of member details is refused by the database. Decide whether the Resident Pastor should edit, and hide the fields if not.
+6. **Sample data only** until the DPIA is signed (unchanged).
+
+## Review 8: Member edit rights (decisions of 23 Oct 2026)
+
+Independent review of the latest commit on `slice-1b-reference` ("Member edit rights: Team Lead and G-Squad Coordinator only; Unit Leads see current units only"). Every fix is marked `SECURITY REVIEW FIX Mnn` in an inline comment. Migration 16 had not been applied anywhere, so the database fixes are made in it directly.
+
+### Scope
+
+- `supabase/migrations/20261023001600_member_edit_rights.sql`: `app.can_edit_person`, the new `people_update` policy, `app.people_guard` (compared line by line with migration 15's version), `app.can_edit_faith`, `public.set_person_faith`, `app.can_read_person` (without `created_by`), `app.is_new_entry_of_caller` and the new `memberships_write` policy.
+- The new checks in `supabase/tests/10_access_and_rules.sql` and `src/pages/people/MemberForm.tsx` (read-only view, TECi stage, faith panel).
+- Every other place in migrations 1 to 15 that relies on `can_edit_person`, `can_read_person` or `created_by`: holidays, check-in flags, one-to-ones, recognitions, assignments, `export_person`, `anonymise` / `anonymise_person`, `redeem_email_link` (unsubscribe), `create_member`, `newsletter_celebrations`, the membership policies and `membership_guard`.
+- Each attack below was tried on the local test database as the fixture leaders.
+
+### Findings
+
+| ID | Severity | Finding | Fix | File |
+|----|----------|---------|-----|------|
+| M01 | Medium | **A Unit Lead could get a former member back by re-opening their old membership.** `memberships_update` lets a Unit Lead change any membership of their unit, including setting an *ended* one back to `active`. Confirmed: after Mo moved from Production to Ushering, Production's Unit Lead re-opened the ended row and at once saw Mo again, could edit the record and (the row being active) read and write Mo's faith fields. This undid Decision 2, and also side-stepped F05 (adding an existing member of another unit is for the Operations Lead). | A new trigger, `app.membership_reopen_guard`, treats re-opening as joining again: only the Operations Lead or the Resident Pastor may do it, and never for an anonymised person (as L02 does for adding). Ending a membership, and changing team role, leader flag or stage on a live one, are unchanged. `membership_guard` (R3) is left as it was. 5 database checks. | migration 16 |
+| M02 | Low | **Faith fields could be written back onto an anonymised record.** `app.anonymise()` deletes the faith row but leaves memberships in place, and `people_guard` closes only the member columns. The G-Squad Coordinator (or a Team Lead of a still-active membership) could call `set_person_faith` on an anonymised person and record special category data on a record wiped under R8 or an erasure request. | `app.can_edit_faith` refuses anonymised records. `set_person_faith` tells the G-Squad Coordinator plainly that the record has been anonymised (checked only after the refusal, so it tells no one else whether an id is anonymised). 2 database checks. | migration 16 |
+| M03 | Low | For a **new** member, the faith panel was offered to every faith-reading role, though only the G-Squad Coordinator and the chosen unit's lead may record. An Operations Lead who is also the TECi Coordinator saw an empty, locked panel. Nothing could be saved (the database refuses and `create_member` undoes the whole add). | For a new member the panel appears only to someone who may record the fields. | `MemberForm.tsx` |
+| M04 | Low | The "Units" card on a member record showed an **ended** membership as "Awaiting approval", suggesting the person was still joining a unit they had left. With Decision 2 a leader needs to see clearly where someone is now. | Ended memberships are shown as "Ended". | `MemberForm.tsx` |
+
+### Checked and found sound
+
+- **`people_guard` lost nothing.** Compared with migration 15: the system bypass, the closed anonymised record (L02), unchangeable id, church and creator, the anonymising marker (F09) and "use `anonymise_person`" are all still there, in the same order. The only changes are the two intended ones: an existing TECi stage is changed by the TECi Coordinator alone (the Operations Lead may still set one when adding), and "TECi stage only" now applies to anyone who is not an editor of *this* person. `anonymise_person` (Operations Lead) still works, because the marker branch returns before the new checks; the unsubscribe link runs as the system and is not affected.
+- **The TECi route lets no one else edit.** The `people_update` policy admits the TECi Coordinator for every row in the church, but `people_guard` then refuses any change other than the TECi stage from anyone who is not this person's editor. Checked with a TECi Coordinator who also leads another unit: refused. The TECi Coordinator is a church-wide reader, so they never update a row they cannot see; another church's rows are excluded by `church_id`.
+- **`is_new_entry_of_caller` cannot be used to claim people.** It is true only for a person the caller entered **and** who has never had any membership. Memberships cannot be deleted (no delete policy; units are `on delete restrict`), so once someone has been in a unit, ended or not, they never count as new again; a person entered long ago and placed in a unit, then moved, cannot be re-added by the Unit Lead who entered them. One Unit Lead cannot claim another's unplaced entry. As a callable function it only answers about the caller's own entries.
+- **F05 still holds:** a Unit Lead cannot add an existing member of another unit, even knowing their id (existing check), and now cannot re-open an old membership either (M01).
+- **`create_member` and faith fields.** A brand-new person has no active memberships and the church setting `units_before_approval` is at least 1, so the new membership is always `active` and the Unit Lead's faith fields are accepted in the same transaction; the "pending approval" case cannot arise for a new entry. The Operations Lead is not offered faith fields; if sent anyway, the clear message "Only their Team Lead or the G-Squad Coordinator can record faith fields" is returned and the whole add is undone (new check).
+- **Other users of the changed helpers.** Holidays (`can_edit_person`) are now recorded by the Team Lead and the G-Squad Coordinator only, matching the decision. Check-in flags follow `can_read_person`, so a Unit Lead can no longer raise a flag on someone who has left their unit. Assignments, one-to-ones and recognitions use unit leadership and memberships, not these helpers, and are unchanged. `export_person`, `anonymise_person` and `newsletter_celebrations` are role-based and unaffected. Faith reading (`can_see_faith`) is unchanged.
+- **Front end.** The read-only view is display only; every refusal is still made by the database (the record fields sit in a disabled fieldset, the save button is hidden when nothing can be saved, and an edit sends only changed columns, so a TECi Coordinator's save sends the stage alone). The faith panel's "recorded by" rule matches `app.can_edit_faith`.
+
+### Test results
+
+- `scripts/db-test.sh` (local Postgres 16): **306 of 306 checks passed** (293 before, plus 13 for M01, M02, the TECi route with a second role, the Operations Lead's add with faith fields and `is_new_entry_of_caller`).
+- `scripts/db-types.sh`: `src/lib/database.types.ts` regenerated; no change (the new functions are in the `app` schema).
+- `npm run check`: lint clean, **60 of 60 unit tests pass**, build succeeds.
+
+### Residual risks and actions for TEC
+
+1. **Holidays.** The Operations Lead, Resident Pastor and TECi Coordinator can no longer record or remove a member's holiday; only the Team Lead and the G-Squad Coordinator can. Confirm this is intended, as holidays affect rotas the Operations Lead builds.
+2. **Anonymised people keep their memberships.** `app.anonymise()` does not end them, so a Team Lead still sees "Former member" in their unit. Nothing personal remains and nothing can be changed, but consider ending the memberships when anonymising.
+3. **Re-joining a unit now goes through the Operations Lead** (or the Resident Pastor). A Unit Lead who ends a membership by mistake must ask them to re-open it.
+4. **A Unit Lead can still enter a person and leave them out of every unit** by inserting into `people` directly rather than through `create_member`. Such a record is then invisible to them; only church-wide readers see it. Consider a periodic report of members with no unit.
+5. **Sample data only** until the DPIA is signed (unchanged).
+
+## Review 9: Anonymised members leave their units, 23 Oct 2026
+
+Independent review of the latest commit on `slice-1b-reference` ("Anonymised members leave their units (migration 17)"), which acts on residual risk 2 of review 8. Every fix is marked `SECURITY REVIEW FIX Nnn` in an inline comment. Migration 17 had not been applied anywhere, so the fix is made in it directly.
+
+### Scope
+
+- `supabase/migrations/20261023001700_anonymised_leave_units.sql`: `app.anonymise` (compared line by line with migration 11's version), its grants, and the backfill.
+- The callers: `public.anonymise_person` (migration 9) and `app.anonymise_expired_people` (migration 12) with its pg_cron schedule.
+- The triggers on `unit_memberships`: `app.membership_guard` (migration 8), `app.membership_not_anonymised` (migration 15) and `app.membership_reopen_guard` (migration 16), run from the RPC as a signed-in Operations Lead (not the system shortcut).
+- Everything that reads memberships: `app.can_read_person`, the membership policies, `app.unit_capacity` / `capacity_calendar`, `v_engagement`, `app.raise_automatic_flags`, `export_person`, `useMemberships` in `src/data/people.ts`.
+- The new "M17" checks in `supabase/tests/10_access_and_rules.sql`.
+
+### Findings
+
+| ID | Severity | Finding | Fix | File |
+|----|----------|---------|-----|------|
+| N01 | Low | **The new checks did not exercise the real paths.** The M17 checks call `app.anonymise` as the database owner, where `app.is_system()` is true and every membership trigger returns at once. Neither the Operations Lead's erasure request (`anonymise_person`, where the triggers run in full), a pending membership, the nightly job, nor the function's grants were checked. (Read-through found no fault in those paths; the gap was in the evidence.) | 8 database checks: `app.anonymise` is not executable by `anon` or `authenticated` and the Operations Lead cannot call it directly; `anonymise_person` stays granted to signed-in users only; as the Operations Lead (`test.login('ops')`, `set role authenticated`) it ends an active and a pending membership and is logged; the Unit Lead then no longer sees the person at all; the nightly job ends a long-gone leaver's membership. | tests |
+| N02 | Low | **Memberships were ended "today", not when the person left.** The nightly job anonymises people a year or more after `date_left`, and the backfill covers people anonymised in the past; both set `ended_on = current_date`, recording them as serving in the unit long after they had gone (UK GDPR accuracy). No count uses `ended_on` today, so no figure was wrong, but any future "unit history" or turnover report would be. | `ended_on` is the person's `date_left` (which `app.anonymise` sets just before, defaulting to today), kept on or after `joined_on`, in both the function and the backfill. 1 database check. | migration 17 |
+
+### Checked and found sound
+
+- **Nothing dropped from `app.anonymise`.** A diff against migration 11 shows the body identical apart from the new membership update: the anonymising marker on and off, every wiped column of `people`, the deletes of faith, pastoral notes, one-to-ones, recognitions, holidays, check-in flags and email tokens, the clearing of community support roles and `app_users.person_id`, and F14's wipe of override reasons. No migration between 11 and 17 re-created it. `security definer` and `search_path = ''` are kept.
+- **Grants.** `create or replace` keeps the existing grants; migration 17 restates them as intended by migration 9: no `public`, `anon` or `authenticated`, `service_role` only. `anonymise_person` (Operations Lead, own church, logged as `anonymise_request`) and `anonymise_expired_people` (service role and pg_cron as owner, logged as `anonymise_retention`) still reach it as the function owner; both now checked.
+- **Triggers on the update.** `membership_guard` (non-system path): person, unit and church are unchanged; `approved_by` is untouched; the pending-to-active and re-activation branches do not apply to `ended`; `ended_on` is set by the function. `membership_reopen_guard` only acts when an *ended* row is re-opened. `membership_not_anonymised` is `before insert` only. The update runs after `people` is anonymised, and none of the triggers objects to that. The backfill runs as the owner (system) and meets the `status`/`ended_on` check constraint.
+- **Audit and history.** `unit_memberships` has no row-audit trigger; the single `anonymise_request` / `anonymise_retention` entry records the action, as before. Rows are ended, not deleted, so serving history (assignments) and the membership history stay as anonymous records; assignments still count for the Values and engagement figures as before.
+- **Counts and views.** `unit_capacity` already counted only `active` memberships of `active` people, and an anonymised person is always `left`, so capacity is unchanged for every month. `v_engagement` does not read memberships (a `left` person was already "left"). The `many_units` flag counts `active` people only. `useMemberships` (team lists and My Unit) shows only live memberships, so "Former member" no longer appears, which is the purpose of the change.
+- **Visibility narrows, as intended.** `app.can_read_person` gives a Unit Lead or Purpose Head sight of a person only through a live membership, so after anonymising they no longer read the Former member's row at all; church-wide readers still do. Pending requests of an anonymised person are ended too, so none is left for the Resident Pastor to approve (approving would also have been refused by L02/M01).
+
+### Test results
+
+- `scripts/db-test.sh` (local Postgres 16): **317 of 317 checks passed** (309 before, plus 8 for N01 and N02).
+- `scripts/db-types.sh`: `src/lib/database.types.ts` regenerated; no change (only `app` functions and data changed).
+- `npm run check`: lint clean, **60 of 60 unit tests pass**, build succeeds.
+
+### Residual risks and actions for TEC
+
+1. **Future rota slots are not cancelled.** An anonymised person's `planned` assignments stay on rotas as "Former member" (they existed before this change too). Consider cancelling future planned slots when anonymising, or showing them to the rota owner as gaps to fill.
+2. **A Unit Lead loses sight of the person behind past slots** in their unit once the membership ends (as for anyone who leaves a unit under Decision 2); past assignments remain as anonymous counts.
+3. **Sample data only** until the DPIA is signed (unchanged).
+
+## Review 10: G-Squad Coordinator full access, 23 Oct 2026
+
+Independent review of the latest commit on `slice-1b-reference` ("G-Squad Coordinator full access (migration 18)"), which carries out the church's decision of 23 Oct 2026. Every fix is marked `SECURITY REVIEW FIX Pnn` in an inline comment. Migration 18 had not been applied anywhere; it needed no change.
+
+### Scope
+
+- `supabase/migrations/20261023001800_coordinator_full_access.sql`, each re-created function compared line by line with its previous version: `app.can_see_pastoral` (migration 3), `app.church_settings_guard` (migration 10; no later migration re-created it, including 12, 13 and 14), `app.role_assignment_guard` (migration 13), `app.app_user_guard` (migration 14); and every replaced policy (`flags_close`, the seven reference form `*_write` policies, `settings_update`) against migration 7.
+- The updated and new checks in `supabase/tests/10_access_and_rules.sql`; `src/data/forms.ts` with `forms.test.ts`; `grantableRoles` in `src/auth/useMe.ts`; `checkGrants` in `supabase/functions/invite-leader/logic.ts` with `src/lib/invite-logic.test.ts` and the function's `index.ts`; `docs/database.md`.
+- Every other place that names pastoral readers or senior roles: `audit_read`, `export_person`, `anonymise_person`, `get_pastoral_notes`, `pastoral_insert`, `flag_guard`, `core_values_write`, `has_role` / `has_any_role`, the role-row foreign keys (cascades from `purposes` and `units`).
+- Each escalation route below was tried on the local test database as the fixture Coordinator.
+
+### Findings
+
+| ID | Severity | Finding | Fix | File |
+|----|----------|---------|-----|------|
+| P01 | Low | **The database guide was out of date and overstated the change.** The RPC table still listed only the Pastoral Lead and Resident Pastor for `get_pastoral_notes`, and "full access" did not say what the Coordinator still cannot do, which TEC needs to know to rely on the Resident Pastor's oversight. | RPC table corrected (Coordinator, and Purpose Heads while the setting is on). A new line lists what stays outside the Coordinator's access: the Resident Pastor role and account, their own roles and account, the audit log, the core values, `export_person` / `anonymise_person`, sites and service grid blocks. | `docs/database.md` |
+| P02 | Low | The comment on `SENIOR_ROLES` in the invite function still said these roles are given by the Resident Pastor only; the code below it (correctly) lets the Coordinator give them. A misleading comment beside a security check invites a wrong "fix". | Comment corrected. | `invite-leader/logic.ts` |
+| P03 | Low | **The safeguards were not checked against the realistic routes.** The commit checked direct grant/removal of the Resident Pastor role and switching off the Resident Pastor's account, but not the indirect routes, the limits that stay, the flags, or two Coordinators. It also removed several earlier Coordinator checks (correctly, as the decision changed them). Read-through and manual attempts found no fault; the gap was in the evidence. | 23 database checks: Coordinator cannot switch a former Resident Pastor's role row back on, switch on an account holding the Resident Pastor role, delete the Resident Pastor's account, move the Resident Pastor row to someone else, or turn another senior row into the Resident Pastor role; still reads no audit log, cannot change core values, cannot call `export_person` / `anonymise_person`; closes a flag (recorded as closer); adds a team role, leadership stage and reusable block; Operations Lead still cannot touch flags, TECi stages or a Coordinator's account; Pastoral Lead still closes flags; one Coordinator can switch another off but not the Resident Pastor, the switched-off Coordinator loses pastoral notes at once and cannot strike back, and the Resident Pastor puts it right. | tests |
+
+### Checked and found sound
+
+- **Nothing dropped from the re-created functions.** `can_see_pastoral` is identical to migration 3 apart from the added role (church check, Purpose Head route and its setting kept). `church_settings_guard` keeps the system bypass, the fixed church, the pastoral switch rule and the "other settings" rule, with the Coordinator added to both; the Resident Pastor can still change only the pastoral switch. `role_assignment_guard` keeps the system bypass, the Purpose Head-while-the-setting-is-on rule, "nobody changes their own roles" and the Operations Lead rule; the new Resident Pastor rule runs before the senior-role rule. `app_user_guard` keeps the fixed id and church, K04 (own G-Squad link), K02 (switching on is protected like switching off), K03 (Purpose Heads) and "not your own account". All keep `security definer`, `search_path = ''` and the service-role-only grants; the triggers from migrations 10 and 13 still call them.
+- **No route to Resident Pastor power.** Insert, update (of `role`, `user_id`, `is_active` or any other column) and delete of a Resident Pastor role row are all refused unless the caller is the Resident Pastor, because the guard tests both `old.role` and `new.role` whatever the change. An account with an active Resident Pastor row cannot be switched off, switched on or deleted by anyone else; deleting the account is refused in the `before delete` trigger before any cascade reaches the role rows. Inviting with the role `resident_pastor` is refused by `checkGrants` and, since the function inserts roles with the caller's token, by the database too. Church settings hold only rule thresholds, labels and the pastoral switch; none weakens a role or account guard. `core_values_write` (migration 11) is untouched and Resident Pastor only. `audit_read` does not include the Coordinator, so the Coordinator cannot see or alter the record of their own pastoral reads; nobody can delete audit entries.
+- **Cascades.** The Coordinator can now delete purposes and units, which cascades to Purpose Head and Unit Lead rows. The role guard runs on each cascaded row with the caller's identity, so a cascade cannot remove the caller's own role or any Resident Pastor row.
+- **Lock-out.** Neither one Coordinator nor two acting together can switch off, delete or demote the Resident Pastor, so the Resident Pastor can always undo what a Coordinator did. Two Coordinators can switch each other off (accepted by the decision); a switched-off account loses every right at once because `has_role` requires an active account.
+- **Other roles unchanged.** The Operations Lead still cannot give senior roles, switch off senior accounts, change the pastoral switch, read pastoral notes or close flags; the TECi Coordinator still keeps TECi stages; the Pastoral Lead still closes flags. Only the Coordinator was added to each list.
+- **Pastoral readers consistent.** `get_pastoral_notes` and `pastoral_insert` both use `can_see_pastoral`; flags follow `flags_close`. `export_person` gives pastoral notes and one-to-ones to the Resident Pastor only and is not open to the Coordinator; `anonymise_person` stays with the Operations Lead. These were not part of the decision and are unchanged (see actions).
+- **App matches the database.** `forms.test.ts` compares each form's `editRoles` with the last `*_write` policy in the migrations; all eight forms pass (community types and Greatness Communities already included the Coordinator). `grantableRoles` offers the Resident Pastor role to the Resident Pastor only, senior roles to the Resident Pastor or Coordinator, Operations Lead also to an Operations Lead.
+
+### Test results
+
+- `scripts/db-test.sh` (local Postgres 16): **357 of 357 checks passed** (334 before, plus 23 for P03).
+- `scripts/db-types.sh`: `src/lib/database.types.ts` regenerated; no change.
+- `npm run check`: lint clean, **60 of 60 unit tests pass**, build succeeds.
+
+### Residual risks and actions for TEC
+
+1. **Concentration of access in one role.** A single G-Squad Coordinator can now read every pastoral note and faith field, change every setting (including who reads pastoral notes and how soon leavers' records are wiped), and give, remove and switch off every senior role and account except the Resident Pastor's. A compromised or mistaken Coordinator account could do serious harm before anyone notices. Suggested mitigations:
+   - **Monthly audit review by the Resident Pastor** of `view_pastoral`, `view_faith`, role-assignment, account and `church_settings` entries (only the Resident Pastor sees them all). Consider a simple "Coordinator activity" report for this.
+   - Keep the number of Coordinators to one or two named people; require multi-factor sign-in for every senior account in Supabase Auth.
+   - Record in the DPIA that the Coordinator role now reads special category and pastoral data church-wide.
+2. **A Coordinator can create further Coordinators**, including a second account they control, and a switched-off Coordinator can be switched back on by any other Coordinator. So the Resident Pastor switching off one Coordinator is only lasting if every other Coordinator is trusted, and "nobody changes their own roles" can be side-stepped with a second account. If TEC wants a firmer backstop, decide that the G-Squad Coordinator role itself is given only by the Resident Pastor (one line in `role_assignment_guard`, `checkGrants` and `grantableRoles`).
+3. **The Coordinator can remove the last Operations Lead** (and the last Pastoral Lead or TECi Coordinator). Accepted by the decision. Until the Resident Pastor appoints another, nobody can anonymise a person on request, keep sites or service grid blocks, or add members except Unit Leads. Consider a check before removing the last holder of a role.
+4. **Retention can be shortened by the Coordinator.** `retention_months` (R8) may be set as low as 1, after which the nightly job irreversibly wipes leavers' faith fields and pastoral notes. This was already true for the Operations Lead. Consider a floor (say 6 months) or making this setting the Resident Pastor's.
+5. **Not covered by "full access":** `export_person`, `anonymise_person`, sites and service grid blocks remain with the Operations Lead (and the Resident Pastor for export). Confirm this is intended.
+6. **If the only Resident Pastor's account is lost**, only the service role (SQL editor) can appoint a new one. Unchanged; keep a written procedure.
+7. **Sample data only** until the DPIA is signed (unchanged).

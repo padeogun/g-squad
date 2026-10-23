@@ -51,3 +51,22 @@
 .app-link-button { min-height: 32px; padding: 0 var(--space-2); border: 0; background: none; color: var(--link); font: 600 13px/1 var(--font-sans); text-decoration: underline; cursor: pointer; border-radius: var(--radius-sm); }
 .app-link-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .app-link-button:disabled { color: var(--ink-muted); cursor: default; }
+
+/* Reference forms index: cards in a responsive grid. */
+.app-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--space-4); }
+/* Long text fields span the whole form row and grow with their content. */
+.app-field-wide { grid-column: 1 / -1; }
+.app-textarea { min-height: 88px; padding-top: var(--space-2); padding-bottom: var(--space-2); resize: vertical; font: inherit; }
+
+/* Selects inside table cells: no extra label row or padding (the label stays for screen readers). */
+.app-cell-field { min-width: 160px; }
+.app-cell-field > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Links in the app use the design system's link colour (not the browser's default blue). */
+.app-content a:not(.tec-btn) { color: var(--link); }
+/* Status chips next to a name in a table cell. */
+.app-content td .tec-chip { margin-left: var(--space-2); }
+
+/* A fieldset used only to switch a group of fields to read-only: no border or extra spacing. */
+.app-fieldset { border: 0; margin: 0; min-width: 0; }
+.app-fieldset:disabled .tec-input, .app-fieldset:disabled .tec-select { background: var(--surface-tint); color: var(--ink-muted); }

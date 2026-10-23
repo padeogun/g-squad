@@ -1239,6 +1239,9 @@ isOneToOne: false
               "month": string,"spare": number,"unit_id": string,"unit_name": string
             }[]
                            },
+"create_member":
+{ Args: { "p_church_role"?: string,"p_faith"?: Json,"p_is_team_leader"?: boolean,"p_leadership_stage"?: string,"p_person": Json,"p_unit": string }; Returns: string
+                           },
 "export_person":
 { Args: { "p_person": string }; Returns: Json
                            },

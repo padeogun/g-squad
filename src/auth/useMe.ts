@@ -87,13 +87,17 @@ const ROLE_ORDER: AppRole[] = [
   'resident_pastor',
 ];
 
-// Which roles this leader may give, so the form only offers those.
+// Which roles this leader may give, so the form only offers those (mirrors migration 18:
+// senior roles by the Resident Pastor or G-Squad Coordinator, the Resident Pastor role by the
+// Resident Pastor only, the Operations Lead role also by an Operations Lead).
 export function grantableRoles(me: Me | null | undefined): AppRole[] {
   const rp = hasRole(me, 'resident_pastor');
+  const coord = hasRole(me, 'gsquad_coordinator');
   const ops = hasRole(me, 'operations_lead');
   return ROLE_ORDER.filter((r) => {
-    if (SENIOR.includes(r)) return rp;
-    if (r === 'operations_lead') return rp || ops;
+    if (r === 'resident_pastor') return rp;
+    if (SENIOR.includes(r)) return rp || coord;
+    if (r === 'operations_lead') return rp || coord || ops;
     return true;
   });
 }
