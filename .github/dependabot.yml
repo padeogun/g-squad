@@ -1,0 +1,24 @@
+# Weekly pull requests for outdated or vulnerable dependencies and GitHub Actions.
+# Each one runs CI like any other change before it can merge.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # SECURITY REVIEW FIX J07: wait a week before proposing a new release. Most hijacked npm
+    # releases are found and pulled within days; this keeps them out of our pull requests.
+    # Security updates for known vulnerabilities are not delayed.
+    cooldown:
+      default-days: 7
+    groups:
+      # Batch minor and patch updates into one pull request to keep review light.
+      minor-and-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
