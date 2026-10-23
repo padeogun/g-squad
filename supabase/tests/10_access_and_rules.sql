@@ -1374,6 +1374,81 @@ select test.throws(format($q$insert into public.unit_memberships (person_id, uni
                    'M16: a Unit Lead cannot add an existing member of another unit');
 reset role;
 
+-- =====================================================================================
+-- Security review 8 (SECURITY REVIEW FIX Mnn in migration 16).
+-- =====================================================================================
+-- M01: the old Unit Lead cannot re-open Mo's ended membership of their unit to get them back.
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$update public.unit_memberships set status = 'active' where person_id = %L and unit_id = %L$q$,
+                          test.id('mover'), test.id('A1')),
+                   'M01: a Unit Lead cannot re-open an ended membership');
+select test.ok(not exists (select 1 from public.people where id = test.id('mover')), 'M01: ... and still cannot see them');
+reset role;
+-- Ending a membership and live-membership changes are still the Unit Lead's.
+select test.login('ul_b'); set role authenticated;
+select test.lives(format($q$update public.unit_memberships set is_team_leader = true where person_id = %L and unit_id = %L$q$,
+                         test.id('mover'), test.id('A2')),
+                  'M01: a Unit Lead still changes a live membership of their unit');
+reset role;
+-- The Operations Lead may bring someone back (as with adding to a unit, F05).
+select test.login('ops'); set role authenticated;
+select test.lives(format($q$update public.unit_memberships set status = 'active' where person_id = %L and unit_id = %L$q$,
+                         test.id('mover'), test.id('A1')),
+                  'M01: the Operations Lead can re-open an ended membership');
+reset role;
+-- ... but not for an anonymised person.
+select test.login('nobody');
+update public.unit_memberships set status = 'ended', ended_on = current_date
+ where person_id = (select id from public.people where anonymised_at is not null and first_name = 'Former' limit 1)
+   and status <> 'ended';
+insert into test.ids select 'anon_person', id from public.people where anonymised_at is not null and first_name = 'Former' limit 1;
+select test.login('ops'); set role authenticated;
+select test.throws(format($q$update public.unit_memberships set status = 'active' where person_id = %L$q$, test.id('anon_person')),
+                   'M01: an anonymised person''s membership cannot be re-opened');
+reset role;
+
+-- M02: no faith fields written onto an anonymised record, even by the G-Squad Coordinator.
+select test.login('coord'); set role authenticated;
+select test.throws(format('select public.set_person_faith(%L, null, true, null, false, null, false, null)', test.id('anon_person')),
+                   'M02: faith fields cannot be recorded on an anonymised record');
+reset role;
+select test.ok(not exists (select 1 from public.person_faith where person_id = test.id('anon_person')),
+               'M02: ... and nothing was written');
+
+-- The TECi route gives no wider edit right to a TECi Coordinator who also leads some other unit.
+select test.login('nobody');
+insert into public.role_assignments (church_id, user_id, role, unit_id)
+values (test.id('churchA'), test.id('teci'), 'unit_lead', test.id('A3'));
+select test.login('teci'); set role authenticated;
+select test.throws(format($q$update public.people set area = 'TECI2' where id = %L$q$, test.id('mover')),
+                   'M16: TECi Coordinator who leads another unit still cannot edit this record');
+reset role;
+select test.login('nobody');
+delete from public.role_assignments where user_id = test.id('teci') and role = 'unit_lead';
+
+-- The Operations Lead adds members but does not record faith fields: the whole add is undone.
+select test.login('ops'); set role authenticated;
+select test.throws(format($q$select public.create_member('{"first_name":"Fa","surname":"Faithless"}', %L, null, false, null, '{"water_baptism":true}')$q$,
+                          test.id('A3')),
+                   'M16: the Operations Lead cannot record faith fields when adding a member');
+reset role;
+select test.ok(not exists (select 1 from public.people where surname = 'Faithless'), 'M16: ... and no half-added member is left');
+
+-- is_new_entry_of_caller: only the caller's OWN entry with no membership ever.
+select test.login('ul_a'); set role authenticated;
+select test.ok(not app.is_new_entry_of_caller(test.id('mover')), 'M16: someone entered long ago and placed in a unit is not a new entry');
+reset role;
+select test.login('ul_b'); set role authenticated;
+select test.lives(format($q$insert into public.people (id, church_id, first_name, surname) values (%L, %L, 'Or', 'Phan')$q$,
+                         '00000000-0000-4000-8000-0000000000f1', test.id('churchA')),
+                  'M16: a Unit Lead enters a person directly');
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$insert into public.unit_memberships (person_id, unit_id) values (%L, %L)$q$,
+                          '00000000-0000-4000-8000-0000000000f1', test.id('A1')),
+                   'M16: another Unit Lead cannot claim that entry');
+reset role;
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;

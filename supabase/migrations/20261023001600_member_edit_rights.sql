@@ -10,6 +10,9 @@
 --      of the old Unit Lead's view.
 -- Adding new members is unchanged: Unit Leads (to their own unit) and the Operations Lead,
 -- through public.create_member() (migration 15).
+-- Security review 8 fixes are marked SECURITY REVIEW FIX Mnn (see SECURITY_LOG.md, Review 8):
+--   M01  re-opening an ended membership is for the Operations Lead / Resident Pastor only;
+--   M02  faith fields are never written onto an anonymised record.
 -- =====================================================================================
 
 -- -------------------------------------------------------------------------------------
@@ -108,6 +111,12 @@ as $$
     select 1 from public.people p
     where p.id = p_person
       and p.church_id = app.current_church_id()
+      -- SECURITY REVIEW FIX M02: never on an anonymised record. app.anonymise() deletes the
+      -- faith row but leaves memberships in place, so the Coordinator (or a Team Lead of a
+      -- still-active membership) could otherwise write special category data back onto a
+      -- record that R8 or an erasure request has wiped. (people_guard already closes the
+      -- member columns, L02.)
+      and p.anonymised_at is null
       and (
         app.has_role('gsquad_coordinator')
         or exists (
@@ -132,6 +141,13 @@ language plpgsql security definer set search_path = ''
 as $$
 begin
   if not app.can_edit_faith(p_person) then
+    -- SECURITY REVIEW FIX M02: tell the G-Squad Coordinator plainly why an anonymised record
+    -- is refused (checked only after the refusal and only for them, so it tells no one else
+    -- whether an id is anonymised).
+    if app.has_role('gsquad_coordinator') and exists (select 1 from public.people p
+         where p.id = p_person and p.church_id = app.current_church_id() and p.anonymised_at is not null) then
+      raise exception 'This record has been anonymised and cannot be changed' using errcode = '42501';
+    end if;
     raise exception 'Only their Team Lead or the G-Squad Coordinator can record faith fields' using errcode = '42501';
   end if;
   insert into public.person_faith as f (person_id, church_id, salvation_date,
@@ -203,3 +219,35 @@ create policy memberships_write on public.unit_memberships for insert to authent
   with check (church_id = (select app.current_church_id())
               and ((app.is_unit_lead_of(unit_id) and app.is_new_entry_of_caller(person_id))
                    or (select app.has_role('operations_lead'))));
+
+-- -------------------------------------------------------------------------------------
+-- SECURITY REVIEW FIX M01: re-opening an ended membership is joining again, so it follows the
+-- same rule as adding one (F05): the Operations Lead (or the Resident Pastor, who may already
+-- change memberships and approve joining). Before, memberships_update let a Unit Lead set an
+-- ENDED membership of their unit back to 'active' for someone who had moved on. That put the
+-- person straight back into their view, gave them edit rights and (with an active membership)
+-- the faith fields, undoing Decision 2 without anyone else knowing. Ending a membership, and
+-- changing team role, leader flag or stage on a live one, are unchanged.
+-- No one re-opens a membership for an anonymised person either (as L02 does for adding one).
+-- A separate trigger so app.membership_guard (R3) stays exactly as in migration 8.
+-- -------------------------------------------------------------------------------------
+create or replace function app.membership_reopen_guard() returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+begin
+  if app.is_system() then return new; end if;
+  if old.status = 'ended' and new.status <> 'ended' then
+    if not app.has_any_role(array['operations_lead','resident_pastor']::public.app_role[]) then
+      raise exception 'Only the Operations Lead can bring someone back into a unit' using errcode = '42501';
+    end if;
+    if exists (select 1 from public.people p where p.id = new.person_id and p.anonymised_at is not null) then
+      raise exception 'This record has been anonymised and cannot join a unit' using errcode = '42501';
+    end if;
+  end if;
+  return new;
+end $$;
+revoke all on function app.membership_reopen_guard() from public, anon, authenticated;
+grant execute on function app.membership_reopen_guard() to service_role;
+
+create trigger membership_reopen_guard before update on public.unit_memberships
+  for each row execute function app.membership_reopen_guard();

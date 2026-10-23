@@ -198,14 +198,17 @@ function MemberFormInner({ person }: { person?: Person }) {
   // record them, and the whole save would fail).
   // Offer the faith panel only to those app.can_see_faith lets in: the reading roles, or the
   // Unit Lead of a unit this person is actively in (or, for a new member, the chosen unit).
-  const mayRecordFaith =
-    hasRole(me.data, ...FAITH_READERS) ||
-    (person ? liveUnits.some((m) => m.status === 'active' && myUnits.includes(m.unit_id)) : myUnits.includes(unitId));
   // Faith fields are READ by the roles above but RECORDED only by the G-Squad Coordinator and
   // their Team Lead (an active membership of a unit they lead), as app.can_edit_faith checks.
   const canEditFaith =
     isCoordinator ||
     (person ? liveUnits.some((m) => m.status === 'active' && myUnits.includes(m.unit_id)) : myUnits.includes(unitId));
+  // SECURITY REVIEW FIX M03: for a NEW member there is nothing to read, so the panel is offered
+  // only to someone who may record the fields. Before, a reading role that also adds members
+  // (for example an Operations Lead who is also the TECi Coordinator) saw an empty, locked panel.
+  const mayRecordFaith = person
+    ? hasRole(me.data, ...FAITH_READERS) || liveUnits.some((m) => m.status === 'active' && myUnits.includes(m.unit_id))
+    : canEditFaith;
   // Nothing to save for someone who can neither edit the record, the TECi stage nor faith fields.
   const canSave = canEditRecord || canSetTeci || canEditFaith;
   const [roleId, setRoleId] = useState('');
@@ -400,7 +403,12 @@ function MemberFormInner({ person }: { person?: Person }) {
                   unit: unitMap.get(m.unit_id)?.name ?? 'Unit',
                   role: m.church_role_id ? roleMap.get(m.church_role_id)?.name ?? '' : '',
                   lead: m.is_team_leader ? 'Yes' : 'No',
-                  status: m.status === 'active' ? <Chip tone="ok">Active</Chip> : <Chip tone="warn">Awaiting approval</Chip>,
+                  // SECURITY REVIEW FIX M04: an ended membership was shown as "Awaiting approval",
+                  // suggesting the person was still joining a unit they had left.
+                  status:
+                    m.status === 'active' ? <Chip tone="ok">Active</Chip>
+                    : m.status === 'ended' ? <Chip tone="neutral">Ended</Chip>
+                    : <Chip tone="warn">Awaiting approval</Chip>,
                 }))}
               />
             )}

@@ -420,3 +420,47 @@ The commits had no database changes. The fixes need one: a new migration, `20261
 4. **Removing a leadership stage or team role** clears it from every membership (`on delete set null`) without warning. Not a data-protection issue, but the Operations Lead may prefer "switch off" for these lists too.
 5. **The Resident Pastor can read but not edit member records** (`app.can_edit_person`). The form still shows the fields as editable; a save of member details is refused by the database. Decide whether the Resident Pastor should edit, and hide the fields if not.
 6. **Sample data only** until the DPIA is signed (unchanged).
+
+## Review 8: Member edit rights (decisions of 23 Oct 2026)
+
+Independent review of the latest commit on `slice-1b-reference` ("Member edit rights: Team Lead and G-Squad Coordinator only; Unit Leads see current units only"). Every fix is marked `SECURITY REVIEW FIX Mnn` in an inline comment. Migration 16 had not been applied anywhere, so the database fixes are made in it directly.
+
+### Scope
+
+- `supabase/migrations/20261023001600_member_edit_rights.sql`: `app.can_edit_person`, the new `people_update` policy, `app.people_guard` (compared line by line with migration 15's version), `app.can_edit_faith`, `public.set_person_faith`, `app.can_read_person` (without `created_by`), `app.is_new_entry_of_caller` and the new `memberships_write` policy.
+- The new checks in `supabase/tests/10_access_and_rules.sql` and `src/pages/people/MemberForm.tsx` (read-only view, TECi stage, faith panel).
+- Every other place in migrations 1 to 15 that relies on `can_edit_person`, `can_read_person` or `created_by`: holidays, check-in flags, one-to-ones, recognitions, assignments, `export_person`, `anonymise` / `anonymise_person`, `redeem_email_link` (unsubscribe), `create_member`, `newsletter_celebrations`, the membership policies and `membership_guard`.
+- Each attack below was tried on the local test database as the fixture leaders.
+
+### Findings
+
+| ID | Severity | Finding | Fix | File |
+|----|----------|---------|-----|------|
+| M01 | Medium | **A Unit Lead could get a former member back by re-opening their old membership.** `memberships_update` lets a Unit Lead change any membership of their unit, including setting an *ended* one back to `active`. Confirmed: after Mo moved from Production to Ushering, Production's Unit Lead re-opened the ended row and at once saw Mo again, could edit the record and (the row being active) read and write Mo's faith fields. This undid Decision 2, and also side-stepped F05 (adding an existing member of another unit is for the Operations Lead). | A new trigger, `app.membership_reopen_guard`, treats re-opening as joining again: only the Operations Lead or the Resident Pastor may do it, and never for an anonymised person (as L02 does for adding). Ending a membership, and changing team role, leader flag or stage on a live one, are unchanged. `membership_guard` (R3) is left as it was. 5 database checks. | migration 16 |
+| M02 | Low | **Faith fields could be written back onto an anonymised record.** `app.anonymise()` deletes the faith row but leaves memberships in place, and `people_guard` closes only the member columns. The G-Squad Coordinator (or a Team Lead of a still-active membership) could call `set_person_faith` on an anonymised person and record special category data on a record wiped under R8 or an erasure request. | `app.can_edit_faith` refuses anonymised records. `set_person_faith` tells the G-Squad Coordinator plainly that the record has been anonymised (checked only after the refusal, so it tells no one else whether an id is anonymised). 2 database checks. | migration 16 |
+| M03 | Low | For a **new** member, the faith panel was offered to every faith-reading role, though only the G-Squad Coordinator and the chosen unit's lead may record. An Operations Lead who is also the TECi Coordinator saw an empty, locked panel. Nothing could be saved (the database refuses and `create_member` undoes the whole add). | For a new member the panel appears only to someone who may record the fields. | `MemberForm.tsx` |
+| M04 | Low | The "Units" card on a member record showed an **ended** membership as "Awaiting approval", suggesting the person was still joining a unit they had left. With Decision 2 a leader needs to see clearly where someone is now. | Ended memberships are shown as "Ended". | `MemberForm.tsx` |
+
+### Checked and found sound
+
+- **`people_guard` lost nothing.** Compared with migration 15: the system bypass, the closed anonymised record (L02), unchangeable id, church and creator, the anonymising marker (F09) and "use `anonymise_person`" are all still there, in the same order. The only changes are the two intended ones: an existing TECi stage is changed by the TECi Coordinator alone (the Operations Lead may still set one when adding), and "TECi stage only" now applies to anyone who is not an editor of *this* person. `anonymise_person` (Operations Lead) still works, because the marker branch returns before the new checks; the unsubscribe link runs as the system and is not affected.
+- **The TECi route lets no one else edit.** The `people_update` policy admits the TECi Coordinator for every row in the church, but `people_guard` then refuses any change other than the TECi stage from anyone who is not this person's editor. Checked with a TECi Coordinator who also leads another unit: refused. The TECi Coordinator is a church-wide reader, so they never update a row they cannot see; another church's rows are excluded by `church_id`.
+- **`is_new_entry_of_caller` cannot be used to claim people.** It is true only for a person the caller entered **and** who has never had any membership. Memberships cannot be deleted (no delete policy; units are `on delete restrict`), so once someone has been in a unit, ended or not, they never count as new again; a person entered long ago and placed in a unit, then moved, cannot be re-added by the Unit Lead who entered them. One Unit Lead cannot claim another's unplaced entry. As a callable function it only answers about the caller's own entries.
+- **F05 still holds:** a Unit Lead cannot add an existing member of another unit, even knowing their id (existing check), and now cannot re-open an old membership either (M01).
+- **`create_member` and faith fields.** A brand-new person has no active memberships and the church setting `units_before_approval` is at least 1, so the new membership is always `active` and the Unit Lead's faith fields are accepted in the same transaction; the "pending approval" case cannot arise for a new entry. The Operations Lead is not offered faith fields; if sent anyway, the clear message "Only their Team Lead or the G-Squad Coordinator can record faith fields" is returned and the whole add is undone (new check).
+- **Other users of the changed helpers.** Holidays (`can_edit_person`) are now recorded by the Team Lead and the G-Squad Coordinator only, matching the decision. Check-in flags follow `can_read_person`, so a Unit Lead can no longer raise a flag on someone who has left their unit. Assignments, one-to-ones and recognitions use unit leadership and memberships, not these helpers, and are unchanged. `export_person`, `anonymise_person` and `newsletter_celebrations` are role-based and unaffected. Faith reading (`can_see_faith`) is unchanged.
+- **Front end.** The read-only view is display only; every refusal is still made by the database (the record fields sit in a disabled fieldset, the save button is hidden when nothing can be saved, and an edit sends only changed columns, so a TECi Coordinator's save sends the stage alone). The faith panel's "recorded by" rule matches `app.can_edit_faith`.
+
+### Test results
+
+- `scripts/db-test.sh` (local Postgres 16): **306 of 306 checks passed** (293 before, plus 13 for M01, M02, the TECi route with a second role, the Operations Lead's add with faith fields and `is_new_entry_of_caller`).
+- `scripts/db-types.sh`: `src/lib/database.types.ts` regenerated; no change (the new functions are in the `app` schema).
+- `npm run check`: lint clean, **60 of 60 unit tests pass**, build succeeds.
+
+### Residual risks and actions for TEC
+
+1. **Holidays.** The Operations Lead, Resident Pastor and TECi Coordinator can no longer record or remove a member's holiday; only the Team Lead and the G-Squad Coordinator can. Confirm this is intended, as holidays affect rotas the Operations Lead builds.
+2. **Anonymised people keep their memberships.** `app.anonymise()` does not end them, so a Team Lead still sees "Former member" in their unit. Nothing personal remains and nothing can be changed, but consider ending the memberships when anonymising.
+3. **Re-joining a unit now goes through the Operations Lead** (or the Resident Pastor). A Unit Lead who ends a membership by mistake must ask them to re-open it.
+4. **A Unit Lead can still enter a person and leave them out of every unit** by inserting into `people` directly rather than through `create_member`. Such a record is then invisible to them; only church-wide readers see it. Consider a periodic report of members with no unit.
+5. **Sample data only** until the DPIA is signed (unchanged).
