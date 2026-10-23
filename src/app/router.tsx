@@ -11,6 +11,8 @@ import { Home } from '../pages/Home';
 import { ComingSoon } from '../pages/ComingSoon';
 import { NotFound } from '../pages/NotFound';
 import { Leaders } from '../pages/admin/Leaders';
+import { ReferenceForms } from '../pages/admin/ReferenceForms';
+import { ReferenceForm } from '../pages/admin/ReferenceForm';
 
 export const router = createBrowserRouter([
   { path: '/sign-in', element: <SignIn /> },
@@ -22,6 +24,8 @@ export const router = createBrowserRouter([
         children: [
           { index: true, element: <Home /> },
           { path: '/admin/leaders', element: <Leaders /> },
+          { path: '/admin', element: <ReferenceForms /> },
+          { path: '/admin/forms/:formId', element: <ReferenceForm /> },
           ...PLACEHOLDER_ITEMS.map((i) => ({
             path: i.path,
             element: <ComingSoon title={i.label} slice={i.slice} />,

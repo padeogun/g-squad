@@ -51,3 +51,9 @@
 .app-link-button { min-height: 32px; padding: 0 var(--space-2); border: 0; background: none; color: var(--link); font: 600 13px/1 var(--font-sans); text-decoration: underline; cursor: pointer; border-radius: var(--radius-sm); }
 .app-link-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .app-link-button:disabled { color: var(--ink-muted); cursor: default; }
+
+/* Reference forms index: cards in a responsive grid. */
+.app-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--space-4); }
+/* Long text fields span the whole form row and grow with their content. */
+.app-field-wide { grid-column: 1 / -1; }
+.app-textarea { min-height: 88px; padding-top: var(--space-2); padding-bottom: var(--space-2); resize: vertical; font: inherit; }

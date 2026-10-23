@@ -59,7 +59,7 @@ export const NAV: NavGroup[] = [
         built: true,
         roles: ['operations_lead', 'gsquad_coordinator', 'resident_pastor'],
       },
-      { label: 'Reference forms', path: '/admin', slice: 1 },
+      { label: 'Reference forms', path: '/admin', slice: 1, built: true },
     ],
   },
 ];
