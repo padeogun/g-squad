@@ -18,6 +18,8 @@ import { MemberForm } from '../pages/people/MemberForm';
 import { MyUnit } from '../pages/people/MyUnit';
 import { Sundays } from '../pages/sunday/Sundays';
 import { ServiceGrid } from '../pages/sunday/ServiceGrid';
+import { Rota } from '../pages/sunday/Rota';
+import { CheckIn } from '../pages/sunday/CheckIn';
 
 export const router = createBrowserRouter([
   { path: '/sign-in', element: <SignIn /> },
@@ -36,6 +38,8 @@ export const router = createBrowserRouter([
           { path: '/my-unit', element: <MyUnit /> },
           { path: '/sundays', element: <Sundays /> },
           { path: '/sundays/:gridId', element: <ServiceGrid /> },
+          { path: '/rota', element: <Rota /> },
+          { path: '/check-in', element: <CheckIn /> },
           { path: '/admin/forms/:formId', element: <ReferenceForm /> },
           ...PLACEHOLDER_ITEMS.map((i) => ({
             path: i.path,

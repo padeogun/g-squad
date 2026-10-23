@@ -41,7 +41,8 @@ export const NAV: NavGroup[] = [
     label: 'Sundays and events',
     items: [
       { label: 'Sunday Operations', path: '/sundays', slice: 2, built: true },
-      { label: 'Rota', path: '/rota', slice: 2 },
+      { label: 'Rota', path: '/rota', slice: 2, built: true },
+      { label: 'Sunday check-in', path: '/check-in', slice: 2, built: true, roles: ['unit_lead', 'operations_lead'] },
       { label: 'Projects and events', path: '/projects', slice: 4 },
     ],
   },

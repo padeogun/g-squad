@@ -1714,6 +1714,35 @@ reset role;
 select test.ok((select title from public.service_segments where grid_id = current_setting('test.g6')::uuid and position = 1) = 'Sermon',
                'S2: a Unit Lead cannot reorder the grid');
 
+-- Rota and check-in on a Sunday set up with create_sunday_service (slice 2 screens).
+-- A fresh member of A1, so earlier checks (moves, anonymising) don't affect this one.
+select test.login('ul_a'); set role authenticated;
+select public.create_member('{"first_name":"Rota","surname":"Tester"}', test.id('A1'));
+reset role;
+insert into test.ids select 'rt1', id from public.people where surname = 'Tester' and first_name = 'Rota';
+select test.login('ul_a'); set role authenticated;
+select test.lives(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) values ((select project_id from public.service_grids where id = %L), %L, %L, %L)',
+                         current_setting('test.g6'), test.id('rt1'), test.id('A1'), current_setting('test.sun6')),
+                  'S2: a Unit Lead fills a slot on the new Sunday from their own unit');
+select test.ok(exists (select 1 from public.rota_candidates(test.id('A1'), current_setting('test.sun6')::date) c
+                       where c.person_id = test.id('rt1') and c.serving_that_day and c.slots_used >= 1),
+               'S2: who-can-serve shows them as serving that day');
+select test.throws(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) values ((select project_id from public.service_grids where id = %L), %L, %L, %L)',
+                          current_setting('test.g6'), test.id('p2'), test.id('A1'), current_setting('test.sun6')),
+                   'S2: a Unit Lead cannot rota someone outside their unit');
+select test.lives(format($q$update public.assignments set status = 'served' where person_id = %L and serve_date = %L$q$,
+                         test.id('rt1'), current_setting('test.sun6')),
+                  'S2: the Unit Lead checks them in as served');
+select test.lives(format($q$update public.assignments set status = 'planned' where person_id = %L and serve_date = %L$q$,
+                         test.id('rt1'), current_setting('test.sun6')),
+                  'S2: ... and can undo the check-in');
+reset role;
+select test.login('ul_b'); set role authenticated;
+update public.assignments set status = 'no_show' where person_id = test.id('rt1') and serve_date = current_setting('test.sun6')::date;
+reset role;
+select test.ok((select status from public.assignments where person_id = test.id('rt1') and serve_date = current_setting('test.sun6')::date) = 'planned',
+               'S2: another unit''s lead cannot check in this unit''s slots');
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;
