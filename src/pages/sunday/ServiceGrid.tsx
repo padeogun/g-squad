@@ -242,7 +242,15 @@ function GridScreen({ grid }: { grid: Grid }) {
                   ? {
                       actions: (
                         <div className="tec-row" style={{ padding: 0 }}>
-                          <button type="button" className="app-link-button" disabled={editing !== null} onClick={() => setEditing(s.id)}>
+                          {/* SECURITY REVIEW FIX Q11: Edit and Remove name their segment, as Up and Down
+                              already did, so a screen reader user removes the segment they mean. */}
+                          <button
+                            type="button"
+                            className="app-link-button"
+                            aria-label={`Edit ${s.title}`}
+                            disabled={editing !== null}
+                            onClick={() => setEditing(s.id)}
+                          >
                             Edit
                           </button>
                           <button
@@ -266,6 +274,7 @@ function GridScreen({ grid }: { grid: Grid }) {
                           <button
                             type="button"
                             className="app-link-button"
+                            aria-label={`Remove ${s.title}`}
                             disabled={remove.isPending}
                             onClick={() => {
                               if (window.confirm(`Remove "${s.title}" from the grid?`)) remove.mutate(s.id);
@@ -502,7 +511,14 @@ function UnitsNeeded({ grid, canEdit }: { grid: Grid; canEdit: boolean }) {
             ...(canEdit
               ? {
                   x: (
-                    <button type="button" className="app-link-button" disabled={remove.isPending} onClick={() => remove.mutate(d.id)}>
+                    <button
+                      type="button"
+                      className="app-link-button"
+                      // SECURITY REVIEW FIX Q11: says which unit and role it removes.
+                      aria-label={`Remove ${unitMap.get(d.unit_id)?.name ?? 'unit'}, ${d.church_role_id ? roleMap.get(d.church_role_id)?.name ?? 'role' : 'any role'}`}
+                      disabled={remove.isPending}
+                      onClick={() => remove.mutate(d.id)}
+                    >
                       Remove
                     </button>
                   ),
@@ -598,13 +614,18 @@ function PdfButton({ grid, segments, ledBy }: { grid: Grid; segments: Segment[];
       // Loaded only now, so the PDF library doesn't slow the rest of the app.
       const { downloadGridPdf } = await import('../../lib/gridPdf');
       const blockMap = byId(blocks.data);
+      // SECURITY REVIEW FIX Q12: never print a grid without a block it should carry (e.g. the
+      // Guest Welcome Script). Before, pressing Download while the blocks were still loading,
+      // or after they failed to load, silently left them out.
+      const attachedBlocks = (attached.data ?? []).map((a) => blockMap.get(a.block_id));
+      if (!blocks.data || !attached.data || attachedBlocks.some((b) => !b)) throw new Error('Blocks not loaded');
       await downloadGridPdf({
         serviceDate: grid.service_date,
         theme: grid.theme,
         version: grid.version,
         status: grid.status,
         segments: segments.map((s) => ({ ...s, ledBy: ledBy(s) })),
-        blocks: (attached.data ?? []).map((a) => blockMap.get(a.block_id)).filter((b) => !!b).map((b) => ({ name: b!.name, body: b!.body })),
+        blocks: attachedBlocks.map((b) => ({ name: b!.name, body: b!.body })),
       });
     } catch {
       setError('The PDF could not be made. Please try again.');
@@ -614,7 +635,7 @@ function PdfButton({ grid, segments, ledBy }: { grid: Grid; segments: Segment[];
   }
   return (
     <span className="tec-row" style={{ padding: 0 }}>
-      <Button size="sm" variant="secondary" icon="download" disabled={busy || segments.length === 0} onClick={() => void download()}>
+      <Button size="sm" variant="secondary" icon="download" disabled={busy || segments.length === 0 || blocks.isPending || attached.isPending} onClick={() => void download()}>
         {busy ? 'Making PDF…' : 'Download PDF'}
       </Button>
       {error && <span className="type-caption">{error}</span>}

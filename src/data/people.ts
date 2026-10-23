@@ -50,6 +50,28 @@ export const usePerson = (id: string | undefined) =>
     },
   });
 
+// SECURITY REVIEW FIX Q10: names only, for only the people a screen shows. The rota and
+// check-in screens used usePeople(), which loads email, birthday, marital status and
+// anniversary of everyone the leader can see (the whole church for the Operations Lead and
+// Coordinator) just to print names beside slots.
+export type PersonName = Pick<Person, 'id' | 'first_name' | 'surname'>;
+export const usePersonNames = (ids: string[]) => {
+  const unique = [...new Set(ids)].sort();
+  return useQuery({
+    queryKey: ['people', 'names', unique],
+    enabled: unique.length > 0,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('people')
+        .select('id, first_name, surname')
+        .in('id', unique)
+        .is('anonymised_at', null);
+      if (error) throw error;
+      return data as PersonName[];
+    },
+  });
+};
+
 // Live memberships (pending or active) the leader can see, for lists and My Unit.
 export const useMemberships = () =>
   useQuery({

@@ -1708,8 +1708,10 @@ select test.throws(format('select public.reorder_segments(%L, array(select id fr
                    'S2: a reorder must list every segment');
 reset role;
 select test.login('ul_a'); set role authenticated;
-select public.reorder_segments(current_setting('test.g6')::uuid,
-                               array(select id from public.service_segments where grid_id = current_setting('test.g6')::uuid order by position desc));
+-- SECURITY REVIEW FIX Q06: refused with an error, not a silent "success" that changed nothing.
+select test.throws(format('select public.reorder_segments(%L, array(select id from public.service_segments where grid_id = %L order by position desc))',
+                          current_setting('test.g6'), current_setting('test.g6')),
+                   'Q06: a Unit Lead''s reorder is refused with an error');
 reset role;
 select test.ok((select title from public.service_segments where grid_id = current_setting('test.g6')::uuid and position = 1) = 'Sermon',
                'S2: a Unit Lead cannot reorder the grid');
@@ -1730,18 +1732,182 @@ select test.ok(exists (select 1 from public.rota_candidates(test.id('A1'), curre
 select test.throws(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) values ((select project_id from public.service_grids where id = %L), %L, %L, %L)',
                           current_setting('test.g6'), test.id('p2'), test.id('A1'), current_setting('test.sun6')),
                    'S2: a Unit Lead cannot rota someone outside their unit');
+-- SECURITY REVIEW FIX Q09: served / no-show only on or after the day.
+select test.throws(format($q$update public.assignments set status = 'served' where person_id = %L and serve_date = %L$q$,
+                          test.id('rt1'), current_setting('test.sun6')),
+                   'Q09: a slot months ahead cannot be marked served');
+reset role;
+
+-- Check-in on the Sunday just gone (set up for the purpose, with rt1 on its rota).
+do $$
+begin
+  perform set_config('test.sunpast', (current_date - extract(isodow from current_date)::int)::text, false);
+end $$;
+select test.login('ops'); set role authenticated;
+select test.lives(format('select public.create_sunday_service(%L)', current_setting('test.sunpast')),
+                  'S2: Operations Lead sets up last Sunday (for check-in)');
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.lives(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) values ((select project_id from public.service_grids where service_date = %L), %L, %L, %L)',
+                         current_setting('test.sunpast'), test.id('rt1'), test.id('A1'), current_setting('test.sunpast')),
+                  'S2: a Unit Lead puts a member on last Sunday''s rota');
 select test.lives(format($q$update public.assignments set status = 'served' where person_id = %L and serve_date = %L$q$,
-                         test.id('rt1'), current_setting('test.sun6')),
+                         test.id('rt1'), current_setting('test.sunpast')),
                   'S2: the Unit Lead checks them in as served');
 select test.lives(format($q$update public.assignments set status = 'planned' where person_id = %L and serve_date = %L$q$,
-                         test.id('rt1'), current_setting('test.sun6')),
+                         test.id('rt1'), current_setting('test.sunpast')),
                   'S2: ... and can undo the check-in');
 reset role;
 select test.login('ul_b'); set role authenticated;
-update public.assignments set status = 'no_show' where person_id = test.id('rt1') and serve_date = current_setting('test.sun6')::date;
+update public.assignments set status = 'no_show' where person_id = test.id('rt1') and serve_date = current_setting('test.sunpast')::date;
 reset role;
-select test.ok((select status from public.assignments where person_id = test.id('rt1') and serve_date = current_setting('test.sun6')::date) = 'planned',
+select test.ok((select status from public.assignments where person_id = test.id('rt1') and serve_date = current_setting('test.sunpast')::date) = 'planned',
                'S2: another unit''s lead cannot check in this unit''s slots');
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$update public.assignments set status = 'no_show' where person_id = %L and serve_date = %L$q$,
+                         test.id('rt1'), current_setting('test.sunpast')),
+                  'S2: the Unit Lead records a no-show');
+reset role;
+
+-- =====================================================================================
+-- Security review 11 (slice 2): grid versions (R11), deletes, slot rules.
+-- =====================================================================================
+-- A second Sunday (seven months ahead), finalised with one segment, then approved.
+do $$
+declare d date := (date_trunc('month', current_date) + interval '7 months')::date;
+begin
+  perform set_config('test.sun7', (d + ((7 - extract(isodow from d)::int) % 7))::text, false);
+end $$;
+select test.login('ops'); set role authenticated;
+do $$
+declare g uuid := public.create_sunday_service(current_setting('test.sun7')::date);
+begin
+  insert into public.service_segments (grid_id, position, title, starts_at, duration_minutes, led_by_text)
+  values (g, 1, 'Welcome', '10:00', 10, 'Hosts');
+  update public.service_grids set status = 'finalised' where id = g;
+  perform set_config('test.g7', g::text, false);
+end $$;
+reset role;
+-- Approves a grid as the Resident Pastor.
+create function test.approve(g uuid) returns void language plpgsql as $$
+begin
+  perform test.login('rp');
+  set local role authenticated;
+  update public.service_grids set status = 'approved' where id = g;
+  reset role;
+end $$;
+select test.approve(current_setting('test.g6')::uuid);
+select test.approve(current_setting('test.g7')::uuid);
+select set_config('test.v6', (select version from public.service_grids where id = current_setting('test.g6')::uuid)::text, false);
+select set_config('test.v7', (select version from public.service_grids where id = current_setting('test.g7')::uuid)::text, false);
+
+select test.login('ops'); set role authenticated;
+-- Q02: saving a segment without changing it is not a change.
+update public.service_segments set title = title, duration_minutes = duration_minutes where grid_id = current_setting('test.g6')::uuid;
+select test.ok((select status = 'approved' and version = current_setting('test.v6')::int
+                from public.service_grids where id = current_setting('test.g6')::uuid),
+               'Q02: an update that changes nothing leaves an approved grid approved');
+-- ... but a real change still makes one new version.
+update public.service_segments set title = title || '!' where grid_id = current_setting('test.g6')::uuid;
+select test.ok((select status = 'finalised' and version = current_setting('test.v6')::int + 1 and approved_by is null
+                from public.service_grids where id = current_setting('test.g6')::uuid),
+               'Q02: a real change to an approved grid still needs re-approval (one new version)');
+reset role;
+select test.approve(current_setting('test.g6')::uuid);
+select set_config('test.v6', (select version from public.service_grids where id = current_setting('test.g6')::uuid)::text, false);
+
+-- Q01: moving a segment from one approved grid to another changes BOTH grids.
+select test.login('ops'); set role authenticated;
+update public.service_segments set grid_id = current_setting('test.g7')::uuid, position = 2
+ where grid_id = current_setting('test.g6')::uuid and position = 3;
+reset role;
+select test.ok((select status = 'finalised' and version = current_setting('test.v6')::int + 1
+                from public.service_grids where id = current_setting('test.g6')::uuid),
+               'Q01: taking a segment out of an approved grid needs re-approval of that grid');
+select test.ok((select status = 'finalised' and version = current_setting('test.v7')::int + 1
+                from public.service_grids where id = current_setting('test.g7')::uuid),
+               'Q01: ... and of the grid it moved to');
+
+-- Q04: back to draft starts the next version.
+select set_config('test.v7', (select version from public.service_grids where id = current_setting('test.g7')::uuid)::text, false);
+select test.login('ops'); set role authenticated;
+update public.service_grids set status = 'draft' where id = current_setting('test.g7')::uuid;
+update public.service_grids set status = 'finalised' where id = current_setting('test.g7')::uuid;
+reset role;
+select test.ok((select version = current_setting('test.v7')::int + 1 from public.service_grids where id = current_setting('test.g7')::uuid),
+               'Q04: a grid sent back to draft and finalised again has a new version number');
+
+-- Q05: changing a reusable block's text sends coming grids it is attached to back for approval,
+-- even when the Coordinator makes the change.
+select test.login('ops'); set role authenticated;
+insert into public.service_grid_blocks (grid_id, block_id, position)
+values (current_setting('test.g7')::uuid, (select id from public.reusable_blocks where name = 'Coordinator block'), 1);
+reset role;
+select test.approve(current_setting('test.g7')::uuid);
+select set_config('test.v7', (select version from public.service_grids where id = current_setting('test.g7')::uuid)::text, false);
+select test.login('coord'); set role authenticated;
+select test.lives($q$update public.reusable_blocks set body = 'New wording' where name = 'Coordinator block'$q$,
+                  'Q05: the Coordinator can still edit a block attached to an approved grid');
+reset role;
+select test.ok((select status = 'finalised' and version = current_setting('test.v7')::int + 1 and approved_by is null
+                from public.service_grids where id = current_setting('test.g7')::uuid),
+               'Q05: ... and the grid it prints in needs re-approval');
+select test.login('coord'); set role authenticated;
+update public.reusable_blocks set body = body where name = 'Coordinator block';
+reset role;
+select test.ok((select version = current_setting('test.v7')::int + 1 from public.service_grids where id = current_setting('test.g7')::uuid),
+               'Q05: saving a block unchanged does not');
+-- The bump route cannot be used to approve or to edit anything else.
+select test.login('coord'); set role authenticated;
+with u as (update public.service_grids set version = version + 1 where id = current_setting('test.g7')::uuid returning 1)
+select test.ok(count(*) = 0, 'Q05: the Coordinator still cannot update a grid directly') from u;
+reset role;
+select test.login('rp'); set role authenticated;
+select test.throws(format($q$update public.service_grids set status = 'finalised', version = version + 1, theme = 'Changed' where id = %L$q$,
+                          current_setting('test.g7')),
+                   'Q05: a "new version" update that also edits the grid is still the Operations Lead''s');
+reset role;
+
+-- Q03: an approved grid and served history cannot be deleted through the Sunday's project.
+select test.approve(current_setting('test.g7')::uuid);
+select test.login('ops'); set role authenticated;
+select test.throws(format('delete from public.projects where id = (select project_id from public.service_grids where id = %L)',
+                          current_setting('test.g7')),
+                   'Q03: deleting a Sunday''s draft project cannot remove its approved grid');
+with d as (delete from public.projects where id = (select project_id from public.service_grids where service_date = current_setting('test.sunpast')::date) returning 1)
+select test.ok(count(*) = 0, 'Q03: a project with served or no-show slots cannot be deleted') from d;
+reset role;
+select test.ok(exists (select 1 from public.service_grids where id = current_setting('test.g7')::uuid)
+               and exists (select 1 from public.assignments where person_id = test.id('rt1') and serve_date = current_setting('test.sunpast')::date),
+               'Q03: ... both are still there');
+select test.login('ops'); set role authenticated;
+select test.lives(format('select public.create_sunday_service(%L)', current_setting('test.sun7')::date + 7),
+                  'Q03: (a fresh Sunday)');
+with d as (delete from public.projects where id = (select project_id from public.service_grids where service_date = current_setting('test.sun7')::date + 7) returning 1)
+select test.ok(count(*) = 1, 'Q03: an unused draft Sunday can still be deleted') from d;
+reset role;
+
+-- Q07: project dates are UK dates. An event from 00:30 to 02:00 UK time on a summer Saturday
+-- starts on Friday evening UTC.
+set timezone = 'UTC';
+select test.login('ops'); set role authenticated;
+insert into public.projects (name, level, starts_at, ends_at)
+values ('Night of worship', 'church', timestamptz '2027-06-12 00:30 Europe/London', timestamptz '2027-06-12 02:00 Europe/London');
+select test.throws(format($q$insert into public.assignments (project_id, person_id, unit_id, serve_date) values ((select id from public.projects where name = 'Night of worship'), %L, %L, '2027-06-11')$q$,
+                          test.id('rt1'), test.id('A1')),
+                   'Q07: the day before (UK) is outside the event');
+select test.lives(format($q$insert into public.assignments (project_id, person_id, unit_id, serve_date) values ((select id from public.projects where name = 'Night of worship'), %L, %L, '2027-06-12')$q$,
+                         test.id('rt1'), test.id('A1')),
+                  'Q07: the UK date of the event is inside it');
+reset role;
+reset timezone;
+
+-- Q08: a Unit Lead cannot move a live slot to another project without the checks.
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$update public.assignments set project_id = (select id from public.projects where name = 'Night of worship') where person_id = %L and serve_date = %L$q$,
+                          test.id('rt1'), current_setting('test.sun6')),
+                   'Q08: moving a slot to a project whose dates do not include it is refused');
+reset role;
 
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail

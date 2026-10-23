@@ -11,7 +11,7 @@ import { TEC } from '../../design-system';
 import { supabase } from '../../lib/supabase';
 import { friendlyError } from '../../data/errors';
 import { byId, useChurchRoles, useUnits } from '../../data/reference';
-import { fullName, usePeople } from '../../data/people';
+import { fullName, usePersonNames } from '../../data/people';
 import { longDate, todayIso } from '../../data/sundays';
 import { useUnitAssignments, type Assignment } from '../../data/rota';
 import { hasRole, ledUnitIds, useMe } from '../../auth/useMe';
@@ -66,7 +66,8 @@ export function CheckIn() {
 function Team({ unitId, date }: { unitId: string; date: string }) {
   const qc = useQueryClient();
   const slots = useUnitAssignments(unitId, date, date);
-  const people = usePeople();
+  // SECURITY REVIEW FIX Q10: names of the people on this Sunday's list only.
+  const people = usePersonNames((slots.data ?? []).map((a) => a.person_id));
   const roles = useChurchRoles();
   const personMap = byId(people.data);
   const roleMap = byId(roles.data);

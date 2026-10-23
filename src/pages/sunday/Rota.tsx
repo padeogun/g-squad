@@ -13,7 +13,7 @@ import { TEC } from '../../design-system';
 import { supabase } from '../../lib/supabase';
 import { friendlyError } from '../../data/errors';
 import { byId, useChurchRoles, useUnits } from '../../data/reference';
-import { fullName, usePeople } from '../../data/people';
+import { fullName, usePersonNames } from '../../data/people';
 import { shortDate, todayIso } from '../../data/sundays';
 import { buildRota, monthBounds, useCandidates, useMonthSundays, useUnitAssignments, useUnitDemand, type RotaSlot } from '../../data/rota';
 import { hasRole, ledUnitIds, useMe } from '../../auth/useMe';
@@ -70,14 +70,25 @@ export function Rota() {
               Next month ›
             </Button>
           </div>
-          {unitId && <MonthRota key={`${unitId}-${month}`} unitId={unitId} month={month} isOps={hasRole(me.data, 'operations_lead')} />}
+          {unitId && (
+            <MonthRota
+              key={`${unitId}-${month}`}
+              unitId={unitId}
+              month={month}
+              isOps={hasRole(me.data, 'operations_lead')}
+              // SECURITY REVIEW FIX Q13: the Coordinator can view every unit's rota but the
+              // database lets only the unit's lead and the Operations Lead change slots, so the
+              // Coordinator is not offered buttons that would always fail.
+              canEdit={hasRole(me.data, 'operations_lead') || led.includes(unitId)}
+            />
+          )}
         </>
       )}
     </>
   );
 }
 
-function MonthRota({ unitId, month, isOps }: { unitId: string; month: string; isOps: boolean }) {
+function MonthRota({ unitId, month, isOps, canEdit }: { unitId: string; month: string; isOps: boolean; canEdit: boolean }) {
   const qc = useQueryClient();
   const { from, to } = monthBounds(`${month}-01`);
   const sundays = useMonthSundays(`${month}-01`);
@@ -85,7 +96,8 @@ function MonthRota({ unitId, month, isOps }: { unitId: string; month: string; is
   const demand = useUnitDemand(unitId, projectIds);
   const assignments = useUnitAssignments(unitId, from, to);
   const roles = useChurchRoles();
-  const people = usePeople();
+  // SECURITY REVIEW FIX Q10: names of the people on this rota only (not everyone's records).
+  const people = usePersonNames((assignments.data ?? []).map((a) => a.person_id));
   const roleMap = byId(roles.data);
   const personMap = byId(people.data);
   // The slot whose picker is open.
@@ -106,6 +118,10 @@ function MonthRota({ unitId, month, isOps }: { unitId: string; month: string; is
   });
 
   if (sundays.isPending) return <p>Loading…</p>;
+  // SECURITY REVIEW FIX Q12: a failed load is shown as a failure. Before, it looked like
+  // "no Sundays" or like open slots, inviting a leader to book people who were already booked.
+  const loadError = sundays.error ?? demand.error ?? assignments.error;
+  if (loadError) return <Notice tone="danger" title="The rota could not be loaded">{friendlyError(loadError)}</Notice>;
   if ((sundays.data ?? []).length === 0)
     return (
       <Notice tone="info" title="No Sundays set up this month">
@@ -152,7 +168,7 @@ function MonthRota({ unitId, month, isOps }: { unitId: string; month: string; is
                               <span>{p ? fullName(p) : 'Member'}</span>
                               {a.status === 'served' && <Chip tone="ok">Served</Chip>}
                               {a.status === 'no_show' && <Chip tone="danger">No-show</Chip>}
-                              {a.status === 'planned' && (
+                              {a.status === 'planned' && canEdit && (
                                 <button
                                   type="button"
                                   className="app-link-button"
@@ -164,10 +180,18 @@ function MonthRota({ unitId, month, isOps }: { unitId: string; month: string; is
                                 </button>
                               )}
                             </span>
-                          ) : (
-                            <button type="button" className="app-link-button" onClick={() => setPicking(cell)}>
+                          ) : canEdit ? (
+                            // SECURITY REVIEW FIX Q11: each button says which slot it fills.
+                            <button
+                              type="button"
+                              className="app-link-button"
+                              aria-label={`Assign ${r.roleId ? roleMap.get(r.roleId)?.name ?? 'role' : 'any role'}${r.slotNo > 1 ? ` (${r.slotNo})` : ''} on ${shortDate(s.service_date)}`}
+                              onClick={() => setPicking(cell)}
+                            >
                               + Assign
                             </button>
+                          ) : (
+                            <span className="type-caption">Open</span>
                           )}
                         </td>
                       );

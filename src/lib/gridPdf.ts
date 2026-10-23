@@ -21,6 +21,34 @@ function rgb(hex: string): [number, number, number] {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
+// SECURITY REVIEW FIX Q14: jsPDF's built-in Helvetica only has the Windows-1252 characters.
+// One character outside them (common in Yoruba names and words: ọ, ẹ, ṣ, ń) switched jsPDF to
+// a two-byte encoding for the WHOLE line, which printed as spaced-out junk, so a leader's name
+// or a whole segment became unreadable on the printed grid. Text is now reduced to what the
+// font can show: accents the font lacks are dropped (ọ -> o, Ọ́ -> Ó when it exists), and
+// anything else becomes "?". (jsPDF already escapes brackets and backslashes, so text cannot
+// break out of the PDF string.)
+const WIN_ANSI_EXTRA = new Set('€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ');
+const printable = (ch: string) => {
+  if ([...ch].length !== 1) return false;
+  const c = ch.codePointAt(0)!;
+  return ch === '\n' || (c >= 0x20 && c <= 0x7e) || (c >= 0xa0 && c <= 0xff) || WIN_ANSI_EXTRA.has(ch);
+};
+export function pdfSafe(text: string): string {
+  // One letter with its accents at a time (ọ́ is o + dot below + acute).
+  const letters = text.replace(/\t/g, ' ').normalize('NFD').match(/\P{M}\p{M}*|\p{M}+/gu) ?? [];
+  return letters
+    .map((letter) => {
+      const whole = letter.normalize('NFC');
+      if (printable(whole)) return whole;
+      // Keep each accent only if the letter with it still exists in the font (ọ́ -> ó, ṣ -> s).
+      const [base, ...marks] = [...letter];
+      if (!printable(base)) return '?';
+      return marks.reduce((kept, m) => (printable((kept + m).normalize('NFC')) ? (kept + m).normalize('NFC') : kept), base);
+    })
+    .join('');
+}
+
 export interface PdfSegment {
   title: string;
   sub_points: string[];
@@ -39,7 +67,19 @@ export interface PdfGrid {
 }
 
 // Builds the PDF and returns it (the caller saves it). Exported for tests.
-export async function buildGridPdf(grid: PdfGrid) {
+export async function buildGridPdf(input: PdfGrid) {
+  // Q14: every piece of text from the database goes through pdfSafe() before it is printed.
+  const grid: PdfGrid = {
+    ...input,
+    theme: input.theme === null ? null : pdfSafe(input.theme),
+    segments: input.segments.map((s) => ({
+      ...s,
+      title: pdfSafe(s.title),
+      sub_points: s.sub_points.map(pdfSafe),
+      ledBy: pdfSafe(s.ledBy),
+    })),
+    blocks: input.blocks.map((b) => ({ name: pdfSafe(b.name), body: pdfSafe(b.body) })),
+  };
   const [{ jsPDF }, { default: autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
   const navy = rgb(tokenHex('navy'));
   const ink = rgb(tokenHex('ink'));
