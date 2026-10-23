@@ -66,3 +66,7 @@
 .app-content a:not(.tec-btn) { color: var(--link); }
 /* Status chips next to a name in a table cell. */
 .app-content td .tec-chip { margin-left: var(--space-2); }
+
+/* A fieldset used only to switch a group of fields to read-only: no border or extra spacing. */
+.app-fieldset { border: 0; margin: 0; min-width: 0; }
+.app-fieldset:disabled .tec-input, .app-fieldset:disabled .tec-select { background: var(--surface-tint); color: var(--ink-muted); }

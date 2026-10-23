@@ -178,10 +178,17 @@ function MemberFormInner({ person }: { person?: Person }) {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const set = <K extends keyof Values>(k: K, val: Values[K]) => setV((cur) => ({ ...cur, [k]: val }));
 
-  // Who may do what (display only: the database checks every save).
-  const canSetTeci = hasRole(me.data, 'teci_coordinator', 'operations_lead');
+  // Who may do what (display only: the database checks every save). Decision of 23 Oct 2026
+  // (migration 16): a member record is edited only by their Team Lead (Unit Lead of a unit they
+  // are in now) and the G-Squad Coordinator; others who can see it get a read-only view.
   const isOps = hasRole(me.data, 'operations_lead');
   const myUnits = ledUnitIds(me.data);
+  const isCoordinator = hasRole(me.data, 'gsquad_coordinator');
+  const liveUnits = (memberships.data ?? []).filter((m) => m.person_id === person?.id && m.status !== 'ended');
+  const canEditRecord = !person || isCoordinator || liveUnits.some((m) => myUnits.includes(m.unit_id));
+  // TECi stage: on an existing record the TECi Coordinator only; when adding, also the Ops Lead.
+  const canSetTeci = person ? hasRole(me.data, 'teci_coordinator') : hasRole(me.data, 'teci_coordinator', 'operations_lead');
+  const ro = !canEditRecord;
 
   // Unit for a NEW member: a Unit Lead picks one of their units; the Operations Lead any unit.
   const unitChoices = (units.data ?? []).filter((u) => u.is_active && (isOps || myUnits.includes(u.id)));
@@ -189,7 +196,18 @@ function MemberFormInner({ person }: { person?: Person }) {
   // SECURITY REVIEW FIX L05: for a new member, the faith panel is offered only when the chosen
   // unit is one this leader leads (an Operations Lead who also leads another unit could not
   // record them, and the whole save would fail).
-  const mayRecordFaith = hasRole(me.data, ...FAITH_READERS) || (person ? myUnits.length > 0 : myUnits.includes(unitId));
+  // Offer the faith panel only to those app.can_see_faith lets in: the reading roles, or the
+  // Unit Lead of a unit this person is actively in (or, for a new member, the chosen unit).
+  const mayRecordFaith =
+    hasRole(me.data, ...FAITH_READERS) ||
+    (person ? liveUnits.some((m) => m.status === 'active' && myUnits.includes(m.unit_id)) : myUnits.includes(unitId));
+  // Faith fields are READ by the roles above but RECORDED only by the G-Squad Coordinator and
+  // their Team Lead (an active membership of a unit they lead), as app.can_edit_faith checks.
+  const canEditFaith =
+    isCoordinator ||
+    (person ? liveUnits.some((m) => m.status === 'active' && myUnits.includes(m.unit_id)) : myUnits.includes(unitId));
+  // Nothing to save for someone who can neither edit the record, the TECi stage nor faith fields.
+  const canSave = canEditRecord || canSetTeci || canEditFaith;
   const [roleId, setRoleId] = useState('');
   const [isLeader, setIsLeader] = useState(false);
   const [stageId, setStageId] = useState('');
@@ -234,7 +252,7 @@ function MemberFormInner({ person }: { person?: Person }) {
 
   const save = useMutation({
     mutationFn: async () => {
-      const sendFaith = mayRecordFaith && faithTouched && faithReady && !faithRestricted;
+      const sendFaith = canEditFaith && faithTouched && faithReady && !faithRestricted;
       if (!person) {
         // SECURITY REVIEW FIX L01: one transaction (public.create_member, migration 15). Before,
         // three calls: the first (insert ... select) was always refused by row-level security,
@@ -293,9 +311,17 @@ function MemberFormInner({ person }: { person?: Person }) {
         <Link to="/members">All members</Link>
       </p>
 
+      {person && ro && (
+        <Notice tone="info" title="View only">
+          Member records are changed by their Team Lead or the G-Squad Coordinator.
+          {canSetTeci ? ' You can set the TECi stage.' : ''}
+        </Notice>
+      )}
+
       <form className="app-form" onSubmit={onSubmit} noValidate>
         <Card title="About them">
-          <div className="tec-fields">
+          {/* A disabled fieldset makes every field in it read-only in one place. */}
+          <fieldset className="app-fieldset tec-fields" disabled={ro}>
             <TextField id="m-first" label="First name" hint={hint('first_name')} required maxLength={100} value={v.first_name} onChange={(e) => set('first_name', e.target.value)} />
             <TextField id="m-other" label="Other names" hint="(optional)" maxLength={200} value={v.other_names} onChange={(e) => set('other_names', e.target.value)} />
             <TextField id="m-surname" label="Surname" hint={hint('surname')} required maxLength={100} value={v.surname} onChange={(e) => set('surname', e.target.value)} />
@@ -317,21 +343,21 @@ function MemberFormInner({ person }: { person?: Person }) {
                 <SelectField id="m-amonth" label="Anniversary: month" options={monthOptions} value={v.anniversary_month} onChange={(e) => set('anniversary_month', e.target.value)} />
               </>
             )}
-          </div>
+          </fieldset>
         </Card>
 
         <Card title="In G-Squad">
           <div className="tec-fields">
-            <TextField id="m-joined" label="Date joined" hint={hint('date_joined')} type="date" required value={v.date_joined} onChange={(e) => set('date_joined', e.target.value)} />
+            <TextField id="m-joined" label="Date joined" hint={hint('date_joined')} type="date" required disabled={ro} value={v.date_joined} onChange={(e) => set('date_joined', e.target.value)} />
             <SelectField
               id="m-status"
               label="Status"
               options={[{ value: 'active', label: 'Active' }, { value: 'paused', label: 'Paused (taking a break)' }]}
               value={v.status}
-              disabled={!!v.date_left}
+              disabled={ro || !!v.date_left}
               onChange={(e) => set('status', e.target.value)}
             />
-            <TextField id="m-left" label="Date left" hint={hint('date_left', '(only when leaving G-Squad)')} type="date" value={v.date_left} onChange={(e) => set('date_left', e.target.value)} />
+            <TextField id="m-left" label="Date left" hint={hint('date_left', '(only when leaving G-Squad)')} type="date" disabled={ro} value={v.date_left} onChange={(e) => set('date_left', e.target.value)} />
             <SelectField
               id="m-teci"
               label="TECi stage"
@@ -345,14 +371,15 @@ function MemberFormInner({ person }: { person?: Person }) {
               id="m-community"
               label="Greatness Community"
               hint="(optional)"
+              disabled={ro}
               options={[{ value: '', label: 'None' }, ...(communities.data ?? []).filter((c) => c.is_active).map((c) => ({ value: c.id, label: c.name }))]}
               value={v.greatness_community_id}
               onChange={(e) => set('greatness_community_id', e.target.value)}
             />
           </div>
           <div className="tec-fields" style={{ paddingTop: 0 }}>
-            <Checkbox id="m-news" label="Receives The Greatness Brief newsletter" checked={v.newsletter_subscribed} onChange={(e) => set('newsletter_subscribed', e.target.checked)} />
-            <Checkbox id="m-celebrate" label="Agrees to birthday and anniversary greetings in the newsletter" checked={v.celebration_opt_in} onChange={(e) => set('celebration_opt_in', e.target.checked)} />
+            <Checkbox id="m-news" label="Receives The Greatness Brief newsletter" disabled={ro} checked={v.newsletter_subscribed} onChange={(e) => set('newsletter_subscribed', e.target.checked)} />
+            <Checkbox id="m-celebrate" label="Agrees to birthday and anniversary greetings in the newsletter" disabled={ro} checked={v.celebration_opt_in} onChange={(e) => set('celebration_opt_in', e.target.checked)} />
           </div>
         </Card>
 
@@ -443,14 +470,17 @@ function MemberFormInner({ person }: { person?: Person }) {
             ) : !faithReady ? (
               <p>Loading…</p>
             ) : (
-              <div className="tec-fields">
+              <fieldset className="app-fieldset tec-fields" disabled={!canEditFaith}>
                 <TextField id="f-salv" label="Date of salvation" hint="(optional)" type="date" value={f.salvation_date ?? ''} onChange={(e) => setFaith('salvation_date', e.target.value || null)} />
                 <FaithTick id="f-water" label="Water baptism" tick={f.water_baptism} date={f.water_baptism_date} onTick={(t) => setFaith('water_baptism', t)} onDate={(d) => setFaith('water_baptism_date', d)} />
                 <FaithTick id="f-hs" label="Holy Spirit baptism" tick={f.holy_spirit_baptism} date={f.holy_spirit_baptism_date} onTick={(t) => setFaith('holy_spirit_baptism', t)} onDate={(d) => setFaith('holy_spirit_baptism_date', d)} />
                 <FaithTick id="f-tongues" label="Speaks in tongues" tick={f.speaks_in_tongues} date={f.speaks_in_tongues_date} onTick={(t) => setFaith('speaks_in_tongues', t)} onDate={(d) => setFaith('speaks_in_tongues_date', d)} />
-              </div>
+              </fieldset>
             )}
-            <p className="type-caption" style={{ margin: 0 }}>Every view and change of these fields is recorded.</p>
+            <p className="type-caption" style={{ margin: 0 }}>
+              Every view and change of these fields is recorded.
+              {!canEditFaith && ' They are recorded by their Team Lead or the G-Squad Coordinator.'}
+            </p>
           </RestrictedPanel>
         )}
 
@@ -463,10 +493,12 @@ function MemberFormInner({ person }: { person?: Person }) {
           </Notice>
         )}
         <div className="tec-row" style={{ padding: 0 }}>
-          <Button type="submit" variant="primary" disabled={save.isPending}>
-            {save.isPending ? 'Saving…' : person ? 'Save changes' : 'Add member'}
-          </Button>
-          <Link to="/members">Cancel</Link>
+          {canSave && (
+            <Button type="submit" variant="primary" disabled={save.isPending}>
+              {save.isPending ? 'Saving…' : person ? 'Save changes' : 'Add member'}
+            </Button>
+          )}
+          <Link to="/members">{canSave ? 'Cancel' : 'Back to members'}</Link>
         </div>
       </form>
     </>
