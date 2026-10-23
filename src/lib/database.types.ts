@@ -1242,6 +1242,9 @@ isOneToOne: false
 "create_member":
 { Args: { "p_church_role"?: string,"p_faith"?: Json,"p_is_team_leader"?: boolean,"p_leadership_stage"?: string,"p_person": Json,"p_unit": string }; Returns: string
                            },
+"create_sunday_service":
+{ Args: { "p_date": string,"p_ends"?: string,"p_site"?: string,"p_starts"?: string,"p_theme"?: string }; Returns: string
+                           },
 "export_person":
 { Args: { "p_person": string }; Returns: Json
                            },
@@ -1309,6 +1312,14 @@ isOneToOne: false
                            },
 "redeem_email_link":
 { Args: { "p_token": string }; Returns: string
+                           },
+"reorder_segments":
+{ Args: { "p_grid": string,"p_segments": (string)[] }; Returns: undefined
+                           },
+"rota_candidates":
+{ Args: { "p_date": string,"p_unit": string }; Returns: {
+              "church_role_id": string,"first_name": string,"on_holiday": boolean,"person_id": string,"serving_that_day": boolean,"slot_limit": number,"slots_used": number,"surname": string
+            }[]
                            },
 "set_person_faith":
 { Args: { "p_holy_spirit_baptism": boolean,"p_holy_spirit_baptism_date": string,"p_person": string,"p_salvation_date": string,"p_speaks_in_tongues": boolean,"p_speaks_in_tongues_date": string,"p_water_baptism": boolean,"p_water_baptism_date": string }; Returns: undefined

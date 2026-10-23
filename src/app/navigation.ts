@@ -40,7 +40,7 @@ export const NAV: NavGroup[] = [
   {
     label: 'Sundays and events',
     items: [
-      { label: 'Service grid', path: '/service-grid', slice: 2 },
+      { label: 'Sunday Operations', path: '/sundays', slice: 2, built: true },
       { label: 'Rota', path: '/rota', slice: 2 },
       { label: 'Projects and events', path: '/projects', slice: 4 },
     ],

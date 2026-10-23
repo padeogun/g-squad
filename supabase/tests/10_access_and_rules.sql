@@ -1637,6 +1637,83 @@ select test.lives(format('delete from public.role_assignments where user_id = %L
                   'P03: ... and removes the other Coordinator''s role');
 reset role;
 
+-- =====================================================================================
+-- Migration 19 (slice 2): setting up a Sunday, and who can serve.
+-- =====================================================================================
+do $$
+declare d date := (date_trunc('month', current_date) + interval '6 months')::date;
+begin
+  -- First Sunday six months ahead (well away from the R2 checks earlier in this file).
+  perform set_config('test.sun6', (d + ((7 - extract(isodow from d)::int) % 7))::text, false);
+end $$;
+
+select test.login('ops'); set role authenticated;
+select test.lives(format('select public.create_sunday_service(%L)', current_setting('test.sun6')),
+                  'S2: Operations Lead sets up a Sunday (project and grid together)');
+select test.ok((select p.is_sunday_service and p.level = 'church' and p.status = 'draft'
+                  and (p.starts_at at time zone 'Europe/London')::time = '10:00'
+                from public.service_grids g join public.projects p on p.id = g.project_id
+                where g.service_date = current_setting('test.sun6')::date),
+               'S2: the Sunday is a church-level draft starting at 10:00 local time');
+select test.throws(format('select public.create_sunday_service(%L)', current_setting('test.sun6')),
+                   'S2: only one service grid per Sunday');
+select test.throws(format('select public.create_sunday_service(%L)', current_setting('test.sun6')::date + 1),
+                   'S2: a service grid must be on a Sunday');
+reset role;
+
+select test.login('ul_a'); set role authenticated;
+select test.throws(format('select public.create_sunday_service(%L)', current_setting('test.sun6')::date + 7),
+                   'S2: a Unit Lead cannot set up a Sunday');
+select test.ok((select count(*) from public.rota_candidates(test.id('A1'), current_setting('test.sun6')::date)) >= 1,
+               'S2: a Unit Lead sees who can serve in their unit');
+select test.ok(not exists (select 1 from public.rota_candidates(test.id('A1'), current_setting('test.sun6')::date) c
+                           where c.slot_limit is null or c.slots_used is null),
+               'S2: every candidate has slots used and a limit');
+select test.throws(format('select * from public.rota_candidates(%L, %L)', test.id('A2'), current_setting('test.sun6')),
+                   'S2: a Unit Lead cannot list another unit''s candidates');
+select test.throws(format('select * from public.rota_candidates(%L, %L)', test.id('B1'), current_setting('test.sun6')),
+                   'S2: no one lists another church''s unit');
+reset role;
+select test.login('editor'); set role authenticated;
+select test.throws(format('select * from public.rota_candidates(%L, %L)', test.id('A1'), current_setting('test.sun6')),
+                   'S2: a newsletter editor cannot list candidates');
+reset role;
+select test.login('coord'); set role authenticated;
+select test.lives(format('select * from public.rota_candidates(%L, %L)', test.id('A1'), current_setting('test.sun6')),
+                  'S2: the G-Squad Coordinator can list candidates');
+reset role;
+select test.ok(not has_function_privilege('anon', 'public.rota_candidates(uuid, date)', 'execute')
+               and not has_function_privilege('anon', 'public.create_sunday_service(date, time, time, text, uuid)', 'execute'),
+               'S2: neither Sunday function is open to anon');
+
+-- Reordering and versions (migration 19).
+select test.login('ops'); set role authenticated;
+do $$
+declare g uuid := (select id from public.service_grids where service_date = current_setting('test.sun6')::date);
+begin
+  insert into public.service_segments (grid_id, position, title, starts_at, duration_minutes, led_by_text) values
+    (g, 1, 'Welcome', '10:00', 25, 'Hosts'), (g, 2, 'Worship', '10:25', 20, 'EPOP'), (g, 3, 'Sermon', '10:45', 60, 'Pastor');
+  update public.service_grids set status = 'finalised' where id = g;
+  perform set_config('test.g6', g::text, false);
+end $$;
+select test.lives(format('select public.reorder_segments(%L, array(select id from public.service_segments where grid_id = %L order by position desc))',
+                         current_setting('test.g6'), current_setting('test.g6')),
+                  'S2: Operations Lead reorders segments in one step');
+select test.ok((select title from public.service_segments where grid_id = current_setting('test.g6')::uuid and position = 1) = 'Sermon',
+               'S2: ... and the new order is saved');
+select test.ok((select version from public.service_grids where id = current_setting('test.g6')::uuid) = 2,
+               'S2: reordering a finalised grid raises the version once, not once per segment');
+select test.throws(format('select public.reorder_segments(%L, array(select id from public.service_segments where grid_id = %L limit 2))',
+                          current_setting('test.g6'), current_setting('test.g6')),
+                   'S2: a reorder must list every segment');
+reset role;
+select test.login('ul_a'); set role authenticated;
+select public.reorder_segments(current_setting('test.g6')::uuid,
+                               array(select id from public.service_segments where grid_id = current_setting('test.g6')::uuid order by position desc));
+reset role;
+select test.ok((select title from public.service_segments where grid_id = current_setting('test.g6')::uuid and position = 1) = 'Sermon',
+               'S2: a Unit Lead cannot reorder the grid');
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;

@@ -70,3 +70,7 @@
 /* A fieldset used only to switch a group of fields to read-only: no border or extra spacing. */
 .app-fieldset { border: 0; margin: 0; min-width: 0; }
 .app-fieldset:disabled .tec-input, .app-fieldset:disabled .tec-select { background: var(--surface-tint); color: var(--ink-muted); }
+
+/* Service grid: sub-points under an activity, and the inline segment form. */
+.app-points { margin: var(--space-1) 0 0; padding-left: var(--space-5); color: var(--ink-muted); }
+.app-segment-form { padding: var(--space-3) 0; min-width: 280px; }
