@@ -12,6 +12,14 @@ updates:
     # Security updates for known vulnerabilities are not delayed.
     cooldown:
       default-days: 7
+    # Major versions that need deliberate work, not an automatic bump:
+    #   typescript   7 is the rewritten (Go) compiler; adopt when Vite/oxlint support it.
+    #   @types/node  must match the Node version we run (22), not the newest release.
+    ignore:
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
     groups:
       # Batch minor and patch updates into one pull request to keep review light.
       minor-and-patch:

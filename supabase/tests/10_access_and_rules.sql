@@ -1065,6 +1065,79 @@ on conflict (church_id) do update set labels = excluded.labels
 select test.ok((select labels ->> 'g_squad' from public.church_settings where church_id = test.id('churchA')) = 'Our Team',
                'I03: re-running the seed does not overwrite the church''s own labels');
 
+-- =====================================================================================
+-- Slice 1 (migration 13): the G-Squad Coordinator invites leaders, within the F01 limits
+-- =====================================================================================
+-- A newly invited leader: Supabase Auth creates the auth.users row (the Edge Function does this
+-- with the service role); the inviter then adds the app account and roles as themselves.
+do $$
+declare v uuid := gen_random_uuid();
+begin
+  insert into auth.users (id, email) values (v, 'new.lead@example.org');
+  insert into test.ids values ('newlead', v);
+end $$;
+
+select test.login('coord'); set role authenticated;
+select test.lives(format('insert into public.app_users (id, display_name) values (%L, %L)', test.id('newlead'), 'New Lead'),
+                  'S1: Coordinator adds an invited leader''s account');
+select test.ok((select church_id from public.app_users where id = test.id('newlead')) = test.id('churchA'),
+               'S1: the new account joins the inviter''s church automatically');
+select test.lives(format('insert into public.role_assignments (user_id, role, unit_id) values (%L, %L, %L)',
+                         test.id('newlead'), 'unit_lead', test.id('A3')),
+                  'S1: Coordinator makes the new leader a Unit Lead');
+select test.throws(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('newlead'), 'teci_coordinator'),
+                   'S1: Coordinator cannot give a senior role (Resident Pastor only)');
+select test.throws(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('newlead'), 'operations_lead'),
+                   'S1: Coordinator cannot create an Operations Lead');
+select test.throws(format('delete from public.role_assignments where user_id = %L and role = %L', test.id('ops'), 'operations_lead'),
+                   'S1: Coordinator cannot remove the Operations Lead role');
+select test.throws(format('delete from public.role_assignments where user_id = %L', test.id('coord')),
+                   'S1: Coordinator cannot change their own roles');
+select test.ok((select count(distinct user_id) from public.role_assignments) >= 10,
+               'S1: Coordinator sees every leader''s roles in their church');
+select test.ok(not exists (select 1 from public.role_assignments where user_id = test.id('b_ops')),
+               'S1: Coordinator sees no roles from another church');
+select test.throws(format('update public.app_users set is_active = false where id = %L', test.id('ops')),
+                   'S1: Coordinator cannot switch off the Operations Lead''s account');
+select test.throws(format('update public.app_users set church_id = %L where id = %L', test.id('churchB'), test.id('newlead')),
+                   'S1: an account cannot be moved to another church');
+select test.lives(format('update public.app_users set display_name = %L where id = %L', 'New Lead (Hospitality)', test.id('newlead')),
+                  'S1: Coordinator can rename a leader''s account');
+select test.ok((select display_name from public.app_users where id = test.id('newlead')) = 'New Lead (Hospitality)',
+               'S1: ... and the new name is saved');
+reset role;
+
+select test.login('ops'); set role authenticated;
+select test.throws(format('update public.app_users set is_active = false where id = %L', test.id('ops')),
+                   'S1: Operations Lead cannot switch off their own account');
+select test.throws(format('update public.app_users set is_active = false where id = %L', test.id('coord')),
+                   'S1: Operations Lead cannot switch off a senior leader''s account');
+select test.lives(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('newlead'), 'operations_lead'),
+                  'S1: an Operations Lead can give the Operations Lead role');
+select test.lives(format('delete from public.role_assignments where user_id = %L and role = %L', test.id('newlead'), 'operations_lead'),
+                  'S1: an Operations Lead can remove the Operations Lead role from someone else');
+reset role;
+
+select test.login('coord'); set role authenticated;
+select test.lives(format('update public.app_users set is_active = false where id = %L', test.id('newlead')),
+                  'S1: Coordinator can switch off a Unit Lead''s account');
+select test.ok(not (select is_active from public.app_users where id = test.id('newlead')),
+               'S1: ... and the account is really switched off');
+reset role;
+
+select test.login('ul_a'); set role authenticated;
+select test.throws(format('insert into public.role_assignments (user_id, role, unit_id) values (%L, %L, %L)',
+                          test.id('ul_b'), 'unit_lead', test.id('A1')),
+                   'S1: a Unit Lead cannot give roles');
+reset role;
+
+select test.login('rp'); set role authenticated;
+select test.lives(format('update public.app_users set is_active = true where id = %L', test.id('newlead')),
+                  'S1: Resident Pastor can switch an account back on');
+select test.ok((select is_active from public.app_users where id = test.id('newlead')),
+               'S1: ... and the account is really back on');
+reset role;
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;

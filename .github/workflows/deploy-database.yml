@@ -18,7 +18,8 @@ name: Deploy database
 on:
   push:
     branches: [main]
-    paths: ['supabase/migrations/**']
+    # Database migrations and Edge Functions (slice 1 added supabase/functions).
+    paths: ['supabase/migrations/**', 'supabase/functions/**']
   workflow_dispatch:
     inputs:
       include_seed:
@@ -81,3 +82,10 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: npx --no-install supabase db push --include-seed --password "$SUPABASE_DB_PASSWORD"
+      # Edge Functions (slice 1): deployed after the migrations they rely on. Uses the access
+      # token only; the function reads the project's own secret key from its runtime settings.
+      # Settings such as verify_jwt come from supabase/config.toml.
+      - name: Deploy Edge Functions
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: npx --no-install supabase functions deploy invite-leader --project-ref "$SUPABASE_PROJECT_REF"

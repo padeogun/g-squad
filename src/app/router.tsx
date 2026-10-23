@@ -10,6 +10,7 @@ import { SignIn } from '../pages/SignIn';
 import { Home } from '../pages/Home';
 import { ComingSoon } from '../pages/ComingSoon';
 import { NotFound } from '../pages/NotFound';
+import { Leaders } from '../pages/admin/Leaders';
 
 export const router = createBrowserRouter([
   { path: '/sign-in', element: <SignIn /> },
@@ -20,6 +21,7 @@ export const router = createBrowserRouter([
         element: <AppShell />,
         children: [
           { index: true, element: <Home /> },
+          { path: '/admin/leaders', element: <Leaders /> },
           ...PLACEHOLDER_ITEMS.map((i) => ({
             path: i.path,
             element: <ComingSoon title={i.label} slice={i.slice} />,

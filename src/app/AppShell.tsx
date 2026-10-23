@@ -7,23 +7,45 @@ import { useState, type MouseEvent } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { TEC, tecMark } from '../design-system';
 import { useAuth } from '../auth/AuthProvider';
-import { NAV } from './navigation';
+import { useMe } from '../auth/useMe';
+import { navFor } from './navigation';
 
-const { SideNav, Button } = TEC;
+const { SideNav, Button, Notice, Card } = TEC;
 
 export function AppShell() {
   const { session, signOut } = useAuth();
+  const me = useMe();
   const location = useLocation();
   const navigate = useNavigate();
 
-  // Mark the current page in the sidebar.
-  const groups = NAV.map((g) => ({
+  // Sidebar items this leader can use, with the current page marked.
+  const groups = navFor((me.data?.roles ?? []).map((r) => r.role)).map((g) => ({
     label: g.label,
     items: g.items.map((i) => ({ label: i.label, href: i.path, current: i.path === location.pathname })),
   }));
 
   // Phones: the sidebar is folded away behind a Menu button (always shown on desktop).
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // Signed in to Supabase, but no active G-Squad account: never invited here, or switched off.
+  // The database already shows such a person nothing; this just explains why.
+  if (me.data === null) {
+    return (
+      <main className="auth-page" id="main">
+        <div className="auth-card">
+          <Card title="No G-Squad account">
+            <Notice tone="warn" title="This sign-in has no access">
+              {session?.user.email} isn't set up as a G-Squad leader, or the account has been switched off. Ask the
+              Operations Lead or the G-Squad Coordinator.
+            </Notice>
+            <Button variant="secondary" onClick={() => void signOut()}>
+              Sign out
+            </Button>
+          </Card>
+        </div>
+      </main>
+    );
+  }
 
   // Route same-origin link clicks through the router; leave modified clicks
   // (new tab, new window) and external links to the browser.
@@ -65,7 +87,7 @@ export function AppShell() {
           <div className="app-topbar">
             <span />
             <div className="app-user">
-              <span className="type-caption">{session?.user.email}</span>
+              <span className="type-caption">{me.data?.displayName ?? session?.user.email}</span>
               <Button variant="quiet" size="sm" onClick={() => void signOut()}>
                 Sign out
               </Button>
