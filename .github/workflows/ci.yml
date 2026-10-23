@@ -1,0 +1,83 @@
+# -------------------------------------------------------------------------------------
+# Checks every pull request and every push to main. A pull request can only merge when
+# both jobs pass (set this as a required check under Settings > Branches).
+#   app       lint, unit tests, production build, dependency audit
+#   database  rebuilds Postgres from the migrations, runs the access and rules checks,
+#             and confirms src/lib/database.types.ts matches the migrations
+# -------------------------------------------------------------------------------------
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege: CI only needs to read the code.
+permissions:
+  contents: read
+
+# A newer push to the same branch cancels the older run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - name: Build
+        run: npm run build
+        env:
+          # Dummy public values: the build only needs them to exist and be well-formed.
+          VITE_SUPABASE_URL: https://example.supabase.co
+          VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+      # SECURITY REVIEW FIX J07: the build tools (Vite, plugins, the Supabase CLI used to
+      # deploy) are dev dependencies but produce or handle what ships, so audit them too.
+      # Critical only, to keep dev-only noise from blocking every pull request.
+      - name: Audit all dependencies (critical)
+        run: npm audit --audit-level=critical
+
+  database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      # Same major version as the Supabase project. Throwaway: destroyed after the job.
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DB_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Migrations, seed and access checks
+        run: scripts/db-test.sh
+      - name: Database types are up to date
+        run: |
+          scripts/db-types.sh
+          git diff --exit-code -- src/lib/database.types.ts || {
+            echo "::error::src/lib/database.types.ts is out of date. Run: npm run db:types"; exit 1; }

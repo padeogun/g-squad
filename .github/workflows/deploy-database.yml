@@ -1,0 +1,83 @@
+# -------------------------------------------------------------------------------------
+# Applies new migrations to the Supabase project when they reach main.
+# Uses the Supabase CLI (`supabase db push`), which applies only migrations the project
+# hasn't had yet and records each one, so it is safe to run repeatedly.
+#
+# Needs, under Settings > Environments > "supabase-test" (create it; add yourself as a
+# required reviewer if you want to approve each run):
+#   secrets   SUPABASE_ACCESS_TOKEN  personal access token (supabase.com > Account > Access Tokens)
+#             SUPABASE_DB_PASSWORD   the project's database password
+#   variables SUPABASE_PROJECT_REF   zcysodfxcpjzinjxvayx
+#   Deployment branches and tags: "Selected branches and tags", main only (SECURITY_LOG J02).
+#
+# The seed (TEC's reference lists) is applied only when run by hand with "include seed"
+# ticked: Actions > Deploy database > Run workflow.
+# -------------------------------------------------------------------------------------
+name: Deploy database
+
+on:
+  push:
+    branches: [main]
+    paths: ['supabase/migrations/**']
+  workflow_dispatch:
+    inputs:
+      include_seed:
+        description: Also run supabase/seed.sql (first set-up only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Never run two deploys at once against the same database.
+concurrency:
+  group: deploy-database
+  cancel-in-progress: false
+
+jobs:
+  push:
+    # SECURITY REVIEW FIX J02: "Run workflow" lets anyone with write access pick any branch,
+    # which would push unreviewed migrations straight to the database. Only main may deploy.
+    # (Also restrict the supabase-test environment to the main branch: see SECURITY_LOG.md.)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: supabase-test
+    # SECURITY REVIEW FIX J03: the secrets are no longer job-wide. Each one is given only to the
+    # Supabase CLI steps that need it, so checkout, setup-node and npm ci never see them.
+    env:
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      # SECURITY REVIEW FIX J03: the CLI now comes from package-lock.json (exact version and
+      # integrity hash, kept current by Dependabot) instead of the third-party action
+      # supabase/setup-cli@v1, a movable tag that ran with the database secrets in scope.
+      # --ignore-scripts: no dependency install script runs in this job.
+      - run: npm ci --ignore-scripts
+      - name: Link the project
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: npx --no-install supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
+      - name: Show what will be applied
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: npx --no-install supabase migration list --password "$SUPABASE_DB_PASSWORD"
+      - name: Apply migrations
+        if: ${{ !inputs.include_seed }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: npx --no-install supabase db push --password "$SUPABASE_DB_PASSWORD"
+      - name: Apply migrations and seed
+        if: ${{ inputs.include_seed }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: npx --no-install supabase db push --include-seed --password "$SUPABASE_DB_PASSWORD"
