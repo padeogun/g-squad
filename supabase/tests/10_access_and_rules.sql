@@ -1449,6 +1449,28 @@ select test.throws(format($q$insert into public.unit_memberships (person_id, uni
                    'M16: another Unit Lead cannot claim that entry');
 reset role;
 
+-- Migration 17 (decision of 23 Oct 2026): anonymising ends every unit membership, so a
+-- "Former member" no longer appears on the team list.
+do $$
+declare v uuid;
+begin
+  insert into public.people (church_id, first_name, surname) values (test.id('churchA'), 'Leaving', 'Soon') returning id into v;
+  insert into public.unit_memberships (church_id, person_id, unit_id) values (test.id('churchA'), v, test.id('A1'));
+  insert into test.ids values ('leaver', v);
+end $$;
+select test.login('nobody');
+select app.anonymise(test.id('leaver'));
+select test.ok(not exists (select 1 from public.unit_memberships where person_id = test.id('leaver') and status <> 'ended'),
+               'M17: anonymising ends the person''s unit memberships');
+select test.ok(not exists (select 1 from public.unit_memberships m join public.people p on p.id = m.person_id
+                           where p.anonymised_at is not null and m.status <> 'ended'),
+               'M17: no anonymised person has a live unit membership');
+select test.login('ul_a'); set role authenticated;
+select test.ok(not exists (select 1 from public.unit_memberships where unit_id = test.id('A1') and status <> 'ended'
+                           and person_id = test.id('leaver')),
+               'M17: the Former member is not on the Unit Lead''s team list');
+reset role;
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;
