@@ -2,7 +2,9 @@
 // My Unit: a Unit Lead's view of their team. Lists the unit's live members with their team
 // role, leader flag and leadership stage, and lets the lead change those three in place.
 // A lead of several units picks one at the top. Other roles see a short explanation.
-// (Unit dashboard figures, availability and holidays come in later slices.)
+// Slice 3 adds the unit dashboard (public.unit_dashboard): headline tiles, the engagement mix,
+// the leadership pipeline and, per member, slots this month, engagement, holiday and last
+// one-to-one. Those figures are checked in the database to be this unit's lead (or seniors).
 // -------------------------------------------------------------------------------------
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -13,6 +15,9 @@ import { friendlyError } from '../../data/errors';
 import { byId, useChurchRoles, useLeadershipStages, useUnits } from '../../data/reference';
 import { fullName, useMemberships, usePeople, type Membership } from '../../data/people';
 import { ledUnitIds, useMe } from '../../auth/useMe';
+import { useUnitDashboard } from '../../data/dashboards';
+import { shortDate } from '../../data/sundays';
+import { EngagementBar } from '../dashboard/EngagementBar';
 
 const { SectionHeading, Card, SelectField, Checkbox, Notice, DataTable, StatTile, Chip } = TEC;
 
@@ -62,11 +67,13 @@ function Team({ unitId, target }: { unitId: string; target: number | null }) {
   const roles = useChurchRoles();
   const stages = useLeadershipStages();
   const personMap = byId(people.data);
+  const dash = useUnitDashboard(unitId);
+  // person_id -> that member's unit figures (absent while loading or if the call failed).
+  const figures = new Map((dash.data?.members ?? []).map((m) => [m.person_id, m]));
 
   const team = (memberships.data ?? [])
     .filter((m) => m.unit_id === unitId)
     .sort((a, b) => (personMap.get(a.person_id)?.surname ?? '').localeCompare(personMap.get(b.person_id)?.surname ?? ''));
-  const active = team.filter((m) => m.status === 'active' && personMap.get(m.person_id)?.status === 'active').length;
 
   // Change one membership's role, leader flag or stage. The database checks it is this unit's lead.
   const update = useMutation({
@@ -85,10 +92,47 @@ function Team({ unitId, target }: { unitId: string; target: number | null }) {
 
   return (
     <>
-      <div className="tec-stats">
-        <StatTile label="Team members" value={team.length} />
-        <StatTile label="Active" value={active} tone="brand" note={target ? `Target ${target}` : undefined} />
-      </div>
+      {dash.error && <Notice tone="danger">{friendlyError(dash.error)}</Notice>}
+      {dash.data && (
+        <>
+          <div className="tec-stats">
+            <StatTile
+              label="Headcount"
+              value={target ? `${dash.data.headcount} / ${target}` : dash.data.headcount}
+              note={target ? 'of the target headcount' : 'no target set'}
+              tone="brand"
+            />
+            <StatTile label="Active" value={dash.data.engagement.active} note="served 2+ times in 8 weeks" />
+            <StatTile
+              label="Next 8 weeks"
+              value={dash.data.open_8_weeks}
+              note="slots still unfilled"
+              tone={dash.data.open_8_weeks ? 'danger' : 'default'}
+            />
+            <StatTile label="One-to-ones" value={dash.data.one_to_ones_quarter} note={`this quarter, of ${dash.data.headcount}`} />
+            <StatTile label="Check-ins raised" value={dash.data.checkins_open} note="open, needing a conversation" />
+          </div>
+          <div className="app-card-grid">
+            <Card title="Engagement mix">
+              <EngagementBar mix={dash.data.engagement} />
+            </Card>
+            <Card title="Leadership pipeline">
+              {dash.data.pipeline.length === 0 ? (
+                <p>No leadership stages recorded yet.</p>
+              ) : (
+                <ul className="app-candidates">
+                  {dash.data.pipeline.map((s) => (
+                    <li key={s.stage}>
+                      <span>{s.stage}</span>
+                      <strong>{s.count}</strong>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
+          </div>
+        </>
+      )}
       {update.isError && (
         <Notice tone="danger" title="That change wasn't made">
           {friendlyError(update.error)}
@@ -112,10 +156,15 @@ function Team({ unitId, target }: { unitId: string; target: number | null }) {
               { key: 'role', label: 'Team role' },
               { key: 'stage', label: 'Leadership stage' },
               { key: 'lead', label: 'Team leader' },
+              { key: 'slots', label: 'Slots this month', align: 'right' },
+              { key: 'engagement', label: 'Engagement' },
+              { key: 'holiday', label: 'Holiday' },
+              { key: 'oto', label: 'Last one-to-one' },
             ]}
             rows={team.map((m) => {
               const p = personMap.get(m.person_id);
               const name = p ? fullName(p) : 'Member';
+              const f = figures.get(m.person_id);
               return {
                 id: m.id,
                 name: (
@@ -157,6 +206,19 @@ function Team({ unitId, target }: { unitId: string; target: number | null }) {
                     onChange={(e) => update.mutate({ id: m.id, patch: { is_team_leader: e.target.checked } })}
                   />
                 ),
+                // Over the member's own limit shows as a warning: R-limits protect volunteers.
+                slots: f ? (
+                  f.slots_this_month > f.slot_limit ? (
+                    <Chip tone="danger">{`${f.slots_this_month} / ${f.slot_limit}`}</Chip>
+                  ) : (
+                    `${f.slots_this_month} / ${f.slot_limit}`
+                  )
+                ) : (
+                  '–'
+                ),
+                engagement: f ? ENGAGEMENT_LABELS[f.engagement] : '–',
+                holiday: f?.holiday_from ? `${shortDate(f.holiday_from)} – ${shortDate(f.holiday_to ?? f.holiday_from)}` : '–',
+                oto: f?.last_one_to_one ? shortDate(f.last_one_to_one) : 'None yet',
               };
             })}
           />
@@ -165,3 +227,13 @@ function Team({ unitId, target }: { unitId: string; target: number | null }) {
     </>
   );
 }
+
+// Plain-English engagement labels (the database returns the v_engagement codes).
+const ENGAGEMENT_LABELS: Record<string, string> = {
+  active: 'Active',
+  occasional: 'Occasional',
+  new: 'New',
+  inactive: 'Inactive',
+  paused: 'Paused',
+  left: 'Left',
+};

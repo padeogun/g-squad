@@ -90,3 +90,18 @@
 .app-phone { max-width: 520px; display: flex; flex-direction: column; gap: var(--space-4); }
 /* Role names in the rota read as names, not as small-caps column headings. */
 .app-rota tbody th[scope="row"] { text-transform: none; letter-spacing: 0; font: 600 14px/20px var(--font-sans); color: var(--ink); }
+
+/* Engagement mix: one stacked bar (decorative) and a legend that carries the numbers. */
+.app-mix { display: flex; flex-direction: column; gap: var(--space-3); }
+.app-mix-bar { display: flex; height: 14px; border-radius: var(--radius-pill); overflow: hidden; background: var(--neutral-soft); gap: 2px; }
+.app-mix-bar > span { display: block; min-width: 4px; }
+.app-mix-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); }
+.app-mix-legend li { display: inline-flex; align-items: center; gap: var(--space-2); }
+.app-mix-swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+/* Capacity calendar: soft tints for short / tight / fine, with the number always printed. */
+.app-capacity td { text-align: right; font-variant-numeric: tabular-nums; }
+.app-capacity tbody th[scope="row"] { text-transform: none; letter-spacing: 0; font: 600 14px/20px var(--font-sans); color: var(--ink); text-align: left; white-space: nowrap; }
+.app-cap-short { background: var(--danger-soft); color: var(--danger); font-weight: 600; }
+.app-cap-tight { background: var(--warn-soft); }
+.app-cap-ok { background: var(--ok-soft); }

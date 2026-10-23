@@ -1239,6 +1239,9 @@ isOneToOne: false
               "month": string,"spare": number,"unit_id": string,"unit_name": string
             }[]
                            },
+"church_dashboard":
+{ Args: Record<PropertyKey, never>; Returns: Json
+                           },
 "create_member":
 { Args: { "p_church_role"?: string,"p_faith"?: Json,"p_is_team_leader"?: boolean,"p_leadership_stage"?: string,"p_person": Json,"p_unit": string }; Returns: string
                            },
@@ -1323,6 +1326,9 @@ isOneToOne: false
                            },
 "set_person_faith":
 { Args: { "p_holy_spirit_baptism": boolean,"p_holy_spirit_baptism_date": string,"p_person": string,"p_salvation_date": string,"p_speaks_in_tongues": boolean,"p_speaks_in_tongues_date": string,"p_water_baptism": boolean,"p_water_baptism_date": string }; Returns: undefined
+                           },
+"unit_dashboard":
+{ Args: { "p_unit": string }; Returns: Json
                            },
 "values_in_action_counts":
 { Args: { "p_from": string,"p_to": string,"p_unit"?: string }; Returns: {

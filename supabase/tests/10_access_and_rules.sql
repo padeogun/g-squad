@@ -1909,6 +1909,32 @@ select test.throws(format($q$update public.assignments set project_id = (select 
                    'Q08: moving a slot to a project whose dates do not include it is refused');
 reset role;
 
+-- =====================================================================================
+-- Migration 20 (slice 3): dashboards.
+-- =====================================================================================
+select test.login('ul_a'); set role authenticated;
+select test.lives('select public.church_dashboard()', 'S3: a Unit Lead sees the church dashboard');
+select test.ok((select (public.church_dashboard() ->> 'volunteers')::int) >= 1, 'S3: the church dashboard counts volunteers');
+select test.ok(not (public.church_dashboard()::text ~* '(email|surname|first_name|salvation|baptism|note)'),
+               'S3: the church dashboard carries no names or personal fields');
+select test.lives(format('select public.unit_dashboard(%L)', test.id('A1')), 'S3: a Unit Lead sees their unit''s dashboard');
+select test.throws(format('select public.unit_dashboard(%L)', test.id('A2')), 'S3: a Unit Lead cannot see another unit''s dashboard');
+select test.ok(not (public.unit_dashboard(test.id('A1'))::text ~* '(email|surname|salvation|baptism|feeling|notes)'),
+               'S3: the unit dashboard carries no names, faith fields or one-to-one content');
+select test.ok(jsonb_array_length(public.unit_dashboard(test.id('A1')) -> 'members') >= 1, 'S3: the unit dashboard lists member figures');
+reset role;
+select test.login('editor'); set role authenticated;
+select test.throws('select public.church_dashboard()', 'S3: a newsletter editor does not see the church dashboard');
+select test.throws(format('select public.unit_dashboard(%L)', test.id('A1')), 'S3: ... nor a unit dashboard');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.throws(format('select public.unit_dashboard(%L)', test.id('B1')), 'S3: no one sees another church''s unit');
+select test.lives(format('select public.unit_dashboard(%L)', test.id('A2')), 'S3: the Operations Lead sees any unit in their church');
+reset role;
+select test.ok(not has_function_privilege('anon', 'public.church_dashboard()', 'execute')
+               and not has_function_privilege('anon', 'public.unit_dashboard(uuid)', 'execute'),
+               'S3: neither dashboard is open to anon');
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;

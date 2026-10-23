@@ -26,7 +26,14 @@ export const NAV: NavGroup[] = [
   {
     label: 'Overview',
     items: [
-      { label: 'Dashboard', path: '/', slice: 3 },
+      { label: 'Dashboard', path: '/', slice: 3, built: true },
+      {
+        label: 'Capacity calendar',
+        path: '/capacity',
+        slice: 3,
+        built: true,
+        roles: ['resident_pastor', 'purpose_head', 'gsquad_coordinator', 'unit_lead', 'operations_lead'],
+      },
       { label: 'My Unit', path: '/my-unit', slice: 1, built: true },
     ],
   },
