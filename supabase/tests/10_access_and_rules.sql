@@ -2224,6 +2224,64 @@ select test.throws($q$update public.church_roles set name = 'Deputy Team Lead' w
                    'S13/S07: ... but it cannot be renamed to a default role''s name');
 reset role;
 
+-- ---------- Migration 23: bulk upload of members ----------
+select test.login('coord'); set role authenticated;
+select test.ok((public.import_members(format($j$[
+    {"row": 2, "person": {"first_name": "Bulk", "surname": "One", "email": "bulk.one@example.org"}, "unit_id": "%s",
+     "church_role_id": "%s"},
+    {"row": 3, "person": {"first_name": "Bulk", "surname": "Two"}, "unit_id": "%s",
+     "faith": {"water_baptism": true, "water_baptism_date": "2026-06-01"}}
+  ]$j$, test.id('A1'), (select id from public.church_roles where church_id = test.id('churchA') and default_key = 'member'), test.id('A2'))::jsonb) ->> 'added')::int = 2,
+  'M23: the G-Squad Coordinator uploads members into any team');
+select test.ok((select count(*) from public.people where surname in ('One', 'Two') and first_name = 'Bulk') = 2
+               and exists (select 1 from public.unit_memberships m join public.people p on p.id = m.person_id
+                           where p.surname = 'One' and m.unit_id = test.id('A1')),
+               'M23: ... each with their team membership');
+select test.lives(format('select * from public.get_person_faith(%L)', (select id from public.people where first_name = 'Bulk' and surname = 'Two')),
+                  'M23: ... and faith fields through the logged function');
+-- All or nothing: one bad row and nothing is saved, with the row named.
+select test.throws(format($q$select public.import_members('[
+    {"row": 2, "person": {"first_name": "Good", "surname": "Row"}, "unit_id": "%s"},
+    {"row": 3, "person": {"first_name": "", "surname": "Bad"}, "unit_id": "%s"}]'::jsonb)$q$, test.id('A1'), test.id('A1')),
+  'M23: a bad row stops the whole upload');
+select test.ok(not exists (select 1 from public.people where first_name = 'Good' and surname = 'Row'),
+               'M23: ... and the good rows are not saved');
+do $$
+declare d text;
+begin
+  perform public.import_members(format('[{"row": 7, "person": {"first_name": "X"}, "unit_id": "%s"}]', test.id('A1'))::jsonb);
+exception when others then
+  get stacked diagnostics d = pg_exception_detail;
+  perform test.ok((d::jsonb -> 0 ->> 'row')::int = 7, 'M23: the error lists the spreadsheet row that failed');
+end $$;
+select test.ok((public.import_members(format('[{"row": 2, "person": {"first_name": "Bulk", "surname": "Again", "email": "BULK.ONE@example.org"}, "unit_id": "%s"}]', test.id('A1'))::jsonb, true) ->> 'skipped')::int = 1,
+               'M23: someone already recorded (same email) is skipped when asked');
+select test.throws(format('select public.import_members(%L::jsonb)',
+                          (select jsonb_agg(jsonb_build_object('person', jsonb_build_object('first_name', 'N', 'surname', 'S' || g), 'unit_id', test.id('A1'))) from generate_series(1, 501) g)),
+                   'M23: at most 500 rows per upload');
+reset role;
+
+-- A Team Lead uploads into their own team only.
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$select public.import_members('[{"row": 2, "person": {"first_name": "Lead", "surname": "Upload"}, "unit_id": "%s"}]'::jsonb)$q$, test.id('A1')),
+                  'M23: a Team Lead uploads into their own team');
+select test.throws(format($q$select public.import_members('[{"row": 2, "person": {"first_name": "Other", "surname": "Team"}, "unit_id": "%s"}]'::jsonb)$q$, test.id('A2')),
+                   'M23: ... but not into another team');
+reset role;
+
+-- The Operations Lead uploads, but faith fields stay with the Coordinator and Team Lead.
+select test.login('ops'); set role authenticated;
+select test.throws(format($q$select public.import_members('[{"row": 2, "person": {"first_name": "Ops", "surname": "Faith"}, "unit_id": "%s", "faith": {"water_baptism": true}}]'::jsonb)$q$, test.id('A1')),
+                   'M23: the Operations Lead cannot upload faith fields');
+reset role;
+select test.login('editor'); set role authenticated;
+select test.throws(format($q$select public.import_members('[{"row": 2, "person": {"first_name": "No", "surname": "Right"}, "unit_id": "%s"}]'::jsonb)$q$, test.id('A1')),
+                   'M23: a newsletter editor cannot upload members');
+reset role;
+set role anon;
+select test.throws($q$select public.import_members('[]'::jsonb)$q$, 'M23: signed-out visitors cannot call the upload');
+reset role;
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;

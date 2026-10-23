@@ -191,7 +191,8 @@ function MemberFormInner({ person }: { person?: Person }) {
   const ro = !canEditRecord;
 
   // Unit for a NEW member: a Unit Lead picks one of their units; the Operations Lead any unit.
-  const unitChoices = (units.data ?? []).filter((u) => u.is_active && (isOps || myUnits.includes(u.id)));
+  // The Operations Lead and G-Squad Coordinator add to any unit (migration 23); a Team Lead to theirs.
+  const unitChoices = (units.data ?? []).filter((u) => u.is_active && (isOps || isCoordinator || myUnits.includes(u.id)));
   const [unitId, setUnitId] = useState(() => (myUnits.length === 1 ? myUnits[0] : ''));
   // SECURITY REVIEW FIX L05: for a new member, the faith panel is offered only when the chosen
   // unit is one this leader leads (an Operations Lead who also leads another unit could not
@@ -460,7 +461,7 @@ function MemberFormInner({ person }: { person?: Person }) {
             </div>
             {unitChoices.length === 0 && (
               <Notice tone="warn" title="No unit to add to">
-                {isOps ? 'Add units under Reference forms first.' : 'You are not the Team Lead of an active unit.'}
+                {isOps || isCoordinator ? 'Add units under Reference forms first.' : 'You are not the Team Lead of an active unit.'}
               </Notice>
             )}
           </Card>

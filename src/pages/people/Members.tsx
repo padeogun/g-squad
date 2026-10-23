@@ -25,8 +25,9 @@ export function Members() {
   const unitMap = byId(useUnits().data);
   const roleMap = byId(useChurchRoles().data);
   const [query, setQuery] = useState('');
-  // Unit Leads and the Operations Lead add members (people_insert policy).
-  const canAdd = hasRole(me.data, 'unit_lead', 'operations_lead');
+  // Team Leads, the Operations Lead and the G-Squad Coordinator add members, one at a time or
+  // by uploading a spreadsheet (people_insert policy, migration 23).
+  const canAdd = hasRole(me.data, 'unit_lead', 'operations_lead', 'gsquad_coordinator');
 
   // Each person's live memberships, as "Production · Camera (lead)" labels.
   const unitsByPerson = useMemo(() => {
@@ -65,9 +66,14 @@ export function Members() {
         title="Members"
         action={
           canAdd ? (
-            <Link to="/members/new" className="tec-btn tec-btn-primary tec-btn-sm">
-              Add a member
-            </Link>
+            <span className="app-inline-row">
+              <Link to="/members/import" className="tec-btn tec-btn-secondary tec-btn-sm">
+                Upload members
+              </Link>
+              <Link to="/members/new" className="tec-btn tec-btn-primary tec-btn-sm">
+                Add a member
+              </Link>
+            </span>
           ) : undefined
         }
       >
