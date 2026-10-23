@@ -1935,6 +1935,81 @@ select test.ok(not has_function_privilege('anon', 'public.church_dashboard()', '
                and not has_function_privilege('anon', 'public.unit_dashboard(uuid)', 'execute'),
                'S3: neither dashboard is open to anon');
 
+-- Security review 12.
+-- R01: one-to-one dates and counts follow the one-to-ones read rule (writer, the unit's Purpose
+-- Head, Coordinator, Resident Pastor). The Operations Lead cannot read one-to-ones, so the
+-- dashboards must not tell them when (or whether) one was held.
+-- (Earlier checks anonymised p1 and p3, which removed their one-to-ones, so ul_a writes a
+-- fresh one for a current member of A1.)
+insert into test.ids
+select 's3_member', m.person_id from public.unit_memberships m join public.people p on p.id = m.person_id
+where m.unit_id = test.id('A1') and m.status = 'active' and p.status = 'active' and p.anonymised_at is null
+order by p.first_name limit 1;
+select test.login('ul_a'); set role authenticated;
+select test.lives(format('insert into public.one_to_ones (person_id, unit_id, quarter_start, held_on, feeling) values (%L, %L, %L, %L, %L)',
+                         test.id('s3_member'), test.id('A1'), date_trunc('quarter', current_date)::date, current_date, 'doing_well'),
+                  'S3/R01 fixture: the Unit Lead records a one-to-one');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.ok(not exists (select 1 from jsonb_array_elements(public.unit_dashboard(test.id('A1')) -> 'members') m
+                           where m ->> 'last_one_to_one' is not null),
+               'S3/R01: the Operations Lead sees no one-to-one dates on a unit dashboard');
+select test.ok(public.unit_dashboard(test.id('A1')) -> 'one_to_ones_quarter' = 'null'::jsonb
+               and public.unit_dashboard(test.id('A1')) -> 'one_to_ones_visible' = 'false'::jsonb,
+               'S3/R01: ... nor a one-to-one count (null, and marked not visible, rather than a misleading 0)');
+select test.ok(not exists (select 1 from jsonb_array_elements(public.church_dashboard() -> 'units_table') u
+                           where u -> 'one_to_ones_quarter' <> 'null'::jsonb),
+               'S3/R01: ... nor one-to-one counts per unit on the church dashboard');
+reset role;
+-- A second Unit Lead of A1 who did not write the one-to-one cannot read it, so sees no date.
+select test.login('nobody');   -- the fixture change below is a system change, not a user's
+insert into public.role_assignments (church_id, user_id, role, unit_id) values (test.id('churchA'), test.id('ul_b'), 'unit_lead', test.id('A1'));
+select test.login('ul_b'); set role authenticated;
+select test.ok(not exists (select 1 from jsonb_array_elements(public.unit_dashboard(test.id('A1')) -> 'members') m
+                           where m ->> 'last_one_to_one' is not null)
+               and (public.unit_dashboard(test.id('A1')) ->> 'one_to_ones_quarter')::int = 0,
+               'S3/R01: a co-lead sees only the one-to-ones they wrote themselves');
+reset role;
+select test.login('nobody');
+delete from public.role_assignments where user_id = test.id('ul_b') and unit_id = test.id('A1');
+select test.login('ul_a'); set role authenticated;
+select test.ok(exists (select 1 from jsonb_array_elements(public.unit_dashboard(test.id('A1')) -> 'members') m
+                       where m ->> 'person_id' = test.id('s3_member')::text and m ->> 'last_one_to_one' is not null)
+               and (public.unit_dashboard(test.id('A1')) ->> 'one_to_ones_quarter')::int >= 1,
+               'S3/R01: the writing Unit Lead still sees their one-to-one date and count');
+reset role;
+select test.login('coord'); set role authenticated;
+select test.ok((select (u ->> 'one_to_ones_quarter')::int from jsonb_array_elements(public.church_dashboard() -> 'units_table') u
+                where u ->> 'unit_id' = test.id('A1')::text) >= 1,
+               'S3/R01: the G-Squad Coordinator still sees one-to-one counts per unit');
+reset role;
+select test.login('ph'); set role authenticated;
+select test.ok((select u -> 'one_to_ones_quarter' from jsonb_array_elements(public.church_dashboard() -> 'units_table') u
+                where u ->> 'unit_id' = test.id('A2')::text) = 'null'::jsonb
+               and (select (u ->> 'one_to_ones_quarter')::int from jsonb_array_elements(public.church_dashboard() -> 'units_table') u
+                    where u ->> 'unit_id' = test.id('A1')::text) >= 1,
+               'S3/R01: a Purpose Head sees one-to-one counts for their own units only');
+reset role;
+-- R02: the new helpers bypass row-level security and take any id, so only the dashboards
+-- (running as the owner) may call them.
+select test.ok(not has_function_privilege('authenticated', 'app.engagement_of(uuid)', 'execute')
+               and not has_function_privilege('authenticated', 'app.unit_open_slots(uuid, date, date)', 'execute'),
+               'S3/R02: signed-in users cannot call the dashboard helpers directly');
+select test.login('nobody');
+-- R03: the church dashboard counts open check-ins only for current members (not anonymised
+-- or left), the same people as every other figure on it.
+insert into public.checkin_flags (church_id, person_id, source, raised_by)
+select test.id('churchA'), p.id, 'manual', test.id('ops') from public.people p
+where p.church_id = test.id('churchA') and p.status = 'left' and p.anonymised_at is null limit 1;
+select test.login('ops'); set role authenticated;
+select test.ok((public.church_dashboard() ->> 'checkins_open')::int
+               = (select count(*) from public.checkin_flags f join public.people p on p.id = f.person_id
+                  where p.church_id = test.id('churchA') and f.status = 'open' and p.status <> 'left' and p.anonymised_at is null)
+               and exists (select 1 from public.checkin_flags f join public.people p on p.id = f.person_id
+                           where f.status = 'open' and p.status = 'left'),
+               'S3/R03: check-ins of people who have left are not counted');
+reset role;
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;

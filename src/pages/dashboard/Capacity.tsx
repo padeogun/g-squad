@@ -7,15 +7,12 @@
 import { useState } from 'react';
 import { TEC } from '../../design-system';
 import { friendlyError } from '../../data/errors';
-import { useCapacity } from '../../data/dashboards';
+import { CAPACITY_ROLES, useCapacity } from '../../data/dashboards';
 import { hasRole, useMe } from '../../auth/useMe';
 
 const { SectionHeading, Card, Notice, Button } = TEC;
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-// Mirrors public.capacity_calendar's audience.
-const CAPACITY_ROLES = ['resident_pastor', 'purpose_head', 'gsquad_coordinator', 'unit_lead', 'operations_lead'] as const;
 
 export function Capacity() {
   const me = useMe();
@@ -31,6 +28,8 @@ export function Capacity() {
     byUnit.set(r.unit_name, row);
   }
 
+  if (me.isPending) return <p>Loading…</p>;
+
   return (
     <>
       <SectionHeading eyebrow="Planning" title="Capacity calendar" rule>
@@ -43,10 +42,10 @@ export function Capacity() {
           title={String(year)}
           action={
             <span className="tec-row" style={{ padding: 0 }}>
-              <Button size="sm" variant="quiet" onClick={() => setYear(year - 1)}>
+              <Button size="sm" variant="quiet" aria-label={`Show ${year - 1}`} onClick={() => setYear(year - 1)}>
                 ‹ {year - 1}
               </Button>
-              <Button size="sm" variant="quiet" onClick={() => setYear(year + 1)}>
+              <Button size="sm" variant="quiet" aria-label={`Show ${year + 1}`} onClick={() => setYear(year + 1)}>
                 {year + 1} ›
               </Button>
             </span>

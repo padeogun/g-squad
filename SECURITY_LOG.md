@@ -607,3 +607,51 @@ Independent review of the two commits on `slice-2-sundays` that are not on `main
 4. **Unit Leads and Purpose Heads see cross-unit counts** (slots this month, serving that day) for their own members through `rota_candidates`. Needed for R1; record it in the DPIA.
 5. **PDF font:** Q14 makes names readable but drops Yoruba under-dots. Embedding a Unicode font (for example Noto Sans, served from the site so the CSP needs no change) would print them exactly.
 6. **Sample data only** until the DPIA is signed (unchanged).
+
+## Review 12 — Slice 3: dashboards and capacity calendar
+
+Independent review of the latest commit on `slice-3-dashboards` ("Slice 3: dashboards and capacity calendar"). Every database fix is marked `SECURITY REVIEW 12 (Rnn)` in an inline comment, and front-end fixes name their finding. Migration 20 had not been applied anywhere, so the database fixes went straight into it.
+
+### Scope
+
+- `supabase/migrations/20261023002000_dashboards.sql`: `app.engagement_of`, `app.unit_open_slots`, `public.church_dashboard()` and `public.unit_dashboard(p_unit)`; read against the access helpers (`can_read_person` as last changed in migration 16, `can_read_one_to_one`, `is_unit_lead_of`, `is_purpose_head_of_unit`, `is_church_wide_reader`), `capacity_calendar`, `v_engagement`, and the people, memberships, holidays, check-in flags, one-to-ones, assignments, inputs and grid policies (migrations 1, 3, 4, 6, 7, 16, 18).
+- `src/data/dashboards.ts`, `src/pages/dashboard/{ChurchDashboard,Capacity,EngagementBar}.tsx`, `src/pages/Home.tsx`, `src/pages/people/MyUnit.tsx`, the router and navigation, the new CSS, and the "S3:" database checks.
+- Both dashboards were called as the fixture Resident Pastor, Operations Lead, Coordinator, Purpose Head, Unit Leads (including a second lead of the same unit), newsletter editor and the other church's Operations Lead on the local test database.
+
+### Findings
+
+| ID | Severity | Finding | Fix | File |
+|----|----------|---------|-----|------|
+| R01 | High | **The dashboards told people about one-to-ones they may not read.** One-to-ones are read only by the writing Unit Lead, the unit's Purpose Head, the Coordinator and the Resident Pastor; the Operations Lead cannot read them (decision of 22 Oct 2026). `unit_dashboard` gave the Operations Lead each member's last one-to-one date and the unit's count this quarter, and gave a second lead of the same unit the dates of one-to-ones written by the other lead. `church_dashboard` gave every dashboard role (Unit Leads of other units, the Operations Lead, TECi Coordinator, pastoral lead) the count for every unit. | New helper `app.one_to_ones_seen(unit, quarter)` counts only one-to-ones the caller may read and returns null when they have no read right in that unit. `last_one_to_one` applies `app.can_read_one_to_one` to each row. `unit_dashboard` also returns `one_to_ones_visible`, so screens say "Not shown to your role" instead of a misleading 0. 7 checks. | migration 20, `dashboards.ts`, `ChurchDashboard.tsx`, `MyUnit.tsx` |
+| R02 | Low | **The two new helpers bypassed row-level security for any id.** `app.engagement_of` and `app.unit_open_slots` were SECURITY DEFINER with no church check and executable by every signed-in user. The `app` schema is not exposed through the API, so the browser could not reach them, but anything later calling them in an invoker context (a view, a policy) would have leaked across churches. | Both are now SECURITY INVOKER and executable only by the owner and `service_role`; the dashboards, which run as the owner, still use them. 1 check. | migration 20 |
+| R03 | Low | **The church dashboard's "Check-ins open" counted flags of people who had left or been anonymised**, unlike every other figure on the page. | Counts flags of current members only (the same `ppl` set). 1 check. | migration 20 |
+| R04 | Low | **Controls the database refuses, and silent failures, on the Church Dashboard.** The TECi Coordinator and pastoral lead see the dashboard but not the capacity calendar, so the shortfalls card always called `capacity_calendar`, was refused and showed an empty card. Errors loading the outstanding inputs or the capacity figures were not shown at all, and the inputs list was fetched whether or not the dashboard was shown. | One shared `CAPACITY_ROLES` list (mirrors `capacity_calendar`) for the page, navigation and dashboard; the shortfalls card shows only for those roles. Both lists now show their error. The inputs query runs only for dashboard roles. | `dashboards.ts`, `ChurchDashboard.tsx`, `Capacity.tsx` |
+| R05 | Low | **A failure looked like data on My Unit.** While the unit figures were loading, or if the call failed, every member's last one-to-one read "None yet", which a leader could take as "no one-to-one held". | Shows "–" until the database has answered; "None yet" only when it says so. A loading line and a titled error notice for the figures. The column is now "Your last one-to-one" and the one-to-ones tile appears only when the caller may read them (R01). | `MyUnit.tsx` |
+| R06 | Low | Accessibility and loading: the capacity calendar's year buttons read as "‹ 2025" to a screen reader; Home and the capacity page showed the welcome page or "not for your role" while the leader's roles were still loading. | Year buttons are labelled "Show 2025" and so on. Both pages wait for the roles. | `Capacity.tsx`, `Home.tsx` |
+
+### Checked and found sound
+
+- **SECURITY DEFINER hygiene.** `church_dashboard` and `unit_dashboard` have `search_path = ''`, every name schema-qualified, execute revoked from `public` and `anon` (the existing "S3" check), and both refuse a caller with no active account (`current_church_id()` null).
+- **Church isolation.** Every table read in both functions is filtered by the caller's church, directly or through the unit; another church's unit is refused (existing check). `capacity_calendar` is unchanged.
+- **`unit_dashboard` audience** is exactly the unit's lead, its Purpose Head, the Resident Pastor, the Operations Lead and the Coordinator; a Unit Lead of another unit and a newsletter editor are refused.
+- **Per-member figures stay within what the caller can already see.** The member list is the unit's live (not ended) memberships of current, non-anonymised people, the same set `can_read_person` gives a Unit Lead or Purpose Head through a current membership; the three church-wide roles can already read everyone. Holiday dates match `holidays_read` (`can_read_person`), and the open check-in count matches `flags_read`. No names are returned; the screen joins them through row-level security.
+- **No faith or pastoral data.** Neither function touches `person_faith`, `pastoral_notes` or one-to-one content (feeling, notes, values). Check-in flags appear only as counts, and flags carry no reason.
+- **Church dashboard is counts only**: no person ids, names, emails or birthdays. Unit and purpose names, and the Outstanding inputs list (input title, project, the leader it is owed by), come from `v_project_inputs`, `projects` and `app_users`, which every signed-in leader in the church can already read. `useOutstandingInputs` reads nothing else.
+- **ASHLIE (R20):** no values appear on either dashboard, so nothing is scored, rated or ranked.
+- **Engagement bar**: the counts are printed in the legend and the bar is hidden from screen readers; the capacity table prints every number with its sign, so colour is never the only signal.
+- **Navigation** shows the capacity calendar only to the roles the database allows, and the router adds no route that bypasses a database check.
+
+### Test results
+
+- `scripts/db-test.sh` (local Postgres 16): **425 of 425 checks passed** (415 before; 10 added: one fixture one-to-one and 9 checks for R01 to R03). The 7 checks that test the fixes were confirmed to fail against the migration as committed; the other 2 confirm the writing lead and the Coordinator still see their figures.
+- `scripts/db-types.sh`: `src/lib/database.types.ts` regenerated; no change (no public signatures changed).
+- `npm run check`: lint clean, **73 of 73 unit tests pass**, build succeeds. The main chunk is still over Vite's 500 kB warning, which does not come from this slice.
+
+### Residual risks and actions for TEC
+
+1. **Small numbers.** The church dashboard shows every unit's headcount and how many are Active to every dashboard role, including Unit Leads of other units. In a unit of one or two people this can identify a person who has not served lately. Engagement is not special-category data, but decide whether small units should show "fewer than 3" instead, and record it in the DPIA.
+2. **Dashboard audience.** The spec defines the Leadership group as the Resident Pastor, Purpose Heads and Unit Leads. The function also admits the Coordinator, Operations Lead, TECi Coordinator and pastoral lead. Confirm this wider audience.
+3. **Cross-unit slot counts.** "Slots this month" on My Unit counts a member's slots in all their units (needed for the serving limit, R1). As in review 11, record it in the DPIA.
+4. **Older helpers.** Earlier `app` helpers (for example `slots_in_month`, `personal_limit`, `unit_capacity`) are still SECURITY DEFINER and executable by signed-in users. They are not reachable through the API; consider giving them the R02 treatment in a future migration.
+5. **One-to-one counts are per writer.** A unit with two leads shows each lead only their own one-to-ones. If co-leads should see each other's, that is a change to `can_read_one_to_one`, not to the dashboards.
+6. **Sample data only** until the DPIA is signed (unchanged).

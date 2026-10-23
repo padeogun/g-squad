@@ -11,6 +11,8 @@ const { SectionHeading, Card, Notice, ValuesStrip } = TEC;
 
 export function Home() {
   const me = useMe();
+  // Wait for the roles, so a leader doesn't see the welcome page flash first.
+  if (me.isPending) return <p>Loading…</p>;
   // The dashboard roles see the Church Dashboard as their home page.
   if (hasRole(me.data, ...DASHBOARD_ROLES)) return <ChurchDashboard />;
   return <Welcome />;

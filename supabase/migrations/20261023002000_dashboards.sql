@@ -12,21 +12,26 @@
 -- returns only what its audience may know.
 -- Sensitive data stays out: no faith fields, no pastoral notes, no one-to-one content, and
 -- check-in flags only as counts (never reasons, which flags don't carry anyway).
+-- SECURITY REVIEW 12 (R01): one-to-one dates and counts follow the one-to-ones read rule
+-- (app.can_read_one_to_one: the writing lead, the unit's Purpose Head, the Coordinator and the
+-- Resident Pastor). The Operations Lead, and leaders of other units, get null, not 0.
+-- SECURITY REVIEW 12 (R02): the two helpers below run as the caller (security invoker) and
+-- are not callable by signed-in users; only the dashboards, which run as the owner, use them.
 -- =====================================================================================
 
 -- Live engagement of one person, as v_engagement defines it (reused below without RLS).
 create or replace function app.engagement_of(p_person uuid) returns text
-language sql stable security definer set search_path = ''
+language sql stable security invoker set search_path = ''
 as $$
   select e.engagement from public.v_engagement e where e.person_id = p_person
 $$;
-revoke all on function app.engagement_of(uuid) from public, anon;
-grant execute on function app.engagement_of(uuid) to authenticated, service_role;
+revoke all on function app.engagement_of(uuid) from public, anon, authenticated;
+grant execute on function app.engagement_of(uuid) to service_role;
 
 -- Open slots a unit has between two dates: each Sunday/project's demand minus the live
 -- slots filled for the same project and date (never below zero per demand row).
 create or replace function app.unit_open_slots(p_unit uuid, p_from date, p_to date) returns integer
-language sql stable security definer set search_path = ''
+language sql stable security invoker set search_path = ''
 as $$
   select coalesce(sum(greatest(d.need - coalesce(f.filled, 0), 0)), 0)::int
   from (
@@ -43,8 +48,27 @@ as $$
     group by a.project_id, a.serve_date
   ) f on f.project_id = d.project_id and f.serve_date = d.on_date
 $$;
-revoke all on function app.unit_open_slots(uuid, date, date) from public, anon;
-grant execute on function app.unit_open_slots(uuid, date, date) to authenticated, service_role;
+revoke all on function app.unit_open_slots(uuid, date, date) from public, anon, authenticated;
+grant execute on function app.unit_open_slots(uuid, date, date) to service_role;
+
+-- One-to-ones held in a unit this quarter, counting only those the caller may read
+-- (app.can_read_one_to_one). Null when the caller has no read right in this unit at all
+-- (not its lead or Purpose Head, nor Coordinator or Resident Pastor), so a screen can say
+-- "not shown" instead of a misleading 0. Called only from the dashboards below.
+create or replace function app.one_to_ones_seen(p_unit uuid, p_quarter date) returns integer
+language sql stable security invoker set search_path = ''
+as $$
+  select case
+    when app.has_any_role(array['resident_pastor','gsquad_coordinator']::public.app_role[])
+      or app.is_purpose_head_of_unit(p_unit) or app.is_unit_lead_of(p_unit)
+    then (select count(*)::int from public.one_to_ones o
+          where o.unit_id = p_unit and o.quarter_start = p_quarter
+            and o.church_id = app.current_church_id()
+            and app.can_read_one_to_one(o.unit_id, o.lead_user_id))
+  end
+$$;
+revoke all on function app.one_to_ones_seen(uuid, date) from public, anon, authenticated;
+grant execute on function app.one_to_ones_seen(uuid, date) to service_role;
 
 -- -------------------------------------------------------------------------------------
 -- Church Dashboard: totals only.
@@ -98,7 +122,8 @@ begin
         'paused',     (select count(*) from ppl where eng = 'paused')),
     'over_limit', (select count(*) from ppl where ppl.status = 'active'
                    and app.slots_in_month(ppl.id, v_today) > app.personal_limit(ppl.id)),
-    'checkins_open', (select count(*) from public.checkin_flags f where f.church_id = v_church and f.status = 'open'),
+    -- SECURITY REVIEW 12 (R03): current members only, like every other figure here.
+    'checkins_open', (select count(*) from public.checkin_flags f join ppl on ppl.id = f.person_id where f.status = 'open'),
     'inputs_outstanding', (select count(*) from public.project_inputs i where i.church_id = v_church and i.status <> 'received'),
     'inputs_overdue', (select count(*) from public.project_inputs i
                        where i.church_id = v_church and i.status <> 'received' and i.due_on < v_today),
@@ -110,8 +135,7 @@ begin
                  'active', (select count(*) from live join ppl on ppl.id = live.person_id
                             where live.unit_id = u.id and ppl.eng = 'active'),
                  'open_8_weeks', app.unit_open_slots(u.id, v_today, v_today + 56),
-                 'one_to_ones_quarter', (select count(*) from public.one_to_ones o
-                                         where o.unit_id = u.id and o.quarter_start = v_q))
+                 'one_to_ones_quarter', app.one_to_ones_seen(u.id, v_q))
                order by u.name)
         from public.units u left join public.purposes pu on pu.id = u.purpose_id
         where u.church_id = v_church and u.is_active), '[]'::jsonb),
@@ -163,7 +187,8 @@ begin
         'inactive',   (select count(*) from team where eng = 'inactive'),
         'paused',     (select count(*) from team where eng = 'paused')),
     'open_8_weeks', app.unit_open_slots(p_unit, v_today, v_today + 56),
-    'one_to_ones_quarter', (select count(*) from public.one_to_ones o where o.unit_id = p_unit and o.quarter_start = v_q),
+    'one_to_ones_quarter', app.one_to_ones_seen(p_unit, v_q),
+    'one_to_ones_visible', app.one_to_ones_seen(p_unit, v_q) is not null,
     'checkins_open', (select count(*) from public.checkin_flags f join team t on t.person_id = f.person_id where f.status = 'open'),
     -- Leadership pipeline: how many are at each stage (counts, in the stages' own order).
     'pipeline', coalesce((
@@ -180,7 +205,8 @@ begin
                  'slot_limit', app.personal_limit(t.person_id),
                  'holiday_from', h.starts_on, 'holiday_to', h.ends_on,
                  'last_one_to_one', (select max(o.held_on) from public.one_to_ones o
-                                     where o.person_id = t.person_id and o.unit_id = p_unit)))
+                                     where o.person_id = t.person_id and o.unit_id = p_unit
+                                       and app.can_read_one_to_one(o.unit_id, o.lead_user_id))))
         from team t
         left join lateral (   -- current or next holiday
           select hh.starts_on, hh.ends_on from public.holidays hh

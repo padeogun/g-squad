@@ -92,7 +92,12 @@ function Team({ unitId, target }: { unitId: string; target: number | null }) {
 
   return (
     <>
-      {dash.error && <Notice tone="danger">{friendlyError(dash.error)}</Notice>}
+      {dash.isPending && <p>Loading unit figures…</p>}
+      {dash.error && (
+        <Notice tone="danger" title="Unit figures could not be loaded">
+          {friendlyError(dash.error)}
+        </Notice>
+      )}
       {dash.data && (
         <>
           <div className="tec-stats">
@@ -109,7 +114,10 @@ function Team({ unitId, target }: { unitId: string; target: number | null }) {
               note="slots still unfilled"
               tone={dash.data.open_8_weeks ? 'danger' : 'default'}
             />
-            <StatTile label="One-to-ones" value={dash.data.one_to_ones_quarter} note={`this quarter, of ${dash.data.headcount}`} />
+            {/* Only one-to-ones this leader may read (the ones they wrote; R01). */}
+            {dash.data.one_to_ones_visible && (
+              <StatTile label="One-to-ones" value={dash.data.one_to_ones_quarter ?? 0} note={`yours this quarter, of ${dash.data.headcount}`} />
+            )}
             <StatTile label="Check-ins raised" value={dash.data.checkins_open} note="open, needing a conversation" />
           </div>
           <div className="app-card-grid">
@@ -159,7 +167,7 @@ function Team({ unitId, target }: { unitId: string; target: number | null }) {
               { key: 'slots', label: 'Slots this month', align: 'right' },
               { key: 'engagement', label: 'Engagement' },
               { key: 'holiday', label: 'Holiday' },
-              { key: 'oto', label: 'Last one-to-one' },
+              { key: 'oto', label: 'Your last one-to-one' },
             ]}
             rows={team.map((m) => {
               const p = personMap.get(m.person_id);
@@ -218,7 +226,9 @@ function Team({ unitId, target }: { unitId: string; target: number | null }) {
                 ),
                 engagement: f ? ENGAGEMENT_LABELS[f.engagement] : '–',
                 holiday: f?.holiday_from ? `${shortDate(f.holiday_from)} – ${shortDate(f.holiday_to ?? f.holiday_from)}` : '–',
-                oto: f?.last_one_to_one ? shortDate(f.last_one_to_one) : 'None yet',
+                // '–' while the figures are missing (loading or refused), so an error never reads
+                // as "no one-to-one held"; 'None yet' only when the database says so (R05).
+                oto: !f ? '–' : f.last_one_to_one ? shortDate(f.last_one_to_one) : 'None yet',
               };
             })}
           />

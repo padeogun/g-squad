@@ -35,7 +35,8 @@ export interface ChurchDashboard {
     target: number | null;
     active: number;
     open_8_weeks: number;
-    one_to_ones_quarter: number;
+    // Null when the caller may not read this unit's one-to-ones (security review 12, R01).
+    one_to_ones_quarter: number | null;
   }[];
   next_sunday: {
     grid_id: string;
@@ -53,7 +54,10 @@ export interface UnitDashboard {
   target: number | null;
   engagement: EngagementMix;
   open_8_weeks: number;
-  one_to_ones_quarter: number;
+  // Only one-to-ones the caller may read; null (and visible false) when they may read none
+  // in this unit, e.g. the Operations Lead (security review 12, R01).
+  one_to_ones_quarter: number | null;
+  one_to_ones_visible: boolean;
   checkins_open: number;
   pipeline: { stage: string; count: number }[];
   members: {
@@ -103,9 +107,10 @@ export const useCapacity = (year: number, enabled: boolean) =>
   });
 
 // Inputs still owed on projects, oldest due first (Church Dashboard list).
-export const useOutstandingInputs = () =>
+export const useOutstandingInputs = (enabled: boolean) =>
   useQuery({
     queryKey: ['inputs', 'outstanding'],
+    enabled,
     queryFn: async () => {
       const { data, error } = await supabase
         .from('v_project_inputs')
@@ -143,6 +148,11 @@ export const DASHBOARD_ROLES = [
   'teci_coordinator',
   'pastoral_lead',
 ] as const;
+
+// Roles that see the capacity calendar (mirrors public.capacity_calendar(): narrower than the
+// dashboard roles, so the TECi Coordinator and pastoral lead don't get a call the database
+// refuses; security review 12, R04).
+export const CAPACITY_ROLES = ['resident_pastor', 'purpose_head', 'gsquad_coordinator', 'unit_lead', 'operations_lead'] as const;
 
 // Months with a shortfall for each unit: { unitName -> ['Mar', 'Apr'] } (dashboard summary).
 export function shortfalls(rows: { unit_name: string; month: string; spare: number }[]): Map<string, string[]> {

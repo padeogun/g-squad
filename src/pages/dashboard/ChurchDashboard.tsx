@@ -8,7 +8,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { TEC } from '../../design-system';
 import { friendlyError } from '../../data/errors';
-import { DASHBOARD_ROLES, shortfalls, useCapacity, useChurchDashboard, useOutstandingInputs } from '../../data/dashboards';
+import { CAPACITY_ROLES, DASHBOARD_ROLES, shortfalls, useCapacity, useChurchDashboard, useOutstandingInputs } from '../../data/dashboards';
 import { longDate, shortDate } from '../../data/sundays';
 import { hasRole, useMe } from '../../auth/useMe';
 import { GridStatus } from '../sunday/GridStatus';
@@ -19,11 +19,13 @@ const { SectionHeading, Card, Notice, StatTile, DataTable, Chip } = TEC;
 export function ChurchDashboard() {
   const me = useMe();
   const allowed = hasRole(me.data, ...DASHBOARD_ROLES);
+  // The capacity calendar has a narrower audience than the dashboard (R04).
+  const seesCapacity = hasRole(me.data, ...CAPACITY_ROLES);
   const dash = useChurchDashboard(allowed);
   // Read once per visit (render must not read the clock directly).
   const [year] = useState(() => new Date().getFullYear());
-  const capacity = useCapacity(year + 1, allowed);
-  const inputs = useOutstandingInputs();
+  const capacity = useCapacity(year + 1, seesCapacity);
+  const inputs = useOutstandingInputs(allowed);
 
   if (!allowed) return null; // the Home page shows the welcome instead
   if (dash.isPending) return <p>Loading…</p>;
@@ -91,7 +93,13 @@ export function ChurchDashboard() {
               head: u.target ? `${u.headcount} / ${u.target}` : String(u.headcount),
               active: String(u.active),
               open: u.open_8_weeks ? <Chip tone="warn">{u.open_8_weeks} unfilled</Chip> : <Chip tone="ok">Covered</Chip>,
-              oto: `${u.one_to_ones_quarter} of ${u.headcount}`,
+              // Null = not this leader's to see (R01); say so rather than show a 0.
+              oto:
+                u.one_to_ones_quarter === null ? (
+                  <span className="type-caption">Not shown to your role</span>
+                ) : (
+                  `${u.one_to_ones_quarter} of ${u.headcount}`
+                ),
             }))}
           />
         )}
@@ -100,6 +108,7 @@ export function ChurchDashboard() {
       <div className="app-card-grid">
         <Card title="Outstanding project inputs">
           {inputs.isPending && <p>Loading…</p>}
+          {inputs.error && <Notice tone="danger">{friendlyError(inputs.error)}</Notice>}
           {inputs.data && inputs.data.length === 0 && <p>Nothing outstanding.</p>}
           {inputs.data && inputs.data.length > 0 && (
             <ul className="app-candidates">
@@ -115,20 +124,23 @@ export function ChurchDashboard() {
             </ul>
           )}
         </Card>
-        <Card title={`${year + 1} shortfalls`} action={<Link to="/capacity">Capacity calendar</Link>}>
-          {capacity.isPending && <p>Loading…</p>}
-          {capacity.data && gaps.size === 0 && <p>No unit is short in any month of {year + 1} on current plans.</p>}
-          {gaps.size > 0 && (
-            <ul className="app-candidates">
-              {[...gaps].map(([unit, months]) => (
-                <li key={unit}>
-                  <strong>{unit}</strong>
-                  <span>{months.join(', ')}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
+        {seesCapacity && (
+          <Card title={`${year + 1} shortfalls`} action={<Link to="/capacity">Capacity calendar</Link>}>
+            {capacity.isPending && <p>Loading…</p>}
+            {capacity.error && <Notice tone="danger">{friendlyError(capacity.error)}</Notice>}
+            {capacity.data && gaps.size === 0 && <p>No unit is short in any month of {year + 1} on current plans.</p>}
+            {gaps.size > 0 && (
+              <ul className="app-candidates">
+                {[...gaps].map(([unit, months]) => (
+                  <li key={unit}>
+                    <strong>{unit}</strong>
+                    <span>{months.join(', ')}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        )}
       </div>
     </>
   );
