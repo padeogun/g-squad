@@ -144,6 +144,8 @@ declare
   v_errors jsonb := '[]'::jsonb;
   v_added int := 0;
   v_skipped int := 0;
+  v_row int;
+  v_id uuid;
 begin
   if p_rows is null or jsonb_typeof(p_rows) <> 'array' or jsonb_array_length(p_rows) = 0 then
     raise exception 'There are no members to import' using errcode = '22023';
@@ -154,17 +156,35 @@ begin
 
   for r in select value from jsonb_array_elements(p_rows) loop
     i := i + 1;
+    -- SECURITY REVIEW 14 (T03): the spreadsheet row number is worked out here, outside the
+    -- exception handler. It used to be cast inside the handler, where an error is not caught:
+    -- a "row" of 2.5 or 1e12 aborted the whole call with a bare cast error instead of the row
+    -- list. Anything that is not a whole number from 1 to 1,048,576 (Excel's last row) falls
+    -- back to the position in the list.
+    -- (Nested CASE, because AND does not promise to test the type before the cast.)
+    v_row := coalesce(
+      case when jsonb_typeof(r) = 'object' and jsonb_typeof(r->'row') = 'number' then
+        case when (r->>'row')::numeric between 1 and 1048576
+                  and (r->>'row')::numeric = trunc((r->>'row')::numeric)
+             then (r->>'row')::numeric::int end
+      end, i);
     begin
       if jsonb_typeof(r) <> 'object' or nullif(r->>'unit_id', '') is null then
         raise exception 'Choose the unit they are joining' using errcode = '22023';
       end if;
-      perform public.create_member(
+      v_id := public.create_member(
         r->'person',
         (r->>'unit_id')::uuid,
         nullif(r->>'church_role_id', '')::uuid,
         false,
         nullif(r->>'leadership_stage_id', '')::uuid,
         case when jsonb_typeof(r->'faith') = 'object' then r->'faith' end);
+      -- SECURITY REVIEW 14 (T01): people and memberships have no audit trigger, so a bulk upload
+      -- of up to 500 people left no trace in audit_log beyond people.created_by (faith writes
+      -- were audited by their own trigger). One row per person added: who, when, which record
+      -- and which unit; no personal data. Undone with the rest if the upload fails.
+      perform app.audit('import_member', 'people', v_id,
+                        jsonb_build_object('unit_id', r->>'unit_id', 'row', v_row));
       v_added := v_added + 1;
     exception when others then
       -- "Already recorded" (same email) is skipped when asked; create_member raises it without
@@ -173,7 +193,7 @@ begin
         v_skipped := v_skipped + 1;
       else
         v_errors := v_errors || jsonb_build_object(
-          'row', coalesce(case when jsonb_typeof(r->'row') = 'number' then (r->>'row')::int end, i),
+          'row', v_row,
           'message', left(sqlerrm, 300));
       end if;
     end;

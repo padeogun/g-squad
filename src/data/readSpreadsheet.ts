@@ -14,9 +14,12 @@ export async function readSpreadsheet(file: File): Promise<Cell[][]> {
   if (file.size > MAX_FILE_BYTES) throw new Error('The file is larger than 2 MB. Split it into smaller files.');
   const name = file.name.toLowerCase();
   if (name.endsWith('.xlsx')) {
-    const { readSheet } = await import('read-excel-file/browser');
+    // SECURITY REVIEW 14 (T02, T04): checked and re-packed first, so a hostile file can't
+    // freeze the tab and the library never needs a web worker (blocked by our CSP).
+    const [{ prepareXlsx }, { readSheet }] = await Promise.all([import('./xlsxSafety'), import('read-excel-file/browser')]);
+    const safe = prepareXlsx(new Uint8Array(await file.arrayBuffer()));
     // The first sheet; cells come back as text, numbers, true/false or dates.
-    return (await readSheet(file)) as unknown as Cell[][];
+    return (await readSheet(safe)) as unknown as Cell[][];
   }
   if (name.endsWith('.csv')) {
     const Papa = (await import('papaparse')).default;

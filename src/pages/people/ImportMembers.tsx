@@ -37,6 +37,7 @@ export function ImportMembers() {
   const [readError, setReadError] = useState<string | null>(null);
   const [built, setBuilt] = useState<Built | null>(null);
   const [skipExisting, setSkipExisting] = useState(true);
+  const [reading, setReading] = useState(false);
 
   // Who may upload, and into which units (mirrors the database; it checks every row anyway).
   const isWide = hasRole(me.data, 'gsquad_coordinator', 'operations_lead');
@@ -72,6 +73,7 @@ export function ImportMembers() {
     setReadError(null);
     setFileName(file?.name ?? '');
     if (!file || !refsReady) return;
+    setReading(true);
     try {
       const cells = await readSpreadsheet(file);
       setBuilt(
@@ -92,6 +94,8 @@ export function ImportMembers() {
       );
     } catch (err) {
       setReadError(err instanceof Error ? err.message : 'The file could not be read.');
+    } finally {
+      setReading(false);
     }
   }
 
@@ -102,7 +106,9 @@ export function ImportMembers() {
     a.href = URL.createObjectURL(blob);
     a.download = 'g-squad-members-template.csv';
     a.click();
-    URL.revokeObjectURL(a.href);
+    // Revoked a moment later: revoking straight after click() can cancel the download in some
+    // browsers (Firefox, Safari).
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
   if (me.isPending) return <p>Loading…</p>;
@@ -161,13 +167,21 @@ export function ImportMembers() {
             className="tec-input app-file-input"
             type="file"
             accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            disabled={!refsReady}
+            disabled={!refsReady || reading || save.isPending}
             onChange={onFile}
           />
         </label>
         {!refsReady && <p className="type-caption">Loading units and roles…</p>}
         {/* The picker is cleared after reading (so a corrected file can be chosen again), so say which file was read. */}
-        {fileName && !readError && <p className="type-caption" style={{ margin: 0 }}>Read: {fileName}</p>}
+        {/* SECURITY REVIEW 14 (T05): a screen reader is told when reading starts and what it found;
+            before, the results appeared silently further down the page. */}
+        <p className="type-caption" role="status" style={{ margin: 0 }}>
+          {reading
+            ? `Reading ${fileName}…`
+            : fileName && !readError && built && !built.headingProblem
+              ? `Read ${fileName}: ${built.rows.length} ready to add, ${built.problems.length} row${built.problems.length === 1 ? '' : 's'} to fix.`
+              : ''}
+        </p>
         {readError && (
           <Notice tone="danger" title="Couldn't read the file">
             {readError}
@@ -210,6 +224,7 @@ export function ImportMembers() {
             id="import-skip"
             label="Skip people already recorded (same email address) instead of stopping"
             checked={skipExisting}
+            disabled={save.isPending}
             onChange={(e) => setSkipExisting(e.target.checked)}
           />
           {rowErrors.length > 0 ? (

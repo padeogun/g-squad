@@ -2282,6 +2282,64 @@ set role anon;
 select test.throws($q$select public.import_members('[]'::jsonb)$q$, 'M23: signed-out visitors cannot call the upload');
 reset role;
 
+-- ---------- Security review 14: bulk upload ----------
+-- T01: every person added by an upload is in the audit log (who, record, unit; no personal data).
+select test.login('coord'); set role authenticated;
+select public.import_members(format('[{"row": 2, "person": {"first_name": "Audit", "surname": "One"}, "unit_id": "%s"},
+                                      {"row": 3, "person": {"first_name": "Audit", "surname": "Two"}, "unit_id": "%s"}]',
+                                    test.id('A1'), test.id('A2'))::jsonb);
+reset role;
+select test.ok((select count(*) from public.audit_log a join public.people p on p.id = a.record_id
+                where a.action = 'import_member' and a.table_name = 'people' and p.first_name = 'Audit'
+                  and a.actor_id = test.id('coord') and a.detail ? 'unit_id' and not a.detail ? 'first_name') = 2,
+               'S14/T01: each person added by an upload is audited, without personal data');
+-- T03: an odd "row" value still gives the row list, not a bare cast error.
+select test.login('coord'); set role authenticated;
+do $$
+declare d text;
+begin
+  perform public.import_members(format('[{"row": 2.5, "person": {"first_name": "X"}, "unit_id": "%s"},
+                                         {"row": 1e12, "person": {"first_name": "Y"}, "unit_id": "%s"},
+                                         {"row": "7", "person": {"first_name": "Z"}, "unit_id": "%s"}]',
+                                       test.id('A1'), test.id('A1'), test.id('A1'))::jsonb);
+exception when others then
+  get stacked diagnostics d = pg_exception_detail;
+  perform test.ok(coalesce(d, '') like '[%' and (select array_agg((e->>'row')::int order by (e->>'row')::int) from jsonb_array_elements(d::jsonb) e) = array[1, 2, 3],
+                  'S14/T03: a row number that is not a whole spreadsheet row falls back to its position');
+end $$;
+-- Skipping does not swallow a refusal: a Team Lead uploading into another team still fails.
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$select public.import_members('[{"row": 2, "person": {"first_name": "Skip", "surname": "Guard"}, "unit_id": "%s"}]'::jsonb, true)$q$, test.id('A2')),
+                   'S14: skipping existing people does not skip a refusal');
+reset role;
+-- With skipping on, a failed upload names only the rows that need fixing, not the duplicates.
+select test.login('coord'); set role authenticated;
+do $$
+declare d text;
+begin
+  perform public.import_members(format('[{"row": 2, "person": {"first_name": "Dup", "surname": "Probe", "email": "bulk.one@example.org"}, "unit_id": "%s"},
+                                         {"row": 3, "person": {"first_name": "", "surname": "Bad"}, "unit_id": "%s"}]',
+                                       test.id('A1'), test.id('A1'))::jsonb, true);
+exception when others then
+  get stacked diagnostics d = pg_exception_detail;
+  perform test.ok(jsonb_array_length(d::jsonb) = 1 and (d::jsonb -> 0 ->> 'row')::int = 3,
+                  'S14: with skipping on, a failed upload does not say which rows were already recorded');
+end $$;
+-- The Coordinator now adds memberships: R3 (third unit) and anonymised records still hold.
+select public.import_members(format('[{"row": 2, "person": {"first_name": "Three", "surname": "Units"}, "unit_id": "%s"}]', test.id('A1'))::jsonb);
+insert into public.unit_memberships (church_id, person_id, unit_id)
+  select test.id('churchA'), id, test.id('A2') from public.people where first_name = 'Three' and surname = 'Units';
+insert into public.unit_memberships (church_id, person_id, unit_id)
+  select test.id('churchA'), id, test.id('A3') from public.people where first_name = 'Three' and surname = 'Units';
+select test.ok((select m.status from public.unit_memberships m join public.people p on p.id = m.person_id
+                where p.first_name = 'Three' and p.surname = 'Units' and m.unit_id = test.id('A3')) = 'pending_approval',
+               'S14: a third unit added by the Coordinator waits for the Resident Pastor (R3)');
+select test.throws(format($q$insert into public.unit_memberships (church_id, person_id, unit_id) values (%L, %L, %L)$q$,
+                          test.id('churchA'), test.id('p2'), test.id('A4')),
+                   'S14: the Coordinator cannot put an anonymised record in a unit');
+reset role;
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;
