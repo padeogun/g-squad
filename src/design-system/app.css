@@ -57,3 +57,7 @@
 /* Long text fields span the whole form row and grow with their content. */
 .app-field-wide { grid-column: 1 / -1; }
 .app-textarea { min-height: 88px; padding-top: var(--space-2); padding-bottom: var(--space-2); resize: vertical; font: inherit; }
+
+/* Selects inside table cells: no extra label row or padding (the label stays for screen readers). */
+.app-cell-field { min-width: 160px; }
+.app-cell-field > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

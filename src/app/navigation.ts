@@ -27,13 +27,13 @@ export const NAV: NavGroup[] = [
     label: 'Overview',
     items: [
       { label: 'Dashboard', path: '/', slice: 3 },
-      { label: 'My Unit', path: '/my-unit', slice: 1 },
+      { label: 'My Unit', path: '/my-unit', slice: 1, built: true },
     ],
   },
   {
     label: 'People and Teams',
     items: [
-      { label: 'Members', path: '/members', slice: 1 },
+      { label: 'Members', path: '/members', slice: 1, built: true },
       { label: 'One-to-ones', path: '/one-to-ones', slice: 5 },
     ],
   },
