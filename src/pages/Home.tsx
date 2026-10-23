@@ -1,12 +1,24 @@
-// Home page for slice 0: confirms the app, the design system and the database connection
-// work. The real Church Dashboard arrives in slice 3.
+// Home page: the Church Dashboard for the leadership group (slice 3); for other leaders
+// (e.g. newsletter editors, finance), a welcome with the core values and a connection check.
 import { useQuery } from '@tanstack/react-query';
 import { TEC } from '../design-system';
 import { supabase } from '../lib/supabase';
+import { hasRole, useMe } from '../auth/useMe';
+import { DASHBOARD_ROLES } from '../data/dashboards';
+import { ChurchDashboard } from './dashboard/ChurchDashboard';
 
 const { SectionHeading, Card, Notice, ValuesStrip } = TEC;
 
 export function Home() {
+  const me = useMe();
+  // Wait for the roles, so a leader doesn't see the welcome page flash first.
+  if (me.isPending) return <p>Loading…</p>;
+  // The dashboard roles see the Church Dashboard as their home page.
+  if (hasRole(me.data, ...DASHBOARD_ROLES)) return <ChurchDashboard />;
+  return <Welcome />;
+}
+
+function Welcome() {
   // core_values is readable by every signed-in member of the church (RLS), so it doubles
   // as a check that sign-in, the API key and row-level security are all working.
   const values = useQuery({

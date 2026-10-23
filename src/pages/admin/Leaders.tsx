@@ -4,6 +4,9 @@
 //   * the Operations Lead, G-Squad Coordinator and Resident Pastor invite leaders;
 //   * senior roles are given only by the Resident Pastor; the Operations Lead role only by the
 //     Resident Pastor or an Operations Lead; nobody changes their own roles.
+// Decisions of 23 Oct 2026 (migration 22): one Team Lead per team (no co-leads); a Deputy Team
+// Lead per team is view-only; the G-Squad Coordinator and Operations Lead functions are given
+// only to someone who already holds Purpose Head or Resident Pastor.
 // This screen mirrors those rules in what it offers, and shows the database's message if a
 // change is refused anyway.
 // -------------------------------------------------------------------------------------
@@ -13,7 +16,16 @@ import { TEC } from '../../design-system';
 import { supabase } from '../../lib/supabase';
 import { friendlyError } from '../../data/errors';
 import { byId, usePurposes, useUnits, useLeaders } from '../../data/reference';
-import { grantableRoles, hasRole, INVITERS, ROLE_LABELS, useMe, type AppRole } from '../../auth/useMe';
+import {
+  grantableRoles,
+  hasRole,
+  INVITERS,
+  NEEDS_SENIOR_HOLDER,
+  ROLE_LABELS,
+  SENIOR_HOLDERS,
+  useMe,
+  type AppRole,
+} from '../../auth/useMe';
 
 const { SectionHeading, Card, Button, TextField, SelectField, Notice, Chip, DataTable } = TEC;
 
@@ -48,7 +60,10 @@ export function Leaders() {
   const canInvite = hasRole(me.data, ...INVITERS);
   const offer = grantableRoles(me.data);
 
-  // Labels a role with its scope, e.g. "Unit Lead · Production".
+  // Teams that already have a Team Lead (offered no second one).
+  const ledTeams = new Set((roles.data ?? []).filter((r) => r.role === 'unit_lead' && r.unit_id).map((r) => r.unit_id!));
+
+  // Labels a role with its scope, e.g. "Team Lead · Production".
   const roleLabel = (r: { role: AppRole; unit_id: string | null; purpose_id: string | null }) =>
     ROLE_LABELS[r.role] +
     (r.unit_id ? ` · ${unitMap.get(r.unit_id)?.name ?? 'unit'}` : '') +
@@ -87,7 +102,7 @@ export function Leaders() {
       </SectionHeading>
 
       {canInvite ? (
-        <InviteForm offer={offer} />
+        <InviteForm offer={offer} ledTeams={ledTeams} />
       ) : (
         <Notice tone="info" title="View only">
           The Operations Lead, the G-Squad Coordinator or the Resident Pastor invite leaders.
@@ -149,7 +164,14 @@ export function Leaders() {
                 actions:
                   canInvite && !isMe ? (
                     <div className="tec-row" style={{ padding: 0 }}>
-                      <AddRole userId={l.id} offer={offer} />
+                      <AddRole
+                        userId={l.id}
+                        // The two functions are offered only to a Purpose Head or the Resident Pastor.
+                        offer={offer.filter(
+                          (r) => !NEEDS_SENIOR_HOLDER.includes(r) || theirRoles.some((t) => SENIOR_HOLDERS.includes(t.role)),
+                        )}
+                        ledTeams={ledTeams}
+                      />
                       <Button
                         size="sm"
                         variant="quiet"
@@ -175,11 +197,13 @@ function RoleFields({
   offer,
   value,
   onChange,
+  ledTeams,
 }: {
   idPrefix: string;
   offer: AppRole[];
   value: { role: AppRole; unit_id: string; purpose_id: string };
   onChange: (v: { role: AppRole; unit_id: string; purpose_id: string }) => void;
+  ledTeams: Set<string>;
 }) {
   const units = useUnits();
   const purposes = usePurposes();
@@ -192,7 +216,7 @@ function RoleFields({
         onChange={(e) => onChange({ role: e.target.value as AppRole, unit_id: '', purpose_id: '' })}
         options={offer.map((r) => ({ value: r, label: ROLE_LABELS[r] }))}
       />
-      {value.role === 'unit_lead' && (
+      {(value.role === 'unit_lead' || value.role === 'deputy_unit_lead') && (
         <SelectField
           id={`${idPrefix}-unit`}
           label="Unit"
@@ -201,7 +225,10 @@ function RoleFields({
           onChange={(e) => onChange({ ...value, unit_id: e.target.value })}
           options={[
             { value: '', label: 'Choose a unit' },
-            ...(units.data ?? []).filter((u) => u.is_active).map((u) => ({ value: u.id, label: u.name })),
+            ...(units.data ?? [])
+              // No co-leads: a team that has a Team Lead isn't offered for another.
+              .filter((u) => u.is_active && (value.role !== 'unit_lead' || !ledTeams.has(u.id)))
+              .map((u) => ({ value: u.id, label: u.name })),
           ]}
         />
       )}
@@ -221,10 +248,13 @@ function RoleFields({
 
 // Is the role choice complete (scoped roles need their unit or purpose)?
 const roleReady = (v: { role: AppRole; unit_id: string; purpose_id: string }) =>
-  (v.role !== 'unit_lead' || !!v.unit_id) && (v.role !== 'purpose_head' || !!v.purpose_id);
+  ((v.role !== 'unit_lead' && v.role !== 'deputy_unit_lead') || !!v.unit_id) && (v.role !== 'purpose_head' || !!v.purpose_id);
 
 // ---------- Invite a new leader (Edge Function invite-leader) ----------
-function InviteForm({ offer }: { offer: AppRole[] }) {
+function InviteForm({ offer: all, ledTeams }: { offer: AppRole[]; ledTeams: Set<string> }) {
+  // The invitation carries one role. The two functions need Purpose Head first, so they are
+  // given afterwards with "Add role".
+  const offer = all.filter((r) => !NEEDS_SENIOR_HOLDER.includes(r));
   const qc = useQueryClient();
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -282,8 +312,12 @@ function InviteForm({ offer }: { offer: AppRole[] }) {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
           />
-          <RoleFields idPrefix="inv" offer={offer} value={role} onChange={setRole} />
+          <RoleFields idPrefix="inv" offer={offer} value={role} onChange={setRole} ledTeams={ledTeams} />
         </div>
+        <p className="type-caption" style={{ margin: 0 }}>
+          G-Squad Coordinator and Operations Lead are functions of a Purpose Head or the Resident Pastor: invite them with
+          that role, then use Add role.
+        </p>
         {invite.isError && <Notice tone="danger" title="Not sent">{friendlyError(invite.error)}</Notice>}
         {invite.isSuccess && <Notice tone="ok" title="Invitation sent">They'll appear below as soon as they accept.</Notice>}
         <div>
@@ -297,7 +331,7 @@ function InviteForm({ offer }: { offer: AppRole[] }) {
 }
 
 // ---------- Give an existing leader another role ----------
-function AddRole({ userId, offer }: { userId: string; offer: AppRole[] }) {
+function AddRole({ userId, offer, ledTeams }: { userId: string; offer: AppRole[]; ledTeams: Set<string> }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [role, setRole] = useState<{ role: AppRole; unit_id: string; purpose_id: string }>({
@@ -329,7 +363,7 @@ function AddRole({ userId, offer }: { userId: string; offer: AppRole[] }) {
     );
   return (
     <div className="app-inline-form">
-      <RoleFields idPrefix={`add-${userId}`} offer={offer} value={role} onChange={setRole} />
+      <RoleFields idPrefix={`add-${userId}`} offer={offer} value={role} onChange={setRole} ledTeams={ledTeams} />
       {add.isError && <Notice tone="danger">{friendlyError(add.error)}</Notice>}
       <div className="tec-row" style={{ padding: 0 }}>
         <Button size="sm" variant="primary" disabled={!roleReady(role) || add.isPending} onClick={() => add.mutate()}>

@@ -23,7 +23,8 @@ export const ROLE_LABELS: Record<AppRole, string> = {
   purpose_head: 'Purpose Head',
   gsquad_coordinator: 'G-Squad Coordinator',
   teci_coordinator: 'TECi Coordinator',
-  unit_lead: 'Unit Lead',
+  unit_lead: 'Team Lead',
+  deputy_unit_lead: 'Deputy Team Lead',
   operations_lead: 'Operations Lead',
   pastoral_lead: 'Pastoral Lead',
   newsletter_editor: 'Newsletter editor',
@@ -63,12 +64,24 @@ export function hasRole(me: Me | null | undefined, ...roles: AppRole[]): boolean
   return !!me && me.roles.some((r) => roles.includes(r.role));
 }
 
-// Units this leader leads (Unit Lead role), for My Unit and the member form.
+// Units this leader leads (Team Lead role): the units they may CHANGE (members, rota, check-in).
 export function ledUnitIds(me: Me | null | undefined): string[] {
   return (me?.roles ?? []).filter((r) => r.role === 'unit_lead' && r.unit_id).map((r) => r.unit_id!);
 }
 
-// Roles that may read faith fields (the database checks this, plus "the person's Unit Lead").
+// Units this leader may VIEW as a team leader: those they lead, then those they deputise for
+// (Deputy Team Lead: view-only, no one-to-ones; decision of 23 Oct 2026, migration 22).
+export function viewedUnitIds(me: Me | null | undefined): string[] {
+  const deputy = (me?.roles ?? []).filter((r) => r.role === 'deputy_unit_lead' && r.unit_id).map((r) => r.unit_id!);
+  return [...new Set([...ledUnitIds(me), ...deputy])];
+}
+
+// The G-Squad Coordinator and Operations Lead are functions held by a Purpose Head or the
+// Resident Pastor (decision of 23 Oct 2026). The database refuses them otherwise (migration 22).
+export const NEEDS_SENIOR_HOLDER: AppRole[] = ['gsquad_coordinator', 'operations_lead'];
+export const SENIOR_HOLDERS: AppRole[] = ['purpose_head', 'resident_pastor'];
+
+// Roles that may read faith fields (the database checks this, plus "the person's Team Lead or Deputy").
 export const FAITH_READERS: AppRole[] = ['resident_pastor', 'gsquad_coordinator', 'teci_coordinator'];
 // Roles that may invite leaders (decision of 23 Oct 2026; migration 13).
 export const INVITERS: AppRole[] = ['operations_lead', 'gsquad_coordinator', 'resident_pastor'];
@@ -77,6 +90,7 @@ export const INVITERS: AppRole[] = ['operations_lead', 'gsquad_coordinator', 're
 const SENIOR: AppRole[] = ['resident_pastor', 'gsquad_coordinator', 'teci_coordinator', 'pastoral_lead', 'purpose_head'];
 const ROLE_ORDER: AppRole[] = [
   'unit_lead',
+  'deputy_unit_lead',
   'newsletter_editor',
   'finance',
   'operations_lead',

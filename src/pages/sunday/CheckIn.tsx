@@ -41,8 +41,8 @@ export function CheckIn() {
     <div className="app-phone">
       <SectionHeading eyebrow="Sunday check-in" title={longDate(date)} rule />
       {choices.length === 0 ? (
-        <Notice tone="info" title="For Unit Leads">
-          Check-in is done by each unit's lead.
+        <Notice tone="info" title="For Team Leads">
+          Check-in is done by each team's lead.
         </Notice>
       ) : (
         <>

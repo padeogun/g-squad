@@ -31,7 +31,7 @@ export const usePurposes = () =>
 export const useChurchRoles = () =>
   useQuery({
     queryKey: ['ref', 'church_roles'],
-    queryFn: () => rows(supabase.from('church_roles').select('id, name, unit_id, is_active, is_rota_role').order('name')),
+    queryFn: () => rows(supabase.from('church_roles').select('id, name, unit_id, is_active, is_rota_role, permanence, default_key').order('name')),
   });
 
 export const useTeciStages = () =>

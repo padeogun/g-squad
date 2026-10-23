@@ -47,6 +47,13 @@ describe('validateInvite', () => {
     expect(validateInvite({ email: 'a@b.org', display_name: 'A', roles: [{ role: 'unit_lead', unit_id: 'x' }] }).ok).toBe(false);
     expect(validateInvite({ email: 'a@b.org', display_name: 'A', roles: [{ role: 'purpose_head', purpose_id: PURPOSE }] }).ok).toBe(true);
   });
+
+  // Security review 13 (S06): the Leaders screen offers the Deputy Team Lead.
+  it('accepts a Deputy Team Lead with a team, and needs the team', () => {
+    expect(validateInvite({ email: 'a@b.org', display_name: 'A', roles: [{ role: 'deputy_unit_lead', unit_id: UNIT }] }).ok).toBe(true);
+    expect(validateInvite({ email: 'a@b.org', display_name: 'A', roles: [{ role: 'deputy_unit_lead' }] }).ok).toBe(false);
+    expect(checkGrants(['operations_lead'], [{ role: 'deputy_unit_lead', unit_id: UNIT }])).toBeNull();
+  });
 });
 
 describe('checkGrants', () => {

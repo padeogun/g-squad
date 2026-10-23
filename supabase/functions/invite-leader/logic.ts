@@ -14,6 +14,7 @@ export type AppRole =
   | 'gsquad_coordinator'
   | 'teci_coordinator'
   | 'unit_lead'
+  | 'deputy_unit_lead'
   | 'operations_lead'
   | 'pastoral_lead'
   | 'newsletter_editor'
@@ -25,6 +26,9 @@ export const ALL_ROLES: readonly AppRole[] = [
   'gsquad_coordinator',
   'teci_coordinator',
   'unit_lead',
+  // SECURITY REVIEW 13 (S06): the Deputy Team Lead (migration 22) was missing here, so the
+  // Leaders screen offered it but every invitation for it was refused as an unknown role.
+  'deputy_unit_lead',
   'operations_lead',
   'pastoral_lead',
   'newsletter_editor',
@@ -98,9 +102,11 @@ export function validateInvite(body: unknown): { ok: true; value: InviteRequest 
     if (unit_id && !UUID.test(unit_id)) errors.push('Unit id is not valid');
     if (purpose_id && !UUID.test(purpose_id)) errors.push('Purpose id is not valid');
     // Scoped roles need their scope; other roles must not carry one.
-    if (role === 'unit_lead' && !unit_id) errors.push('A Unit Lead needs a unit');
+    // The Team Lead (unit_lead) and the Deputy Team Lead are both scoped to one team.
+    const teamRole = role === 'unit_lead' || role === 'deputy_unit_lead';
+    if (teamRole && !unit_id) errors.push('A Team Lead or Deputy Team Lead needs a team');
     if (role === 'purpose_head' && !purpose_id) errors.push('A Purpose Head needs a purpose');
-    if (role !== 'unit_lead' && unit_id) errors.push('Only a Unit Lead has a unit');
+    if (!teamRole && unit_id) errors.push('Only a Team Lead or Deputy Team Lead has a team');
     if (role !== 'purpose_head' && purpose_id) errors.push('Only a Purpose Head has a purpose');
     const key = `${role}|${unit_id ?? ''}|${purpose_id ?? ''}`;
     if (seen.has(key)) continue; // ignore exact duplicates

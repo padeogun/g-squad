@@ -26,7 +26,7 @@ import {
   type FaithInput,
   type Person,
 } from '../../data/people';
-import { FAITH_READERS, hasRole, ledUnitIds, useMe } from '../../auth/useMe';
+import { FAITH_READERS, hasRole, ledUnitIds, viewedUnitIds, useMe } from '../../auth/useMe';
 import { NotFound } from '../NotFound';
 
 const { SectionHeading, Card, Button, TextField, SelectField, Checkbox, Notice, RestrictedPanel, Chip, DataTable } = TEC;
@@ -206,13 +206,14 @@ function MemberFormInner({ person }: { person?: Person }) {
   // SECURITY REVIEW FIX M03: for a NEW member there is nothing to read, so the panel is offered
   // only to someone who may record the fields. Before, a reading role that also adds members
   // (for example an Operations Lead who is also the TECi Coordinator) saw an empty, locked panel.
+  // Reading also includes their Deputy Team Lead (view-only; migration 22).
+  const seenUnits = viewedUnitIds(me.data);
   const mayRecordFaith = person
-    ? hasRole(me.data, ...FAITH_READERS) || liveUnits.some((m) => m.status === 'active' && myUnits.includes(m.unit_id))
+    ? hasRole(me.data, ...FAITH_READERS) || liveUnits.some((m) => m.status === 'active' && seenUnits.includes(m.unit_id))
     : canEditFaith;
   // Nothing to save for someone who can neither edit the record, the TECi stage nor faith fields.
   const canSave = canEditRecord || canSetTeci || canEditFaith;
   const [roleId, setRoleId] = useState('');
-  const [isLeader, setIsLeader] = useState(false);
   const [stageId, setStageId] = useState('');
 
   // SECURITY REVIEW FIX L04: faith fields (special category data) are loaded only when the
@@ -265,7 +266,8 @@ function MemberFormInner({ person }: { person?: Person }) {
           p_person: toPersonRow(v, canSetTeci),
           p_unit: unitId,
           p_church_role: (roleId || null) as string,
-          p_is_team_leader: isLeader,
+          // Ignored by the database now: the Team Lead role label decides (migration 22).
+          p_is_team_leader: false,
           p_leadership_stage: (stageId || null) as string,
           p_faith: sendFaith ? { ...cleanFaith(f) } : null,
         });
@@ -395,14 +397,12 @@ function MemberFormInner({ person }: { person?: Person }) {
                 columns={[
                   { key: 'unit', label: 'Unit' },
                   { key: 'role', label: 'Team role' },
-                  { key: 'lead', label: 'Team leader' },
                   { key: 'status', label: 'Status' },
                 ]}
                 rows={theirMemberships.map((m) => ({
                   id: m.id,
                   unit: unitMap.get(m.unit_id)?.name ?? 'Unit',
                   role: m.church_role_id ? roleMap.get(m.church_role_id)?.name ?? '' : '',
-                  lead: m.is_team_leader ? 'Yes' : 'No',
                   // SECURITY REVIEW FIX M04: an ended membership was shown as "Awaiting approval",
                   // suggesting the person was still joining a unit they had left.
                   status:
@@ -412,7 +412,7 @@ function MemberFormInner({ person }: { person?: Person }) {
                 }))}
               />
             )}
-            <p className="type-caption" style={{ margin: 0 }}>Team roles and leaders are changed on My Unit.</p>
+            <p className="type-caption" style={{ margin: 0 }}>Team roles are changed by the Team Lead on My Unit.</p>
           </Card>
         ) : (
           <Card title="Joining a unit">
@@ -436,7 +436,14 @@ function MemberFormInner({ person }: { person?: Person }) {
                 options={[
                   { value: '', label: 'None yet' },
                   ...(roles.data ?? [])
-                    .filter((r) => r.is_active && (!r.unit_id || r.unit_id === unitId))
+                    // Operational roles only; a new member can't take the Team Lead label if the
+                    // team already has one (no co-leads; the database checks too).
+                    .filter((r) => r.is_active && r.permanence === 'operational' && (!r.unit_id || r.unit_id === unitId))
+                    .filter(
+                      (r) =>
+                        r.default_key !== 'team_lead' ||
+                        !(memberships.data ?? []).some((m) => m.unit_id === unitId && m.status !== 'ended' && m.is_team_leader),
+                    )
                     .map((r) => ({ value: r.id, label: r.name })),
                 ]}
                 value={roleId}
@@ -450,11 +457,10 @@ function MemberFormInner({ person }: { person?: Person }) {
                 value={stageId}
                 onChange={(e) => setStageId(e.target.value)}
               />
-              <Checkbox id="m-leader" label="Team leader in this unit" checked={isLeader} onChange={(e) => setIsLeader(e.target.checked)} />
             </div>
             {unitChoices.length === 0 && (
               <Notice tone="warn" title="No unit to add to">
-                {isOps ? 'Add units under Reference forms first.' : 'You are not the Unit Lead of an active unit.'}
+                {isOps ? 'Add units under Reference forms first.' : 'You are not the Team Lead of an active unit.'}
               </Notice>
             )}
           </Card>
@@ -462,11 +468,11 @@ function MemberFormInner({ person }: { person?: Person }) {
 
         {mayRecordFaith && faithRestricted && (
           <Notice tone="info" title="Faith journey">
-            Only the Resident Pastor, G-Squad Coordinator, TECi Coordinator and the person's own Unit Lead see these fields.
+            Only the Resident Pastor, G-Squad Coordinator, TECi Coordinator and the person's own Team Lead and Deputy see these fields.
           </Notice>
         )}
         {mayRecordFaith && !faithRestricted && (
-          <RestrictedPanel title="Faith journey" audience="Resident Pastor, G-Squad Coordinator, TECi Coordinator and their Unit Lead">
+          <RestrictedPanel title="Faith journey" audience="Resident Pastor, G-Squad Coordinator, TECi Coordinator, their Team Lead and Deputy">
             {person && !showFaith ? (
               <Button type="button" variant="secondary" size="sm" onClick={() => setShowFaith(true)}>
                 Show faith journey

@@ -80,6 +80,11 @@ begin
   insert into public.units (church_id, purpose_id, name, regular_monthly_need) values (a, test.id('P1'), 'Production', 0) returning id into v; insert into test.ids values ('A1', v);
   insert into public.units (church_id, purpose_id, name, regular_monthly_need) values (a, test.id('P2'), 'Ushering', 0)   returning id into v; insert into test.ids values ('A2', v);
   insert into public.units (church_id, purpose_id, name) values (a, test.id('P2'), 'Hospitality') returning id into v; insert into test.ids values ('A3', v);
+  -- Spare units, each given its own Team Lead by a later check (one Team Lead per team).
+  insert into public.units (church_id, purpose_id, name) values (a, test.id('P2'), 'Car park') returning id into v; insert into test.ids values ('A4', v);
+  insert into public.units (church_id, purpose_id, name) values (a, test.id('P2'), 'Media')    returning id into v; insert into test.ids values ('A5', v);
+  insert into public.units (church_id, purpose_id, name) values (a, test.id('P2'), 'Kids')     returning id into v; insert into test.ids values ('A6', v);
+  insert into public.units (church_id, purpose_id, name) values (a, test.id('P2'), 'Prayer')   returning id into v; insert into test.ids values ('A7', v);
   insert into public.purposes (church_id, name) values (b, 'B Purpose') returning id into v; insert into test.ids values ('PB', v);
   insert into public.units (church_id, purpose_id, name) values (b, test.id('PB'), 'B Unit') returning id into v; insert into test.ids values ('B1', v);
 
@@ -515,7 +520,7 @@ select test.ok(not exists (select 1 from public.person_faith where person_id = t
 
 select test.login('rp'); set role authenticated;
 select test.ok(public.export_person(test.id('p1')) -> 'faith' <> 'null'::jsonb, 'Export by the Resident Pastor includes faith fields');
-select test.ok((select count(*) from public.capacity_calendar(extract(year from current_date)::int)) = 36, 'Capacity calendar: 3 units x 12 months');
+select test.ok((select count(*) from public.capacity_calendar(extract(year from current_date)::int)) = 84, 'Capacity calendar: 7 units x 12 months');
 select test.ok((select count(*) from public.v_engagement) = 3, 'Engagement view works under RLS');
 reset role;
 
@@ -536,7 +541,7 @@ select test.throws(format('insert into public.role_assignments (user_id, role) v
                    'F01: Ops Lead cannot grant a faith-reading role to someone else');
 select test.throws(format('update public.role_assignments set role = %L where user_id = %L', 'resident_pastor', test.id('finance')),
                    'F01: Ops Lead cannot turn an existing role into Resident Pastor');
-select test.lives(format('insert into public.role_assignments (user_id, role, unit_id) values (%L, %L, %L)', test.id('finance'), 'unit_lead', test.id('A3')),
+select test.lives(format('insert into public.role_assignments (user_id, role, unit_id) values (%L, %L, %L)', test.id('finance'), 'unit_lead', test.id('A4')),
                   'F01: Ops Lead still assigns Unit Leads to other people');
 reset role;
 select test.login('rp'); set role authenticated;
@@ -690,9 +695,9 @@ reset role;
 
 -- F16: a one-to-one cannot move to another unit.
 select test.login('');
-insert into public.role_assignments (church_id, user_id, role, unit_id) values (test.id('churchA'), test.id('ul_a'), 'unit_lead', test.id('A3'));
+insert into public.role_assignments (church_id, user_id, role, unit_id) values (test.id('churchA'), test.id('ul_a'), 'unit_lead', test.id('A5'));
 select test.login('ul_a'); set role authenticated;
-select test.throws(format('update public.one_to_ones set unit_id = %L', test.id('A3')), 'F16: a one-to-one cannot move to another unit');
+select test.throws(format('update public.one_to_ones set unit_id = %L', test.id('A5')), 'F16: a one-to-one cannot move to another unit');
 reset role;
 
 -- F17: input bounds (as the G-Squad Coordinator, who may edit member records).
@@ -1040,6 +1045,10 @@ select test.ok(exists (select 1 from public.church_settings where church_id = te
                'I01: the Operations Lead cannot delete the settings row');
 select test.throws(format('delete from public.church_settings where church_id = %L', test.id('churchA')),
                    'I01: even the service role cannot delete a church''s settings row');
+-- Migration 22: a new church starts with its default team roles; removing a church is an
+-- admin (service role) job that clears its reference lists first.
+select test.login('nobody');
+delete from public.church_roles where church_id = (select id from public.churches where slug = 'third-church');
 select test.lives($q$delete from public.churches where slug = 'third-church'$q$,
                   'I01/I04: a church can still be deleted, and its settings row goes with it (cascade)');
 select test.ok(not exists (select 1 from public.church_settings s where not exists (select 1 from public.churches c where c.id = s.church_id)),
@@ -1099,15 +1108,22 @@ select test.lives(format('insert into public.app_users (id, display_name) values
 select test.ok((select church_id from public.app_users where id = test.id('newlead')) = test.id('churchA'),
                'S1: the new account joins the inviter''s church automatically');
 select test.lives(format('insert into public.role_assignments (user_id, role, unit_id) values (%L, %L, %L)',
-                         test.id('newlead'), 'unit_lead', test.id('A3')),
+                         test.id('newlead'), 'unit_lead', test.id('A6')),
                   'S1: Coordinator makes the new leader a Unit Lead');
 -- Migration 18: the Coordinator now gives and removes senior roles, except the Resident Pastor role.
 select test.lives(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('newlead'), 'teci_coordinator'),
                   'M18: Coordinator gives a senior role');
 select test.lives(format('delete from public.role_assignments where user_id = %L and role = %L', test.id('newlead'), 'teci_coordinator'),
                   'M18: Coordinator removes a senior role');
+-- Migration 22: the Operations Lead function is held by a Purpose Head or the Resident Pastor.
+select test.throws(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('newlead'), 'operations_lead'),
+                   'M22: Operations Lead cannot be given to someone who is not a Purpose Head');
+select test.lives(format('insert into public.role_assignments (user_id, role, purpose_id) values (%L, %L, %L)', test.id('newlead'), 'purpose_head', test.id('P2')),
+                  'M22: Coordinator makes them a Purpose Head first');
 select test.lives(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('newlead'), 'operations_lead'),
                   'M18: Coordinator gives the Operations Lead role');
+select test.throws(format('update public.role_assignments set is_active = false where user_id = %L and role = %L', test.id('newlead'), 'purpose_head'),
+                   'M22: their last Purpose Head role cannot be removed while they hold the Operations Lead function');
 select test.lives(format('delete from public.role_assignments where user_id = %L and role = %L', test.id('newlead'), 'operations_lead'),
                   'M18: Coordinator removes the Operations Lead role');
 select test.throws(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('newlead'), 'resident_pastor'),
@@ -1422,7 +1438,7 @@ select test.ok(not exists (select 1 from public.person_faith where person_id = t
 -- The TECi route gives no wider edit right to a TECi Coordinator who also leads some other unit.
 select test.login('nobody');
 insert into public.role_assignments (church_id, user_id, role, unit_id)
-values (test.id('churchA'), test.id('teci'), 'unit_lead', test.id('A3'));
+values (test.id('churchA'), test.id('teci'), 'unit_lead', test.id('A7'));
 select test.login('teci'); set role authenticated;
 select test.throws(format($q$update public.people set area = 'TECI2' where id = %L$q$, test.id('mover')),
                    'M16: TECi Coordinator who leads another unit still cannot edit this record');
@@ -1907,6 +1923,305 @@ select test.login('ul_a'); set role authenticated;
 select test.throws(format($q$update public.assignments set project_id = (select id from public.projects where name = 'Night of worship') where person_id = %L and serve_date = %L$q$,
                           test.id('rt1'), current_setting('test.sun6')),
                    'Q08: moving a slot to a project whose dates do not include it is refused');
+reset role;
+
+-- =====================================================================================
+-- Migration 20 (slice 3): dashboards.
+-- =====================================================================================
+select test.login('ul_a'); set role authenticated;
+select test.lives('select public.church_dashboard()', 'S3: a Unit Lead sees the church dashboard');
+select test.ok((select (public.church_dashboard() ->> 'volunteers')::int) >= 1, 'S3: the church dashboard counts volunteers');
+select test.ok(not (public.church_dashboard()::text ~* '(email|surname|first_name|salvation|baptism|note)'),
+               'S3: the church dashboard carries no names or personal fields');
+select test.lives(format('select public.unit_dashboard(%L)', test.id('A1')), 'S3: a Unit Lead sees their unit''s dashboard');
+select test.throws(format('select public.unit_dashboard(%L)', test.id('A2')), 'S3: a Unit Lead cannot see another unit''s dashboard');
+select test.ok(not (public.unit_dashboard(test.id('A1'))::text ~* '(email|surname|salvation|baptism|feeling|notes)'),
+               'S3: the unit dashboard carries no names, faith fields or one-to-one content');
+select test.ok(jsonb_array_length(public.unit_dashboard(test.id('A1')) -> 'members') >= 1, 'S3: the unit dashboard lists member figures');
+reset role;
+select test.login('editor'); set role authenticated;
+select test.throws('select public.church_dashboard()', 'S3: a newsletter editor does not see the church dashboard');
+select test.throws(format('select public.unit_dashboard(%L)', test.id('A1')), 'S3: ... nor a unit dashboard');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.throws(format('select public.unit_dashboard(%L)', test.id('B1')), 'S3: no one sees another church''s unit');
+select test.lives(format('select public.unit_dashboard(%L)', test.id('A2')), 'S3: the Operations Lead sees any unit in their church');
+reset role;
+select test.ok(not has_function_privilege('anon', 'public.church_dashboard()', 'execute')
+               and not has_function_privilege('anon', 'public.unit_dashboard(uuid)', 'execute'),
+               'S3: neither dashboard is open to anon');
+
+-- Security review 12.
+-- R01: one-to-one dates and counts follow the one-to-ones read rule (writer, the unit's Purpose
+-- Head, Coordinator, Resident Pastor). The Operations Lead cannot read one-to-ones, so the
+-- dashboards must not tell them when (or whether) one was held.
+-- (Earlier checks anonymised p1 and p3, which removed their one-to-ones, so ul_a writes a
+-- fresh one for a current member of A1.)
+insert into test.ids
+select 's3_member', m.person_id from public.unit_memberships m join public.people p on p.id = m.person_id
+where m.unit_id = test.id('A1') and m.status = 'active' and p.status = 'active' and p.anonymised_at is null
+order by p.first_name limit 1;
+select test.login('ul_a'); set role authenticated;
+select test.lives(format('insert into public.one_to_ones (person_id, unit_id, quarter_start, held_on, feeling) values (%L, %L, %L, %L, %L)',
+                         test.id('s3_member'), test.id('A1'), date_trunc('quarter', current_date)::date, current_date, 'doing_well'),
+                  'S3/R01 fixture: the Unit Lead records a one-to-one');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.ok(not exists (select 1 from jsonb_array_elements(public.unit_dashboard(test.id('A1')) -> 'members') m
+                           where m ->> 'last_one_to_one' is not null),
+               'S3/R01: the Operations Lead sees no one-to-one dates on a unit dashboard');
+select test.ok(public.unit_dashboard(test.id('A1')) -> 'one_to_ones_quarter' = 'null'::jsonb
+               and public.unit_dashboard(test.id('A1')) -> 'one_to_ones_visible' = 'false'::jsonb,
+               'S3/R01: ... nor a one-to-one count (null, and marked not visible, rather than a misleading 0)');
+select test.ok(not exists (select 1 from jsonb_array_elements(public.church_dashboard() -> 'units_table') u
+                           where u -> 'one_to_ones_quarter' <> 'null'::jsonb),
+               'S3/R01: ... nor one-to-one counts per unit on the church dashboard');
+reset role;
+-- Migration 22 (no co-leads): a second Team Lead of A1 is refused, even as a system change.
+-- The Deputy Team Lead of A1 sees the unit but no one-to-one dates or counts.
+select test.login('nobody');   -- fixture changes below are system changes, not a user's
+select test.throws(format('insert into public.role_assignments (church_id, user_id, role, unit_id) values (%L, %L, %L, %L)',
+                          test.id('churchA'), test.id('ul_b'), 'unit_lead', test.id('A1')),
+                   'M22: a team has one Team Lead (no co-leads)');
+insert into public.role_assignments (church_id, user_id, role, unit_id) values (test.id('churchA'), test.id('ul_b'), 'deputy_unit_lead', test.id('A1'));
+select test.login('ul_b'); set role authenticated;
+select test.ok(not exists (select 1 from jsonb_array_elements(public.unit_dashboard(test.id('A1')) -> 'members') m
+                           where m ->> 'last_one_to_one' is not null)
+               and public.unit_dashboard(test.id('A1')) -> 'one_to_ones_quarter' = 'null'::jsonb
+               and public.unit_dashboard(test.id('A1')) -> 'one_to_ones_visible' = 'false'::jsonb,
+               'M22: the Deputy Team Lead opens the unit dashboard but sees no one-to-one dates or counts');
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.ok(exists (select 1 from jsonb_array_elements(public.unit_dashboard(test.id('A1')) -> 'members') m
+                       where m ->> 'person_id' = test.id('s3_member')::text and m ->> 'last_one_to_one' is not null)
+               and (public.unit_dashboard(test.id('A1')) ->> 'one_to_ones_quarter')::int >= 1,
+               'S3/R01: the writing Unit Lead still sees their one-to-one date and count');
+reset role;
+select test.login('coord'); set role authenticated;
+select test.ok((select (u ->> 'one_to_ones_quarter')::int from jsonb_array_elements(public.church_dashboard() -> 'units_table') u
+                where u ->> 'unit_id' = test.id('A1')::text) >= 1,
+               'S3/R01: the G-Squad Coordinator still sees one-to-one counts per unit');
+reset role;
+select test.login('ph'); set role authenticated;
+select test.ok((select u -> 'one_to_ones_quarter' from jsonb_array_elements(public.church_dashboard() -> 'units_table') u
+                where u ->> 'unit_id' = test.id('A2')::text) = 'null'::jsonb
+               and (select (u ->> 'one_to_ones_quarter')::int from jsonb_array_elements(public.church_dashboard() -> 'units_table') u
+                    where u ->> 'unit_id' = test.id('A1')::text) >= 1,
+               'S3/R01: a Purpose Head sees one-to-one counts for their own units only');
+reset role;
+-- R02: the new helpers bypass row-level security and take any id, so only the dashboards
+-- (running as the owner) may call them.
+select test.ok(not has_function_privilege('authenticated', 'app.engagement_of(uuid)', 'execute')
+               and not has_function_privilege('authenticated', 'app.unit_open_slots(uuid, date, date)', 'execute'),
+               'S3/R02: signed-in users cannot call the dashboard helpers directly');
+select test.login('nobody');
+-- R03: the church dashboard counts open check-ins only for current members (not anonymised
+-- or left), the same people as every other figure on it.
+insert into public.checkin_flags (church_id, person_id, source, raised_by)
+select test.id('churchA'), p.id, 'manual', test.id('ops') from public.people p
+where p.church_id = test.id('churchA') and p.status = 'left' and p.anonymised_at is null limit 1;
+select test.login('ops'); set role authenticated;
+select test.ok((public.church_dashboard() ->> 'checkins_open')::int
+               = (select count(*) from public.checkin_flags f join public.people p on p.id = f.person_id
+                  where p.church_id = test.id('churchA') and f.status = 'open' and p.status <> 'left' and p.anonymised_at is null)
+               and exists (select 1 from public.checkin_flags f join public.people p on p.id = f.person_id
+                           where f.status = 'open' and p.status = 'left'),
+               'S3/R03: check-ins of people who have left are not counted');
+reset role;
+
+-- ---------- Migration 22: team roles, Deputy Team Lead, Purpose Head rule, TECi ----------
+-- ul_b is the Deputy Team Lead of A1 (set above). s3_member is an active member of A1.
+select test.login('nobody');
+create temp table m22_expect as
+  select (select count(*) from public.assignments where unit_id = test.id('A1')) as a1_assignments,
+         (select area from public.people where id = test.id('s3_member')) as area;
+grant select on m22_expect to authenticated;
+select test.login('ul_b'); set role authenticated;
+select test.ok(exists (select 1 from public.people where id = test.id('s3_member')),
+               'M22: the Deputy sees the members of their team');
+select test.ok(exists (select 1 from public.unit_memberships where unit_id = test.id('A1') and person_id = test.id('s3_member')),
+               'M22: ... and their memberships');
+select test.lives(format('select * from public.get_person_faith(%L)', test.id('s3_member')),
+                  'M22: ... and their faith journey (logged)');
+select test.ok((select count(*) from public.assignments where unit_id = test.id('A1')) = (select a1_assignments from m22_expect),
+               'M22: ... and the team''s rota');
+select test.ok(not exists (select 1 from public.one_to_ones where unit_id = test.id('A1')),
+               'M22: ... but not its one-to-ones');
+select test.lives('select public.church_dashboard()', 'M22: the Deputy sees the Church Dashboard, like the Team Lead');
+select test.lives('select * from public.capacity_calendar(2027)', 'M22: ... and the capacity calendar');
+-- View-only: updates find no rows, inserts are refused.
+update public.people set area = 'DEPUTY' where id = test.id('s3_member');
+update public.unit_memberships set leadership_stage_id = null where unit_id = test.id('A1');
+reset role;
+select test.login('nobody');
+select test.ok((select area from public.people where id = test.id('s3_member')) is not distinct from (select area from m22_expect),
+               'M22: the Deputy cannot edit a member record');
+select test.ok(exists (select 1 from public.unit_memberships where unit_id = test.id('A1') and leadership_stage_id is not null)
+               or not exists (select 1 from public.leadership_stages),
+               'M22: ... nor change memberships');
+select test.login('ul_b'); set role authenticated;
+select test.throws(format($q$insert into public.checkin_flags (person_id, source, status, raised_by) values (%L, 'manual', 'open', %L)$q$,
+                          test.id('s3_member'), test.id('ul_b')),
+                   'M22: the Deputy does not raise check-in flags');
+select test.throws(format($q$insert into public.one_to_ones (person_id, unit_id, lead_user_id, quarter_start, held_on, feeling) values (%L, %L, %L, date_trunc('quarter', current_date)::date, current_date, 'doing_well')$q$,
+                          test.id('s3_member'), test.id('A1'), test.id('ul_b')),
+                   'M22: ... nor write one-to-ones');
+select test.throws(format('select public.set_person_faith(%L, null, false, null, false, null, false, null)', test.id('s3_member')),
+                   'M22: ... nor record faith fields');
+reset role;
+
+-- Role rules, as the G-Squad Coordinator.
+select test.login('coord'); set role authenticated;
+select test.throws(format('insert into public.role_assignments (user_id, role, unit_id) values (%L, %L, %L)', test.id('ph'), 'unit_lead', test.id('A1')),
+                   'M22: a team cannot be given a second Team Lead');
+select test.throws(format('insert into public.role_assignments (user_id, role, unit_id) values (%L, %L, %L)', test.id('ul_a'), 'deputy_unit_lead', test.id('A1')),
+                   'M22: the Team Lead is not also the Deputy of the same team');
+select test.throws(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('pastoral'), 'gsquad_coordinator'),
+                   'M22: the G-Squad Coordinator function needs a Purpose Head or the Resident Pastor');
+select test.lives(format('insert into public.role_assignments (user_id, role) values (%L, %L)', test.id('ph'), 'operations_lead'),
+                  'M22: a Purpose Head can be given the Operations Lead function');
+select test.throws(format('delete from public.role_assignments where user_id = %L and role = %L', test.id('ph'), 'purpose_head'),
+                   'M22: ... and keeps their Purpose Head role while they hold it');
+select test.lives(format('delete from public.role_assignments where user_id = %L and role = %L', test.id('ph'), 'operations_lead'),
+                  'M22: the function can be removed first');
+reset role;
+
+-- Default team roles.
+select test.ok((select count(*) from public.church_roles where church_id = test.id('churchA') and default_key is not null) = 4
+               and (select count(*) from public.church_roles where church_id = test.id('churchB') and default_key is not null) = 4,
+               'M22: every church has the four default team roles');
+select test.login('coord'); set role authenticated;
+select test.throws($q$update public.church_roles set name = 'Captain' where default_key = 'team_lead'$q$,
+                   'M22: a default role cannot be renamed');
+select test.throws($q$update public.church_roles set is_active = false where default_key = 'member'$q$,
+                   'M22: ... or switched off');
+select test.throws($q$delete from public.church_roles where default_key = 'welfare_pastoral'$q$,
+                   'M22: ... or deleted');
+select test.throws($q$insert into public.church_roles (name, default_key) values ('Extra lead', 'team_lead')$q$,
+                   'M22: no one makes their own default roles');
+select test.lives($q$update public.church_roles set description = 'Leads and cares for the team' where default_key = 'team_lead'$q$,
+                  'M22: a default role''s description can change');
+select test.lives($q$insert into public.church_roles (name, permanence) values ('Harvest steward', 'project')$q$,
+                  'M22: a project (temporary) role can be added');
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$update public.unit_memberships set church_role_id = (select id from public.church_roles where name = 'Harvest steward')
+                             where unit_id = %L and person_id = %L$q$, test.id('A1'), test.id('s3_member')),
+                   'M22: a project role is not a standing team role');
+select test.lives(format($q$update public.unit_memberships set church_role_id = (select id from public.church_roles where default_key = 'team_lead')
+                            where unit_id = %L and person_id = %L$q$, test.id('A1'), test.id('s3_member')),
+                  'M22: the Team Lead label is given in the team');
+select test.ok((select is_team_leader from public.unit_memberships where unit_id = test.id('A1') and person_id = test.id('s3_member')),
+               'M22: ... and the team leader flag follows it');
+select test.throws(format($q$update public.unit_memberships set church_role_id = (select id from public.church_roles where default_key = 'team_lead')
+                             where unit_id = %L and person_id <> %L and status <> 'ended'$q$, test.id('A1'), test.id('s3_member')),
+                   'M22: a second member cannot also be labelled Team Lead');
+select test.lives(format($q$update public.unit_memberships set church_role_id = (select id from public.church_roles where default_key = 'member')
+                            where unit_id = %L and person_id = %L$q$, test.id('A1'), test.id('s3_member')),
+                  'M22: changing the label back to Member');
+select test.ok(not (select is_team_leader from public.unit_memberships where unit_id = test.id('A1') and person_id = test.id('s3_member')),
+               'M22: ... clears the team leader flag');
+reset role;
+
+-- TECi: verification and adding TECi graduates who are not in a team yet.
+select test.login('teci'); set role authenticated;
+select test.throws('select public.church_dashboard()', 'M22: the TECi Coordinator does not see the Church Dashboard');
+select test.lives(format($q$update public.people set teci_stage_id = (select id from public.teci_stages where church_id = %L and stage_no = 1),
+                            teci_verified_at = '2000-01-01' where id = %L$q$, test.id('churchA'), test.id('s3_member')),
+                  'M22: the TECi Coordinator sets and verifies a stage');
+select test.ok((select teci_verified_by = test.id('teci') and teci_verified_at > now() - interval '1 minute'
+                from public.people where id = test.id('s3_member')),
+               'M22: ... recorded as them, now (a supplied date is ignored)');
+select test.lives(format($q$update public.people set teci_stage_id = (select id from public.teci_stages where church_id = %L and stage_no = 2)
+                            where id = %L$q$, test.id('churchA'), test.id('s3_member')),
+                  'M22: changing the stage without verifying');
+select test.ok((select teci_verified_at is null and teci_verified_by is null from public.people where id = test.id('s3_member')),
+               'M22: ... clears the old verification');
+select test.lives(format($q$select public.create_member('{"first_name":"Tola","surname":"Graduate","teci_stage_id":"%s","teci_verified_at":"2000-01-01"}', null)$q$,
+                         (select id from public.teci_stages where church_id = test.id('churchA') and stage_no = 1)),
+                  'M22: the TECi Coordinator adds a TECi graduate who is not in a team yet');
+select test.ok((select teci_verified_by = test.id('teci') from public.people where surname = 'Graduate'),
+               'M22: ... verified by them');
+select test.ok(not exists (select 1 from public.unit_memberships m join public.people p on p.id = m.person_id where p.surname = 'Graduate'),
+               'M22: ... with no team');
+select test.throws($q$select public.create_member('{"first_name":"No","surname":"Stage"}', null)$q$,
+                   'M22: ... but only with the TECi stage they have completed');
+select test.throws(format($q$select public.create_member('{"first_name":"In","surname":"Team","teci_stage_id":"%s"}', %L)$q$,
+                          (select id from public.teci_stages where church_id = test.id('churchA') and stage_no = 1), test.id('A1')),
+                   'M22: the TECi Coordinator does not add people to teams');
+reset role;
+select test.login('coord'); set role authenticated;   -- an editor of the record, but not the TECi Coordinator
+select test.throws(format($q$update public.people set teci_verified_at = now() where id = %L$q$, test.id('s3_member')),
+                   'M22: only the TECi Coordinator verifies a TECi stage');
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.throws($q$select public.create_member('{"first_name":"No","surname":"Team"}', null)$q$,
+                   'M22: a Team Lead still adds members to a team');
+reset role;
+
+-- ---------- Security review 13 ----------------------------------------------------------
+-- S01: a Team Lead who becomes the Deputy of the same team stops reading the one-to-ones they
+-- wrote (ul_a wrote one for s3_member above). Restored afterwards.
+select test.login('nobody');
+update public.role_assignments set is_active = false where user_id = test.id('ul_a') and role = 'unit_lead' and unit_id = test.id('A1');
+insert into public.role_assignments (church_id, user_id, role, unit_id) values (test.id('churchA'), test.id('ul_a'), 'deputy_unit_lead', test.id('A1'));
+select test.login('ul_a'); set role authenticated;
+select test.ok(not exists (select 1 from public.one_to_ones where unit_id = test.id('A1')),
+               'S13/S01: a former Team Lead who is now the Deputy no longer reads the one-to-ones they wrote');
+select test.ok(not exists (select 1 from jsonb_array_elements(public.unit_dashboard(test.id('A1')) -> 'members') m
+                           where m ->> 'last_one_to_one' is not null),
+               'S13/S01: ... nor their dates on the unit dashboard');
+reset role;
+select test.login('nobody');
+delete from public.role_assignments where user_id = test.id('ul_a') and role = 'deputy_unit_lead' and unit_id = test.id('A1');
+update public.role_assignments set is_active = true where user_id = test.id('ul_a') and role = 'unit_lead' and unit_id = test.id('A1');
+select test.login('ul_a'); set role authenticated;
+select test.ok(exists (select 1 from public.one_to_ones where unit_id = test.id('A1')),
+               'S13/S01: ... and reads them again as the Team Lead');
+reset role;
+
+-- S02: one Team Lead label per team even when the trigger's check is skipped or raced (a
+-- system change skips it; two requests at once both pass it). The unique index decides.
+select test.login('nobody');
+select test.throws(format($q$update public.unit_memberships set church_role_id = (select id from public.church_roles where church_id = %L and default_key = 'team_lead')
+                             where unit_id = %L and status <> 'ended'$q$, test.id('churchA'), test.id('A1')),
+                   'S13/S02: two live memberships of a team cannot both carry the Team Lead label');
+-- S05: no membership is flagged team leader without the Team Lead label.
+select test.ok(not exists (select 1 from public.unit_memberships m
+                           where m.is_team_leader and not exists (select 1 from public.church_roles r
+                                                                  where r.id = m.church_role_id and r.default_key = 'team_lead')),
+               'S13/S05: the team leader flag always matches the Team Lead label');
+-- S03: the Purpose Head rule serialises changes per person (two sessions are needed to race
+-- it, so this checks the lock is there; the race itself was reproduced by hand).
+select test.ok((select prosrc ~ 'pg_advisory_xact_lock' from pg_proc where oid = 'app.role_rules()'::regprocedure),
+               'S13/S03: role changes for one person are serialised');
+
+-- S04: the TECi route records a name, email and stage only.
+select test.login('teci'); set role authenticated;
+select test.throws(format($q$select public.create_member('{"first_name":"Too","surname":"Much","birth_day":3,"birth_month":4,"marital_status":"married","teci_stage_id":"%s"}', null)$q$,
+                          (select id from public.teci_stages where church_id = test.id('churchA') and stage_no = 1)),
+                   'S13/S04: the TECi Coordinator cannot record birthdays or family details');
+select test.throws(format($q$insert into public.people (first_name, surname, area, teci_stage_id) values ('Too', 'Much', 'Salford', %L)$q$,
+                          (select id from public.teci_stages where church_id = test.id('churchA') and stage_no = 1)),
+                   'S13/S04: ... nor other details by a direct insert');
+select test.lives(format($q$select public.create_member('{"first_name":"Just","surname":"Enough","email":"just.enough@example.org","teci_stage_id":"%s"}', null)$q$,
+                         (select id from public.teci_stages where church_id = test.id('churchA') and stage_no = 1)),
+                  'S13/S04: ... but records a name, email and stage');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.lives(format($q$select public.create_member('{"first_name":"Ops","surname":"Graduate","area":"Rochdale","teci_stage_id":"%s"}', null)$q$,
+                         (select id from public.teci_stages where church_id = test.id('churchA') and stage_no = 1)),
+                  'S13/S04: the Operations Lead''s full member entry is unchanged');
+reset role;
+
+-- S07: the default role names are kept for the default roles.
+select test.login('coord'); set role authenticated;
+select test.throws(format($q$insert into public.church_roles (name, unit_id) values ('team lead', %L)$q$, test.id('A1')),
+                   'S13/S07: a team''s own role cannot be called Team Lead');
+select test.lives(format($q$insert into public.church_roles (name, unit_id) values ('Vision mixer', %L)$q$, test.id('A1')),
+                  'S13/S07: a team''s own role with its own name is fine');
+select test.throws($q$update public.church_roles set name = 'Deputy Team Lead' where name = 'Vision mixer'$q$,
+                   'S13/S07: ... but it cannot be renamed to a default role''s name');
 reset role;
 
 -- ---------- report ---------------------------------------------------------------------

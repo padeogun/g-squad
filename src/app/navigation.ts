@@ -26,7 +26,14 @@ export const NAV: NavGroup[] = [
   {
     label: 'Overview',
     items: [
-      { label: 'Dashboard', path: '/', slice: 3 },
+      { label: 'Dashboard', path: '/', slice: 3, built: true },
+      {
+        label: 'Capacity calendar',
+        path: '/capacity',
+        slice: 3,
+        built: true,
+        roles: ['resident_pastor', 'purpose_head', 'gsquad_coordinator', 'unit_lead', 'deputy_unit_lead', 'operations_lead'],
+      },
       { label: 'My Unit', path: '/my-unit', slice: 1, built: true },
     ],
   },
@@ -34,6 +41,14 @@ export const NAV: NavGroup[] = [
     label: 'People and Teams',
     items: [
       { label: 'Members', path: '/members', slice: 1, built: true },
+      // The TECi Coordinator's list: who is in or through TECi, and stage verification.
+      {
+        label: 'TECi',
+        path: '/teci',
+        slice: 3,
+        built: true,
+        roles: ['teci_coordinator', 'gsquad_coordinator', 'resident_pastor', 'operations_lead'],
+      },
       { label: 'One-to-ones', path: '/one-to-ones', slice: 5 },
     ],
   },
