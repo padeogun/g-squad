@@ -61,3 +61,8 @@
 /* Selects inside table cells: no extra label row or padding (the label stays for screen readers). */
 .app-cell-field { min-width: 160px; }
 .app-cell-field > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Links in the app use the design system's link colour (not the browser's default blue). */
+.app-content a:not(.tec-btn) { color: var(--link); }
+/* Status chips next to a name in a table cell. */
+.app-content td .tec-chip { margin-left: var(--space-2); }
