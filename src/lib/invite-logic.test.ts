@@ -2,9 +2,15 @@
 // The database enforces the same rules; these make sure a refused invite never sends an email.
 import { describe, expect, it } from 'vitest';
 import {
+  bodyTooLarge,
   checkGrants,
   corsHeaders,
+  defaultOrigins,
+  invitesPerHour,
+  isFreshUser,
   parseOrigins,
+  PRODUCTION_ORIGINS,
+  safeDbMessage,
   validateInvite,
 } from '../../supabase/functions/invite-leader/logic.ts';
 
@@ -82,5 +88,51 @@ describe('CORS', () => {
     expect(parseOrigins('https://a.org/, http://localhost:5173', ['x'])).toEqual(['https://a.org', 'http://localhost:5173']);
     expect(parseOrigins('', ['https://fallback.org'])).toEqual(['https://fallback.org']);
     expect(parseOrigins('javascript:alert(1), https://a.org/path', ['f'])).toEqual(['f']);
+  });
+});
+
+// Security review 6 (SECURITY_LOG.md, K01 and K05 to K08).
+describe('security review 6', () => {
+  it('K01: only a user created by this request counts as new', () => {
+    const start = Date.parse('2026-10-23T12:00:00Z');
+    expect(isFreshUser('2026-10-23T12:00:00.300Z', start)).toBe(true);
+    expect(isFreshUser('2026-10-23T11:59:58Z', start)).toBe(true); // clock slack
+    expect(isFreshUser('2026-10-22T09:00:00Z', start)).toBe(false); // pending invitation from yesterday
+    expect(isFreshUser(undefined, start)).toBe(false);
+    expect(isFreshUser('not a date', start)).toBe(false);
+  });
+
+  it('K05: passes on our rule messages only', () => {
+    const fb = 'These roles could not be given';
+    expect(safeDbMessage({ code: '42501', message: 'Only the Resident Pastor can assign or remove this role' }, fb)).toMatch(
+      /Resident Pastor/,
+    );
+    expect(safeDbMessage({ code: '42501', message: 'new row violates row-level security policy for table "x"' }, fb)).toBe(fb);
+    expect(safeDbMessage({ code: '23503', message: 'violates foreign key constraint "role_assignments_church_id_unit_id_fkey"' }, fb)).toBe(fb);
+    expect(safeDbMessage(null, fb)).toBe(fb);
+  });
+
+  it('K06: refuses a large or nonsense Content-Length', () => {
+    expect(bodyTooLarge(null)).toBe(false);
+    expect(bodyTooLarge('512')).toBe(false);
+    expect(bodyTooLarge('4001')).toBe(true);
+    expect(bodyTooLarge('-1')).toBe(true);
+    expect(bodyTooLarge('abc')).toBe(true);
+  });
+
+  it('K07: localhost is allowed only on a local Supabase stack', () => {
+    expect(defaultOrigins('https://abcd.supabase.co')).toEqual(PRODUCTION_ORIGINS);
+    expect(defaultOrigins(undefined)).toEqual(PRODUCTION_ORIGINS);
+    expect(defaultOrigins('http://kong:8000')).toContain('http://localhost:5173');
+    expect(defaultOrigins('http://127.0.0.1:54321')).toContain('http://127.0.0.1:5173');
+    expect(defaultOrigins('http://localhost.evil.example')).toEqual(PRODUCTION_ORIGINS);
+  });
+
+  it('K08: hourly invitation limit defaults to 20 and stays in range', () => {
+    expect(invitesPerHour(undefined)).toBe(20);
+    expect(invitesPerHour('5')).toBe(5);
+    expect(invitesPerHour('0')).toBe(20);
+    expect(invitesPerHour('100000')).toBe(20);
+    expect(invitesPerHour('2.5')).toBe(20);
   });
 });

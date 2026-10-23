@@ -126,6 +126,53 @@ export function checkGrants(callerRoles: AppRole[], requested: RoleRequest[]): s
   return null;
 }
 
+// SECURITY REVIEW FIX K07: the built-in list holds the live app only. Local development
+// addresses are added only when the function itself runs on a local Supabase stack, so a
+// production invite link can never be pointed at http://localhost.
+export const PRODUCTION_ORIGINS = ['https://tecmanchester-g-squad.netlify.app'];
+const LOCAL_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
+export function defaultOrigins(supabaseUrl: string | undefined): string[] {
+  const local = /^http:\/\/(localhost|127\.0\.0\.1|kong|host\.docker\.internal)(:\d+)?(\/|$)/i.test(supabaseUrl ?? '');
+  return local ? [...PRODUCTION_ORIGINS, ...LOCAL_ORIGINS] : [...PRODUCTION_ORIGINS];
+}
+
+// SECURITY REVIEW FIX K01: Supabase re-sends an invitation to an address that was invited but
+// has not accepted yet, and returns that EXISTING user rather than a new one. Only a user created
+// by this request may be deleted when a later step fails. "Created by this request" = created no
+// earlier than a few seconds before the request started (both clocks are Supabase's own).
+export const FRESH_USER_SLACK_MS = 5_000;
+export function isFreshUser(createdAt: string | undefined, requestStartedMs: number): boolean {
+  const t = Date.parse(createdAt ?? '');
+  return Number.isFinite(t) && t >= requestStartedMs - FRESH_USER_SLACK_MS;
+}
+
+// SECURITY REVIEW FIX K05: only our own business-rule messages (raised by the guards with
+// code 42501, or P0001/23514) go back to the caller; anything else (constraint and column
+// names, internal details) is replaced by a plain sentence.
+export function safeDbMessage(err: { code?: string; message?: string } | null | undefined, fallback: string): string {
+  const msg = err?.message ?? '';
+  if (!msg || /row-level security/i.test(msg)) return fallback;
+  if (err?.code === '42501' || err?.code === 'P0001' || err?.code === '23514') return msg.slice(0, 200);
+  return fallback;
+}
+
+// SECURITY REVIEW FIX K06: refuse large bodies before reading them (Content-Length), then
+// check the real size in bytes once read (a header can be absent or wrong).
+export const MAX_BODY_BYTES = 4000;
+export function bodyTooLarge(contentLength: string | null): boolean {
+  if (contentLength == null) return false;
+  const n = Number(contentLength);
+  return !Number.isFinite(n) || n < 0 || n > MAX_BODY_BYTES;
+}
+
+// SECURITY REVIEW FIX K08: at most this many invitations per church per hour (by default), so
+// a mistake or a stolen admin session cannot use up the project's email allowance, which would
+// also stop every leader's sign-in emails. Set INVITES_PER_HOUR as a function secret to change it.
+export function invitesPerHour(raw: string | undefined): number {
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 1 && n <= 200 ? n : 20;
+}
+
 // CORS: only the app's own web addresses may call the function from a browser.
 export function parseOrigins(raw: string | undefined, fallback: string[]): string[] {
   const list = (raw ?? '')

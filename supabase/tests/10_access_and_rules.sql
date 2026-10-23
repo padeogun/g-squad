@@ -1138,6 +1138,74 @@ select test.ok((select is_active from public.app_users where id = test.id('newle
                'S1: ... and the account is really back on');
 reset role;
 
+-- =====================================================================================
+-- Security review 6 (migration 14): account guard and role-row updates
+-- =====================================================================================
+-- K02: the Resident Pastor switches off the Pastoral Lead; nobody else may switch them back on
+-- (that would hand the Pastoral Lead role back).
+select test.login('rp'); set role authenticated;
+select test.lives(format('update public.app_users set is_active = false where id = %L', test.id('pastoral')),
+                  'K02: Resident Pastor switches off a senior leader''s account');
+reset role;
+select test.login('coord'); set role authenticated;
+select test.throws(format('update public.app_users set is_active = true where id = %L', test.id('pastoral')),
+                   'K02: Coordinator cannot switch a senior leader''s account back on');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.throws(format('update public.app_users set is_active = true where id = %L', test.id('pastoral')),
+                   'K02: Operations Lead cannot switch a senior leader''s account back on');
+reset role;
+select test.ok(not (select is_active from public.app_users where id = test.id('pastoral')),
+               'K02: ... and the account stays switched off');
+select test.login('rp'); set role authenticated;
+select test.lives(format('update public.app_users set is_active = true where id = %L', test.id('pastoral')),
+                  'K02: Resident Pastor switches the senior leader''s account back on');
+reset role;
+
+-- K03: a Purpose Head is protected while Purpose Heads read pastoral notes.
+select test.login('');
+update public.church_settings set purpose_heads_read_pastoral = true where church_id = test.id('churchA');
+select test.login('coord'); set role authenticated;
+select test.throws(format('update public.app_users set is_active = false where id = %L', test.id('ph')),
+                   'K03: Coordinator cannot switch off a Purpose Head who reads pastoral notes');
+select test.throws(format('delete from public.app_users where id = %L', test.id('ph')),
+                   'K03: ... nor delete that account');
+reset role;
+select test.login('');
+update public.church_settings set purpose_heads_read_pastoral = false where church_id = test.id('churchA');
+select test.ok((select is_active from public.app_users where id = test.id('ph')), 'K03: ... and the Purpose Head is still active');
+
+-- K04: nobody re-links their own account to a G-Squad record (G02 self-recognition check).
+select test.login('coord'); set role authenticated;
+select test.throws(format('update public.app_users set person_id = %L where id = %L', test.id('p1'), test.id('coord')),
+                   'K04: Coordinator cannot change the record linked to their own account');
+select test.lives(format('update public.app_users set display_name = %L where id = %L', 'Coord', test.id('coord')),
+                  'K04: ... but can still rename their own account');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.throws(format('update public.app_users set person_id = %L where id = %L', test.id('p2'), test.id('ops')),
+                   'K04: Operations Lead cannot change the link on their own account');
+reset role;
+
+-- Role rows: an UPDATE is checked like a removal plus a grant.
+select test.login('coord'); set role authenticated;
+select test.throws(format('update public.role_assignments set role = %L, unit_id = null where user_id = %L and role = %L',
+                          'pastoral_lead', test.id('ul_b'), 'unit_lead'),
+                   'K: Coordinator cannot turn a Unit Lead row into a senior role');
+select test.throws(format('update public.role_assignments set user_id = %L where user_id = %L and role = %L',
+                          test.id('coord'), test.id('finance'), 'finance'),
+                   'K: Coordinator cannot move someone''s role row to themselves');
+select test.throws(format('update public.role_assignments set is_active = false where user_id = %L and role = %L',
+                          test.id('ops'), 'operations_lead'),
+                   'K: Coordinator cannot switch off the Operations Lead role row');
+select test.throws(format('update public.role_assignments set church_id = %L where user_id = %L',
+                          test.id('churchB'), test.id('finance')),
+                   'K: a role row cannot be moved to another church');
+select test.throws(format('insert into public.role_assignments (user_id, role, unit_id) values (%L, %L, %L)',
+                          test.id('ul_b'), 'unit_lead', test.id('B1')),
+                   'K: a role cannot point at another church''s unit');
+reset role;
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;

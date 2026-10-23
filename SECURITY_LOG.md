@@ -307,3 +307,61 @@ Every fix is marked `SECURITY REVIEW FIX Jnn` in an inline comment. New test fil
 5. **Supabase access token.** `SUPABASE_ACCESS_TOKEN` is a personal token with access to every project of that account. Use an account that only holds the G-Squad project, set an expiry, and rotate it when people change roles.
 6. **CSP and the live project.** `connect-src` names the test project. When the live project is added, add only its URL. Consider Trusted Types later.
 7. **Netlify environment.** Only `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`. J01 now stops a build that holds a secret-looking value, but no other secrets belong in Netlify at all.
+
+---
+
+## Review 6: Leader invitations (slice 1a), 23 Oct 2026
+
+Independent review of the slice 1a commit "invite leaders and manage roles". Every fix is marked `SECURITY REVIEW FIX Knn` in an inline comment.
+
+### Scope
+
+- Edge Function `supabase/functions/invite-leader/` (`index.ts`, `logic.ts`), its `verify_jwt` setting in `supabase/config.toml`, and its deploy step in `.github/workflows/deploy-database.yml`.
+- Migration 13 (`20261023001300_coordinator_invites.sql`): the new `app_users` and `role_assignments` policies, `app.role_assignment_guard` and the new `app.app_user_guard`. Earlier migrations were read for context only (the helpers in migration 1, policies in migration 7, guards in migration 10).
+- The app: `src/pages/admin/Leaders.tsx`, `src/auth/useMe.ts`, `src/lib/invite-landing.ts`, `src/app/AppShell.tsx`, `src/app/navigation.ts`, `src/data/*.ts`, `src/pages/SignIn.tsx`.
+- The new database checks ("Slice 1 (migration 13)") and `src/lib/invite-logic.test.ts`.
+
+Database fixes are in a new migration, `20261023001400_security_review_6.sql`. Nothing was connected to a real Supabase project.
+
+### Findings
+
+| ID | Severity | Finding | Fix | File |
+|----|----------|---------|-----|------|
+| K01 | High | **The rollback could delete someone else's account.** Supabase re-sends an invitation to an address that was invited but has not accepted yet, and returns that *existing* user instead of an error. The function then tried to add the account row, which failed (the row already exists, or belongs to another church), and its "rollback" deleted that user with the secret key. Deleting the login also deleted their G-Squad account and roles, and no guard applies to the secret key. So inviting a pending leader's address a second time, by mistake or on purpose, wiped them out: a Coordinator could remove a pending Pastoral Lead the Resident Pastor had just invited, or a pending leader of another church on the same project. | The function notes when the request started. A user created before that (with 5 seconds' slack) is not new: the function stops with "already has an account or a pending invitation" and changes nothing. The rollback also checks that no account row exists that this request did not make (two invites of one address at the same moment) before deleting anything. Unit tests added. | `supabase/functions/invite-leader/index.ts`, `logic.ts` |
+| K02 | Medium | **Switching an account back on was not protected.** Only switching off was. A switched-off account keeps its role rows, so switching it on gives those roles back. The Coordinator (or an Operations Lead) could switch on a former Resident Pastor, Pastoral Lead or Operations Lead whom the Resident Pastor had switched off, which in effect gives a senior role. | The account guard now treats switching on exactly like switching off: an account with a senior or Operations Lead role can be switched either way only by the Resident Pastor, and nobody switches their own account either way. 5 database checks added. | migration 14 |
+| K03 | Low | The account guard's list of protected roles left out the Purpose Head while Purpose Heads may read pastoral notes, unlike the role guard (and the church's rule). The Coordinator could switch off or delete such a Purpose Head. | The guard adds Purpose Head to the protected roles while that church setting is on. 3 database checks added. | migration 14 |
+| K04 | Low | Migration 13 gave the Coordinator and the Resident Pastor write access to `app_users`, including `person_id`, the link to their own G-Squad record. A leader could clear their own link and then recognise themselves, getting round the self-recognition check (G02). (The Operations Lead could already do this.) | Nobody can change the record linked to their own account; another admin sets it. Renaming your own account still works. 3 database checks added. | migration 14 |
+| K05 | Low | When the roles could not be saved, the function passed the raw database message back to the browser. That can name constraints, columns and internal details. | Only our own rule messages (codes 42501, P0001, 23514, never the generic row-level security message) are passed on. Anything else becomes "These roles could not be given". Unit test added. | `index.ts`, `logic.ts` |
+| K06 | Low | The function read the whole request body before checking its size, and counted characters, not bytes. | It refuses a missing-or-wrong `Content-Length` over 4,000 bytes before reading, then checks the real size in bytes. Unit test added. | `index.ts`, `logic.ts` |
+| K07 | Low | The built-in list of allowed web addresses included `http://localhost:5173` and `http://127.0.0.1:5173` in production. Those addresses could call the function and become the invite link's return address, so a live invitation could be sent pointing at a local address. | The built-in list is the live app only. The local addresses are added only when the function runs on a local Supabase stack. `ALLOWED_ORIGINS` still overrides both. Unit test added. | `index.ts`, `logic.ts` |
+| K08 | Medium | **No limit on invitations.** A mistake, a script, or a stolen admin session could send invitation emails without limit. Supabase has one email allowance per project, so using it up would also stop every leader's sign-in links (sign-in is by emailed link only). | At most 20 new accounts per church per hour (setting `INVITES_PER_HOUR`, 1 to 200). This is checked as the caller, so row-level security limits the count to their own church, before any email is sent. Unit test added. | `index.ts`, `logic.ts` |
+
+### Checked and found sound
+
+- **Role escalation through role rows.** `app.role_assignment_guard` checks both the old and new row on UPDATE. So changing `role`, `user_id` or `is_active` counts as removing one role and giving another: a Unit Lead row cannot be turned into a senior or Operations Lead role, moved to yourself, or switched on as a senior role. `church_id` is pinned by the policy's `with check`. Checks added for each.
+- **Cross-church ids.** `unit_id`, `purpose_id` and `user_id` have composite foreign keys with `church_id`, and `church_id` defaults to the caller's church. A role cannot point at another church's unit or purpose. Check added.
+- **Deleting an account to get round the guards.** DELETE runs the account guard (protected accounts: Resident Pastor only; never your own). The cascade to `role_assignments` also runs the role guard for each row, so a senior or Operations Lead role is never removed by someone else this way.
+- **Switched-off accounts lose access everywhere.** `app.current_church_id`, `has_role`, `has_any_role`, `is_unit_lead_of` and `is_purpose_head_of_unit` all require `app_users.is_active`. Every policy and logged function (`can_see_faith`, `can_see_pastoral`) needs the caller's church. So a switched-off leader with a valid token reads nothing, and the Edge Function sees no roles for them and refuses.
+- **The Edge Function's database writes** use the caller's token, so row-level security and both guards decide, as in the app. The secret key sends the invite, makes one read for the rollback check, and deletes only a user this request created. It is read from the function's runtime settings and never logged or returned. Logs hold only an HTTP status, no email address. `verify_jwt = true` is set, and the function also checks the user with `getUser()`.
+- **CORS and the return address.** The allowed origin is echoed only for listed addresses (`Vary: Origin`). An unknown or missing `Origin` is refused, and the return address is always one of the listed origins, so there is no open redirect. Supabase's own redirect allow-list is a second check.
+- **Input.** Strict JSON, email shape and length, a name without control characters, 1 to 5 known roles, UUID-shaped scopes, and the right scope for each role. `checkGrants` refuses before any email is sent and is stricter than the database (it always treats Purpose Head as senior).
+- **Account enumeration.** "Already has an account" is shown only to inviters, after their roles are checked. Accepted (see residual risks).
+- **Invite landing.** Tokens in the address fragment are dropped before the Supabase client starts, without adding a history entry. With PKCE, supabase-js ignores fragment tokens anyway. Only a "welcome" flag goes in sessionStorage, never a token.
+- **App.** Role-based menus and buttons are a courtesy only; the database decides. React escapes leader names. Error messages go through `friendlyError`. There is no `innerHTML` and no token in `localStorage` beyond Supabase's own session.
+- **Deploy.** The function is deployed only from main, after the migrations, with the access token only (Review 5, J02 and J03, still hold).
+
+### Test results
+
+- `scripts/db-types.sh` (local Postgres 16): **257 of 257 checks passed** (241 before, plus 16 for K02, K03, K04 and role-row updates). `src/lib/database.types.ts` regenerated with no change, because migration 14 changes no table.
+- `npm run check`: lint clean, **43 of 43 unit tests pass** (5 new, for K01 and K05 to K08), build succeeds.
+- `index.ts` type-checks against supabase-js with a small Deno shim. Deno is not installed here, so the function was not run.
+
+### Residual risks and actions for TEC
+
+1. **A pending invitation still gets a fresh email.** Supabase re-sends before the function can tell the user already exists (K01). Nothing is changed or deleted, and Supabase's per-address email frequency limits repeats. Set that limit to at least 60 seconds on the hosted project.
+2. **Hosted project settings.** Set the `ALLOWED_ORIGINS` function secret to the live address only, and `INVITES_PER_HOUR` if 20 does not suit. Use custom SMTP, so the email allowance is TEC's own and not Supabase's small shared one. Keep the Auth redirect allow-list to exact production addresses.
+3. **Second accounts.** An inviter can invite a second email address they control and give it any role they may give (for example Finance, or Operations Lead for an Operations Lead). The rules allow this. The audit log records who added each account and role. **The Resident Pastor should review new accounts and roles in the audit log monthly.**
+4. **Operations Lead against Operations Lead.** One Operations Lead may remove another's Operations Lead role (allowed by the rule) and then switch the account off, because it is no longer protected. If TEC wants only the Resident Pastor to remove an Operations Lead, change the role guard.
+5. **Deleting accounts.** Inviters can delete (not only switch off) accounts that are not protected. Accounts that own projects, recognitions or unit memberships cannot be deleted (foreign keys), but the screen offers "Switch off" only. Consider removing DELETE from the `app_users_admin` policy, so audit history always keeps its account names.
+6. **Linking a leader to their own G-Squad record** is now done by another admin (K04). An admin could still unlink a colleague so that the colleague could recognise themselves. That needs collusion, and it shows in the audit log.
+7. **Sessions after switch-off.** A switched-off leader's token stays valid until it expires (1 hour), but it reads and changes nothing. To end it at once, sign the user out in the Supabase dashboard.
