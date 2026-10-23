@@ -17,7 +17,32 @@
 -- Resident Pastor). The Operations Lead, and leaders of other units, get null, not 0.
 -- SECURITY REVIEW 12 (R02): the two helpers below run as the caller (security invoker) and
 -- are not callable by signed-in users; only the dashboards, which run as the owner, use them.
+-- Who may open each dashboard is decided by two helpers, app.is_dashboard_reader() and
+-- app.can_view_unit(), so later migrations can widen or narrow the audience without
+-- re-creating the dashboards (migration 22 adds the Deputy Team Lead to both).
+-- Decision of 23 Oct 2026: the TECi Coordinator does not see the Church Dashboard.
 -- =====================================================================================
+
+-- Church Dashboard audience: the leadership group and the roles that plan across the church.
+create or replace function app.is_dashboard_reader() returns boolean
+language sql stable security definer set search_path = ''
+as $$
+  select app.has_any_role(array['resident_pastor','purpose_head','unit_lead','gsquad_coordinator',
+                                'operations_lead','pastoral_lead']::public.app_role[])
+$$;
+revoke all on function app.is_dashboard_reader() from public, anon;
+grant execute on function app.is_dashboard_reader() to authenticated, service_role;
+
+-- Unit Dashboard audience for one unit: its lead and Purpose Head, the Resident Pastor,
+-- Operations Lead and G-Squad Coordinator.
+create or replace function app.can_view_unit(p_unit uuid) returns boolean
+language sql stable security definer set search_path = ''
+as $$
+  select app.is_unit_lead_of(p_unit) or app.is_purpose_head_of_unit(p_unit)
+      or app.has_any_role(array['resident_pastor','operations_lead','gsquad_coordinator']::public.app_role[])
+$$;
+revoke all on function app.can_view_unit(uuid) from public, anon;
+grant execute on function app.can_view_unit(uuid) to authenticated, service_role;
 
 -- Live engagement of one person, as v_engagement defines it (reused below without RLS).
 create or replace function app.engagement_of(p_person uuid) returns text
@@ -83,9 +108,8 @@ declare
   v_q date := date_trunc('quarter', v_today)::date;
   v jsonb;
 begin
-  -- The leadership group and the roles that plan across the church.
-  if v_church is null or not app.has_any_role(array['resident_pastor','purpose_head','unit_lead','gsquad_coordinator',
-                                                    'operations_lead','teci_coordinator','pastoral_lead']::public.app_role[]) then
+  -- The leadership group and the roles that plan across the church (app.is_dashboard_reader).
+  if v_church is null or not app.is_dashboard_reader() then
     raise exception 'Not allowed' using errcode = '42501';
   end if;
 
@@ -165,8 +189,7 @@ declare
   v jsonb;
 begin
   if not exists (select 1 from public.units u where u.id = p_unit and u.church_id = v_church)
-     or not (app.is_unit_lead_of(p_unit) or app.is_purpose_head_of_unit(p_unit)
-             or app.has_any_role(array['resident_pastor','operations_lead','gsquad_coordinator']::public.app_role[])) then
+     or not app.can_view_unit(p_unit) then
     raise exception 'Not allowed to view this unit' using errcode = '42501';
   end if;
 

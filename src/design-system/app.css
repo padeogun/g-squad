@@ -58,8 +58,10 @@
 .app-field-wide { grid-column: 1 / -1; }
 .app-textarea { min-height: 88px; padding-top: var(--space-2); padding-bottom: var(--space-2); resize: vertical; font: inherit; }
 
-/* Selects inside table cells: no extra label row or padding (the label stays for screen readers). */
-.app-cell-field { min-width: 160px; }
+/* Selects inside table cells: no extra label row or padding (the label stays for screen readers).
+   position: relative keeps the hidden label inside the cell; without it the label was placed
+   against the page and widened phone screens (sideways scrolling) whenever a table scrolled. */
+.app-cell-field { min-width: 160px; position: relative; }
 .app-cell-field > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 /* Links in the app use the design system's link colour (not the browser's default blue). */
@@ -105,3 +107,24 @@
 .app-cap-short { background: var(--danger-soft); color: var(--danger); font-weight: 600; }
 .app-cap-tight { background: var(--warn-soft); }
 .app-cap-ok { background: var(--ok-soft); }
+
+/* ---------- Layout safety: no text overflow, aligned form fields (23 Oct 2026) ---------- */
+
+/* Fields in a row line up on their controls. A long label or hint wraps upwards instead of
+   pushing its input below its neighbours'; checkboxes sit level with the inputs beside them. */
+.tec-fields { align-items: end; }
+.tec-row:has(> .tec-field) { align-items: flex-end; }
+
+/* Long words (emails, names, unit names) wrap inside their box instead of spilling out. */
+.app-content { overflow-wrap: break-word; }
+/* Flex rows: let text items shrink and wrap (flex items otherwise keep their longest word's width). */
+.app-candidates li > *, .app-checkin li > *, .tec-card-head > *, .tec-row > * { min-width: 0; overflow-wrap: anywhere; }
+/* Chips wrap in rows and cards; inside tables they stay on one line and the table scrolls. */
+.app-content .tec-chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.app-content td .tec-chip { white-space: nowrap; }
+
+/* A small select beside a card title (e.g. "Show" on the TECi list): label and select on one line. */
+.app-inline-select { flex-direction: row; align-items: center; gap: var(--space-2); }
+.app-inline-select .tec-select { width: auto; min-width: 180px; max-width: 100%; }
+/* A control and its button side by side in a table cell, aligned on the control. */
+.app-inline-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-2); }

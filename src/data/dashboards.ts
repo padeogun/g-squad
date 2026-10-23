@@ -143,16 +143,16 @@ export const DASHBOARD_ROLES = [
   'resident_pastor',
   'purpose_head',
   'unit_lead',
+  'deputy_unit_lead',
   'gsquad_coordinator',
   'operations_lead',
-  'teci_coordinator',
   'pastoral_lead',
 ] as const;
 
 // Roles that see the capacity calendar (mirrors public.capacity_calendar(): narrower than the
 // dashboard roles, so the TECi Coordinator and pastoral lead don't get a call the database
 // refuses; security review 12, R04).
-export const CAPACITY_ROLES = ['resident_pastor', 'purpose_head', 'gsquad_coordinator', 'unit_lead', 'operations_lead'] as const;
+export const CAPACITY_ROLES = ['resident_pastor', 'purpose_head', 'gsquad_coordinator', 'unit_lead', 'deputy_unit_lead', 'operations_lead'] as const;
 
 // Months with a shortfall for each unit: { unitName -> ['Mar', 'Apr'] } (dashboard summary).
 export function shortfalls(rows: { unit_name: string; month: string; spare: number }[]): Map<string, string[]> {

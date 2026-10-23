@@ -1,7 +1,9 @@
 // -------------------------------------------------------------------------------------
-// My Unit: a Unit Lead's view of their team. Lists the unit's live members with their team
-// role, leader flag and leadership stage, and lets the lead change those three in place.
-// A lead of several units picks one at the top. Other roles see a short explanation.
+// My Unit: a Team Lead's view of their team. Lists the unit's live members with their team
+// role and leadership stage, and lets the lead change those two in place.
+// A Deputy Team Lead sees the same page view-only, without one-to-ones (decision of
+// 23 Oct 2026; the database enforces both). Someone with several teams picks one at the top.
+// The "team leader" flag now follows the Team Lead role label (migration 22: no co-leads).
 // Slice 3 adds the unit dashboard (public.unit_dashboard): headline tiles, the engagement mix,
 // the leadership pipeline and, per member, slots this month, engagement, holiday and last
 // one-to-one. Those figures are checked in the database to be this unit's lead (or seniors).
@@ -14,29 +16,32 @@ import { supabase } from '../../lib/supabase';
 import { friendlyError } from '../../data/errors';
 import { byId, useChurchRoles, useLeadershipStages, useUnits } from '../../data/reference';
 import { fullName, useMemberships, usePeople, type Membership } from '../../data/people';
-import { ledUnitIds, useMe } from '../../auth/useMe';
+import { ledUnitIds, viewedUnitIds, useMe } from '../../auth/useMe';
 import { useUnitDashboard } from '../../data/dashboards';
 import { shortDate } from '../../data/sundays';
 import { EngagementBar } from '../dashboard/EngagementBar';
 
-const { SectionHeading, Card, SelectField, Checkbox, Notice, DataTable, StatTile, Chip } = TEC;
+const { SectionHeading, Card, SelectField, Notice, DataTable, StatTile, Chip } = TEC;
 
 export function MyUnit() {
   const me = useMe();
   const units = useUnits();
-  const myUnits = ledUnitIds(me.data);
+  // Units they lead come first, then units they deputise for.
+  const myUnits = viewedUnitIds(me.data);
   const [chosen, setChosen] = useState<string>('');
-  // Default to the first unit they lead.
   const unitId = chosen || myUnits[0] || '';
   const unit = byId(units.data).get(unitId);
+  // Only the Team Lead changes the team; the Deputy's view is read-only.
+  const canEdit = ledUnitIds(me.data).includes(unitId);
 
   if (me.isPending) return <p>Loading…</p>;
   if (myUnits.length === 0)
     return (
       <>
         <SectionHeading eyebrow="Overview" title="My Unit" rule />
-        <Notice tone="info" title="For Unit Leads">
-          My Unit shows a Unit Lead their team. You don't lead a unit; see <Link to="/members">G-Squad members</Link> instead.
+        <Notice tone="info" title="For Team Leads">
+          My Unit shows a Team Lead or Deputy Team Lead their team. You don't lead a team; see{' '}
+          <Link to="/members">G-Squad members</Link> instead.
         </Notice>
       </>
     );
@@ -52,15 +57,24 @@ export function MyUnit() {
           label="Unit"
           value={unitId}
           onChange={(e) => setChosen(e.target.value)}
-          options={myUnits.map((id) => ({ value: id, label: byId(units.data).get(id)?.name ?? 'Unit' }))}
+          options={myUnits.map((id) => ({
+            value: id,
+            label: `${byId(units.data).get(id)?.name ?? 'Unit'}${ledUnitIds(me.data).includes(id) ? '' : ' (deputy)'}`,
+          }))}
         />
       )}
-      {unitId && <Team key={unitId} unitId={unitId} target={unit?.target_headcount ?? null} />}
+      {unitId && !canEdit && (
+        <Notice tone="info" title="View only">
+          You are the Deputy Team Lead here: you can see the team, but changes are made by the Team Lead. One-to-ones are
+          not shown.
+        </Notice>
+      )}
+      {unitId && <Team key={unitId} unitId={unitId} target={unit?.target_headcount ?? null} canEdit={canEdit} />}
     </>
   );
 }
 
-function Team({ unitId, target }: { unitId: string; target: number | null }) {
+function Team({ unitId, target, canEdit }: { unitId: string; target: number | null; canEdit: boolean }) {
   const qc = useQueryClient();
   const people = usePeople();
   const memberships = useMemberships();
@@ -75,7 +89,7 @@ function Team({ unitId, target }: { unitId: string; target: number | null }) {
     .filter((m) => m.unit_id === unitId)
     .sort((a, b) => (personMap.get(a.person_id)?.surname ?? '').localeCompare(personMap.get(b.person_id)?.surname ?? ''));
 
-  // Change one membership's role, leader flag or stage. The database checks it is this unit's lead.
+  // Change one membership's role or stage. The database checks it is this unit's Team Lead.
   const update = useMutation({
     mutationFn: async ({ id, patch }: { id: string; patch: Partial<Membership> }) => {
       const { error } = await supabase.from('unit_memberships').update(patch).eq('id', id).select('id').single();
@@ -84,10 +98,18 @@ function Team({ unitId, target }: { unitId: string; target: number | null }) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['memberships'] }),
   });
 
-  const roleOptions = [
+  // Standing team roles are operational ones (project roles are for project teams). The
+  // Team Lead label is offered only while no one else in the team holds it (no co-leads).
+  const leadTaken = (memberId: string) => team.some((t) => t.id !== memberId && t.is_team_leader);
+  const roleOptionsFor = (memberId: string) => [
     { value: '', label: 'None' },
-    ...(roles.data ?? []).filter((r) => r.is_active && (!r.unit_id || r.unit_id === unitId)).map((r) => ({ value: r.id, label: r.name })),
+    ...(roles.data ?? [])
+      .filter((r) => r.is_active && r.permanence === 'operational' && (!r.unit_id || r.unit_id === unitId))
+      .filter((r) => r.default_key !== 'team_lead' || !leadTaken(memberId))
+      .map((r) => ({ value: r.id, label: r.name })),
   ];
+  const roleName = (id: string | null) => (roles.data ?? []).find((r) => r.id === id)?.name ?? '–';
+  const stageName = (id: string | null) => (stages.data ?? []).find((s) => s.id === id)?.name ?? '–';
   const stageOptions = [{ value: '', label: 'None' }, ...(stages.data ?? []).map((s) => ({ value: s.id, label: s.name }))];
 
   return (
@@ -149,9 +171,11 @@ function Team({ unitId, target }: { unitId: string; target: number | null }) {
       <Card
         title="Team"
         action={
-          <Link to="/members/new" className="tec-btn tec-btn-primary tec-btn-sm">
-            Add a member
-          </Link>
+          canEdit ? (
+            <Link to="/members/new" className="tec-btn tec-btn-primary tec-btn-sm">
+              Add a member
+            </Link>
+          ) : undefined
         }
       >
         {(people.isPending || memberships.isPending) && <p>Loading…</p>}
@@ -163,11 +187,11 @@ function Team({ unitId, target }: { unitId: string; target: number | null }) {
               { key: 'name', label: 'Name' },
               { key: 'role', label: 'Team role' },
               { key: 'stage', label: 'Leadership stage' },
-              { key: 'lead', label: 'Team leader' },
               { key: 'slots', label: 'Slots this month', align: 'right' },
               { key: 'engagement', label: 'Engagement' },
               { key: 'holiday', label: 'Holiday' },
-              { key: 'oto', label: 'Your last one-to-one' },
+              // The Deputy never sees one-to-ones, so the column is left out for them.
+              ...(canEdit ? [{ key: 'oto', label: 'Your last one-to-one' }] : []),
             ]}
             rows={team.map((m) => {
               const p = personMap.get(m.person_id);
@@ -182,18 +206,22 @@ function Team({ unitId, target }: { unitId: string; target: number | null }) {
                     {p?.status === 'paused' && <Chip tone="warn">Paused</Chip>}
                   </span>
                 ),
-                role: (
+                role: !canEdit ? (
+                  roleName(m.church_role_id)
+                ) : (
                   <SelectField
                     id={`role-${m.id}`}
                     label={`Team role for ${name}`}
                     className="app-cell-field"
                     value={m.church_role_id ?? ''}
                     disabled={update.isPending}
-                    options={roleOptions}
+                    options={roleOptionsFor(m.id)}
                     onChange={(e) => update.mutate({ id: m.id, patch: { church_role_id: e.target.value || null } })}
                   />
                 ),
-                stage: (
+                stage: !canEdit ? (
+                  stageName(m.leadership_stage_id)
+                ) : (
                   <SelectField
                     id={`stage-${m.id}`}
                     label={`Leadership stage for ${name}`}
@@ -202,16 +230,6 @@ function Team({ unitId, target }: { unitId: string; target: number | null }) {
                     disabled={update.isPending}
                     options={stageOptions}
                     onChange={(e) => update.mutate({ id: m.id, patch: { leadership_stage_id: e.target.value || null } })}
-                  />
-                ),
-                lead: (
-                  <Checkbox
-                    id={`lead-${m.id}`}
-                    label={`Team leader`}
-                    aria-label={`${name} is a team leader`}
-                    checked={m.is_team_leader}
-                    disabled={update.isPending}
-                    onChange={(e) => update.mutate({ id: m.id, patch: { is_team_leader: e.target.checked } })}
                   />
                 ),
                 // Over the member's own limit shows as a warning: R-limits protect volunteers.

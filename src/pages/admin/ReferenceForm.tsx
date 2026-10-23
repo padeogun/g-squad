@@ -128,15 +128,22 @@ function FormScreen({ def }: { def: FormDef }) {
             rows={rows.data.map((r) => {
               const cells: Record<string, ReactNode> = { id: r.id };
               for (const f of listFields) cells[f.key] = display(f, r[f.key], lookups);
+              // App-owned rows (default team roles) are marked, and can't be switched off or removed.
+              const isProtected = !!def.protectedRows && r[def.protectedRows.flag] != null;
               if (def.hasActive)
-                cells._status = r.is_active ? <Chip tone="ok">In use</Chip> : <Chip tone="neutral">Switched off</Chip>;
+                cells._status = (
+                  <>
+                    {r.is_active ? <Chip tone="ok">In use</Chip> : <Chip tone="neutral">Switched off</Chip>}
+                    {isProtected && <Chip tone="info">{def.protectedRows!.label}</Chip>}
+                  </>
+                );
               if (canEdit)
                 cells._actions = (
                   <div className="tec-row" style={{ padding: 0 }}>
                     <Button size="sm" variant="secondary" onClick={() => setEditing(r.id)}>
                       Edit
                     </Button>
-                    {def.hasActive ? (
+                    {isProtected ? null : def.hasActive ? (
                       <Button size="sm" variant="quiet" disabled={toggleActive.isPending} onClick={() => toggleActive.mutate(r)}>
                         {r.is_active ? 'Switch off' : 'Switch on'}
                       </Button>
@@ -183,10 +190,13 @@ function EditPanel({
     const v: Values = {};
     for (const f of def.fields) {
       const cur = row?.[f.key];
-      v[f.key] = f.type === 'boolean' ? cur === true : cur == null ? '' : String(cur);
+      v[f.key] = f.type === 'boolean' ? cur === true : cur == null ? (row ? '' : f.defaultValue ?? '') : String(cur);
     }
     return v;
   });
+  // On an app-owned row only some fields can change; the rest are shown but locked.
+  const locked = (key: string) =>
+    !!row && !!def.protectedRows && row[def.protectedRows.flag] != null && !def.protectedRows.editable.includes(key);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const save = useMutation({
@@ -220,7 +230,16 @@ function EditPanel({
       <form className="app-form" onSubmit={onSubmit} noValidate>
         <div className="tec-fields">
           {def.fields.map((f) => (
-            <Field key={f.key} def={def} field={f} value={values[f.key]} error={errors[f.key]} lookups={lookups} onChange={set} />
+            <Field
+              key={f.key}
+              def={def}
+              field={f}
+              value={values[f.key]}
+              error={errors[f.key]}
+              lookups={lookups}
+              onChange={set}
+              disabled={locked(f.key)}
+            />
           ))}
         </div>
         {save.isError && (
@@ -249,6 +268,7 @@ function Field({
   error,
   lookups,
   onChange,
+  disabled,
 }: {
   def: FormDef;
   field: FieldDef;
@@ -256,6 +276,7 @@ function Field({
   error?: string;
   lookups: Lookups;
   onChange: (key: string, v: string | boolean) => void;
+  disabled?: boolean;
 }) {
   const id = `${def.id}-${f.key}`;
   // The error is shown in the hint slot, beside the label, and announced to screen readers.
@@ -263,7 +284,9 @@ function Field({
   const invalid = error ? { 'aria-invalid': true as const } : {};
 
   if (f.type === 'boolean')
-    return <Checkbox id={id} label={f.label} checked={value === true} onChange={(e) => onChange(f.key, e.target.checked)} />;
+    return (
+      <Checkbox id={id} label={f.label} disabled={disabled} checked={value === true} onChange={(e) => onChange(f.key, e.target.checked)} />
+    );
 
   if (f.type === 'select') {
     const opts = f.options ?? (f.lookup ? lookups[f.lookup] : []);
@@ -273,6 +296,7 @@ function Field({
         label={f.label}
         hint={hint}
         value={String(value)}
+        disabled={disabled}
         onChange={(e) => onChange(f.key, e.target.value)}
         options={[{ value: '', label: f.required ? 'Choose…' : 'None' }, ...opts]}
         {...invalid}
@@ -292,6 +316,7 @@ function Field({
           rows={3}
           maxLength={f.maxLength}
           value={String(value)}
+          disabled={disabled}
           onChange={(e) => onChange(f.key, e.target.value)}
           {...invalid}
         />
@@ -309,6 +334,7 @@ function Field({
       max={f.max}
       maxLength={f.maxLength}
       required={f.required}
+      disabled={disabled}
       value={String(value)}
       onChange={(e) => onChange(f.key, e.target.value)}
       {...invalid}

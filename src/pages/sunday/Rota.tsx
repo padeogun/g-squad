@@ -16,7 +16,7 @@ import { byId, useChurchRoles, useUnits } from '../../data/reference';
 import { fullName, usePersonNames } from '../../data/people';
 import { shortDate, todayIso } from '../../data/sundays';
 import { buildRota, monthBounds, useCandidates, useMonthSundays, useUnitAssignments, useUnitDemand, type RotaSlot } from '../../data/rota';
-import { hasRole, ledUnitIds, useMe } from '../../auth/useMe';
+import { hasRole, ledUnitIds, viewedUnitIds, useMe } from '../../auth/useMe';
 
 const { SectionHeading, Card, Button, TextField, SelectField, Notice, Chip } = TEC;
 
@@ -36,8 +36,10 @@ export function Rota() {
   const units = useUnits();
   const isAdmin = hasRole(me.data, 'operations_lead', 'gsquad_coordinator');
   const led = ledUnitIds(me.data);
-  // Units this leader can rota: all for the Operations Lead and Coordinator, otherwise those they lead.
-  const choices = (units.data ?? []).filter((u) => u.is_active && (isAdmin || led.includes(u.id)));
+  // Units this leader can see the rota of: all for the Operations Lead and Coordinator, otherwise
+  // those they lead or deputise for. Only the Team Lead (or Ops Lead) changes it (canEdit below).
+  const seen = viewedUnitIds(me.data);
+  const choices = (units.data ?? []).filter((u) => u.is_active && (isAdmin || seen.includes(u.id)));
   const [chosen, setChosen] = useState('');
   const unitId = chosen || choices[0]?.id || '';
   const [month, setMonth] = useState(() => todayIso().slice(0, 7));
@@ -49,8 +51,8 @@ export function Rota() {
         Roles come from each Sunday's service grid. People on holiday or at their monthly limit aren't offered.
       </SectionHeading>
       {choices.length === 0 ? (
-        <Notice tone="info" title="For Unit Leads">
-          The rota is filled by each unit's lead. You don't lead a unit.
+        <Notice tone="info" title="For Team Leads">
+          The rota is filled by each team's lead. You don't lead a team.
         </Notice>
       ) : (
         <>

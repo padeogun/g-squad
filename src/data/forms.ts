@@ -28,6 +28,8 @@ export interface FieldDef {
   lookup?: LookupName;
   // Shown in the list as a column.
   inList?: boolean;
+  // Starting value when adding a row (e.g. a role is Operational unless chosen otherwise).
+  defaultValue?: string;
 }
 
 export interface FormDef {
@@ -44,6 +46,10 @@ export interface FormDef {
   hasActive: boolean;
   // Fixed-size lists (the 5 TECi stages) are edited, never added to or removed.
   fixedRows?: boolean;
+  // Rows the app owns (e.g. the four default team roles): a row with a value in `flag` cannot be
+  // switched off or removed, and only the `editable` fields can change (the database enforces
+  // the same; migration 22).
+  protectedRows?: { flag: string; editable: string[]; label: string };
 }
 
 const NAME: FieldDef = { key: 'name', label: 'Name', type: 'text', required: true, maxLength: 100, inList: true };
@@ -94,7 +100,8 @@ export const FORMS: FormDef[] = [
     table: 'church_roles',
     title: 'Team roles',
     singular: 'team role',
-    description: 'The roles people hold in a unit (for example Camera operator), or church-wide roles with no unit.',
+    description:
+      'The roles people hold in a unit (for example Camera operator), or church-wide roles with no unit. Every team has four default roles: Team Lead, Deputy Team Lead, Welfare and Pastoral Coordinator, and Member. Operational roles are routine; project roles are temporary, for project teams.',
     owner: 'Operations Lead or G-Squad Coordinator',
     editRoles: ['operations_lead', 'gsquad_coordinator'],
     orderBy: 'name',
@@ -103,8 +110,21 @@ export const FORMS: FormDef[] = [
       NAME,
       { key: 'unit_id', label: 'Unit', type: 'select', lookup: 'units', hint: 'Leave empty for a church-wide role', inList: true },
       { key: 'description', label: 'Description', type: 'textarea', maxLength: 2000 },
+      {
+        key: 'permanence',
+        label: 'Role type',
+        type: 'select',
+        required: true,
+        defaultValue: 'operational',
+        options: [
+          { value: 'operational', label: 'Operational (routine)' },
+          { value: 'project', label: 'Project (temporary)' },
+        ],
+        inList: true,
+      },
       { key: 'is_rota_role', label: 'Appears on Sunday rotas', type: 'boolean', inList: true },
     ],
+    protectedRows: { flag: 'default_key', editable: ['description', 'is_rota_role'], label: 'Default' },
   },
   {
     id: 'teci-stages',
