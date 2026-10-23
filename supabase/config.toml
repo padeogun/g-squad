@@ -413,3 +413,9 @@ enabled = true
 # formatted with uppercase keywords, indent 2, max width 180, trailing commas,
 # and column/key alignment. Set to "null" to emit raw, unformatted SQL.
 # format_options = "{\"keywordCase\":\"upper\",\"indent\":2,\"maxWidth\":180,\"commaStyle\":\"trailing\"}"
+
+# G-Squad: invites a leader by email (needs the secret key, so it runs on the server).
+# verify_jwt: Supabase rejects calls without a valid signed-in user's token before our code runs.
+[functions.invite-leader]
+enabled = true
+verify_jwt = true

@@ -1,4 +1,6 @@
-// App entry point: design system first (styles and window.TEC), then providers and routes.
+// App entry point. Order matters: the invite-link handler runs before the Supabase client
+// reads the address bar; then the design system (styles and window.TEC); then the app.
+import './lib/invite-landing';
 import './design-system';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';

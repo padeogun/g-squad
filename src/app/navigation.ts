@@ -4,10 +4,17 @@
 // Slice numbers follow the G-Squad Planner Build Plan.
 // -------------------------------------------------------------------------------------
 
+import type { AppRole } from '../auth/useMe';
+
 export interface NavItem {
   label: string;
   path: string;
   slice: number;
+  // Shown only to these roles (a courtesy: the database decides what each can read or change).
+  // Omitted = shown to every signed-in leader.
+  roles?: AppRole[];
+  // True once the screen exists; until then the route shows a "coming in slice N" page.
+  built?: boolean;
 }
 
 export interface NavGroup {
@@ -44,9 +51,25 @@ export const NAV: NavGroup[] = [
   },
   {
     label: 'Admin',
-    items: [{ label: 'Reference forms', path: '/admin', slice: 1 }],
+    items: [
+      {
+        label: 'Leaders',
+        path: '/admin/leaders',
+        slice: 1,
+        built: true,
+        roles: ['operations_lead', 'gsquad_coordinator', 'resident_pastor'],
+      },
+      { label: 'Reference forms', path: '/admin', slice: 1 },
+    ],
   },
 ];
 
-// Every item except the dashboard, which has its own home page.
-export const PLACEHOLDER_ITEMS: NavItem[] = NAV.flatMap((g) => g.items).filter((i) => i.path !== '/');
+// Screens not built yet (the dashboard has its own home page meanwhile).
+export const PLACEHOLDER_ITEMS: NavItem[] = NAV.flatMap((g) => g.items).filter((i) => i.path !== '/' && !i.built);
+
+// The sidebar for one leader: items they can use, and no empty groups.
+export function navFor(roles: AppRole[]): NavGroup[] {
+  return NAV.map((g) => ({ ...g, items: g.items.filter((i) => !i.roles || i.roles.some((r) => roles.includes(r))) })).filter(
+    (g) => g.items.length > 0,
+  );
+}

@@ -70,7 +70,10 @@ cd "$repo_root/supabase"
 # SECURITY REVIEW FIX J06 (second check): a tunnel can make a hosted database look local.
 # Supabase databases always have the supabase_admin role; plain Postgres (and the test shim)
 # never does. This only reads the role list before anything is dropped.
-if [[ "$(psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -At -c "select count(*) from pg_roles where rolname = 'supabase_admin'")" != "0" ]]; then
+# (A failed connection is reported as such, not mistaken for a Supabase server.)
+admin_roles="$(psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -At -c "select count(*) from pg_roles where rolname = 'supabase_admin'")" \
+  || { echo "Cannot connect to the test Postgres at DB_ADMIN_URL. Is it running?" >&2; exit 1; }
+if [[ "$admin_roles" != "0" ]]; then
   refuse "this server has the supabase_admin role, so it looks like a Supabase database."
 fi
 

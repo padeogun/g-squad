@@ -9,6 +9,7 @@ import { TEC, tecMark } from '../design-system';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../auth/AuthProvider';
 import { safePath } from '../lib/paths';
+import { takeInviteWelcome } from '../lib/invite-landing';
 
 const { Button, Card, TextField, Notice } = TEC;
 
@@ -19,6 +20,8 @@ export function SignIn() {
   const location = useLocation();
   const [email, setEmail] = useState('');
   const [status, setStatus] = useState<Status>('idle');
+  // Arrived from an invitation email: say welcome and explain the one extra step.
+  const [welcome] = useState(takeInviteWelcome);
 
   // Already signed in: go back to where they were heading, or home.
   const from = (location.state as { from?: string } | null)?.from;
@@ -66,6 +69,11 @@ export function SignIn() {
             </Notice>
           ) : (
             <form className="auth-form" onSubmit={onSubmit} noValidate>
+              {welcome && (
+                <Notice tone="ok" title="Welcome to the G-Squad Planner">
+                  Your invitation is confirmed. Enter your email address and we'll send your sign-in link.
+                </Notice>
+              )}
               <TextField
                 id="email"
                 label="Email address"
