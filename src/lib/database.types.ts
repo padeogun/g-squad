@@ -1287,6 +1287,9 @@ isOneToOne: false
         isOneToOne: false
         isSetofReturn: true
       } },
+"import_members":
+{ Args: { "p_rows": Json,"p_skip_existing"?: boolean }; Returns: Json
+                           },
 "log_export":
 { Args: { "p_row_count": number,"p_scope": string }; Returns: undefined
                            },

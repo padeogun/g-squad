@@ -128,3 +128,6 @@
 .app-inline-select .tec-select { width: auto; min-width: 180px; max-width: 100%; }
 /* A control and its button side by side in a table cell, aligned on the control. */
 .app-inline-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-2); }
+
+/* File picker on the upload page: the browser's button inside the usual input box. */
+.app-file-input { padding-top: var(--space-2); padding-bottom: var(--space-2); }

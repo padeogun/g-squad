@@ -22,6 +22,7 @@ import { Rota } from '../pages/sunday/Rota';
 import { CheckIn } from '../pages/sunday/CheckIn';
 import { Capacity } from '../pages/dashboard/Capacity';
 import { Teci } from '../pages/people/Teci';
+import { ImportMembers } from '../pages/people/ImportMembers';
 
 export const router = createBrowserRouter([
   { path: '/sign-in', element: <SignIn /> },
@@ -36,6 +37,7 @@ export const router = createBrowserRouter([
           { path: '/admin', element: <ReferenceForms /> },
           { path: '/members', element: <Members /> },
           { path: '/members/new', element: <MemberForm /> },
+          { path: '/members/import', element: <ImportMembers /> },
           { path: '/members/:id', element: <MemberForm /> },
           { path: '/my-unit', element: <MyUnit /> },
           { path: '/sundays', element: <Sundays /> },
