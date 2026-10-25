@@ -1,7 +1,7 @@
 // The rota layout: one row per role and slot, a cell where a Sunday needs that slot or
 // someone already fills it, and nothing assigned ever hidden.
 import { describe, expect, it } from 'vitest';
-import { buildEvents, buildRota, fitsLimit, monthBounds, placeHours } from './rota';
+import { buildEvents, buildRota, fitsLimit, monthBounds, needsSundayOff, placeHours } from './rota';
 import { weeklyDates } from './projects';
 
 const sundays = [
@@ -136,5 +136,13 @@ describe('weeklyDates', () => {
     expect(weeklyDates('2026-11-05', '2026-11-26', '2026-12-31')).toEqual(['2026-11-05', '2026-11-12', '2026-11-19', '2026-11-26']);
     expect(weeklyDates('2026-11-05', '2026-12-31', '2026-11-15')).toEqual(['2026-11-05', '2026-11-12']);
     expect(weeklyDates('2026-11-05', '2026-11-05', '2026-11-30')).toEqual(['2026-11-05']);
+  });
+});
+
+describe('needsSundayOff (migration 30)', () => {
+  it('keeps at least one Sunday off, on Sunday places only', () => {
+    expect(needsSundayOff({ sundays_served: 3, sundays_allowed: 3, serving_that_day: false }, true)).toBe(true);
+    expect(needsSundayOff({ sundays_served: 2, sundays_allowed: 3, serving_that_day: false }, true)).toBe(false);
+    expect(needsSundayOff({ sundays_served: 3, sundays_allowed: 3, serving_that_day: false }, false)).toBe(false);
   });
 });

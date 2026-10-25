@@ -17,7 +17,7 @@ import { friendlyError } from '../../data/errors';
 import { byId, useChurchRoles, useUnits } from '../../data/reference';
 import { fullName, usePersonNames } from '../../data/people';
 import { shortDate, todayIso } from '../../data/sundays';
-import { buildEvents, buildRota, fitsLimit, monthBounds, placeHours, useCandidates, useMonthSundays, useUnitAssignments, useUnitDemand, useUnitEventDemand, type RotaSlot } from '../../data/rota';
+import { needsSundayOff, buildEvents, buildRota, fitsLimit, monthBounds, placeHours, useCandidates, useMonthSundays, useUnitAssignments, useUnitDemand, useUnitEventDemand, type RotaSlot } from '../../data/rota';
 import { useSettings } from '../../data/newsletter';
 import { hasRole, ledUnitIds, viewedUnitIds, useMe } from '../../auth/useMe';
 
@@ -240,6 +240,8 @@ function MonthRota({ unitId, month, isOps, canEdit }: { unitId: string; month: s
           unitId={unitId}
           slot={picking}
           hours={picking.hours ?? defaultHours}
+          // Migration 30: the rest rule (at least one Sunday off) applies to Sunday places.
+          isSunday={projectIds.includes(picking.projectId)}
           roleName={picking.roleId ? roleMap.get(picking.roleId)?.name ?? 'Role' : 'Any role'}
           isOps={isOps}
           onClose={() => setPicking(null)}
@@ -254,6 +256,7 @@ function AssignPanel({
   unitId,
   slot,
   hours,
+  isSunday,
   roleName,
   isOps,
   onClose,
@@ -261,6 +264,7 @@ function AssignPanel({
   unitId: string;
   slot: RotaSlot;
   hours: number;
+  isSunday: boolean;
   roleName: string;
   isOps: boolean;
   onClose: () => void;
@@ -302,21 +306,26 @@ function AssignPanel({
     <div ref={box} tabIndex={-1} className="app-assign-panel" role="region" aria-label={`Assign ${roleName} on ${shortDate(slot.date)}`}>
     <Card title={`Assign ${roleName} · ${shortDate(slot.date)} · ${hours} h`} tone="tint" action={<Button size="sm" variant="quiet" onClick={onClose}>Close</Button>}>
       <p className="type-caption" style={{ margin: 0 }}>
-        Fewest hours this month first. One limit counts across all teams, Sundays, events and team activities.
+        Fewest hours this month first. One limit counts across all teams, Sundays, events and team activities
+        {isSunday ? ', and everyone keeps at least one Sunday off a month' : ''}.
       </p>
       {candidates.isPending && <p>Loading…</p>}
       {candidates.error && <Notice tone="danger">{friendlyError(candidates.error)}</Notice>}
       {candidates.data && list.length === 0 && <p>No active members in this unit.</p>}
       <ul className="app-candidates">
         {list.map((c) => {
-          const atLimit = !fitsLimit(c, hours);
+          // Migration 30: a Sunday place also needs a Sunday left this month (at least one off).
+          const noSunday = needsSundayOff(c, isSunday);
+          const atLimit = !fitsLimit(c, hours) || noSunday;
           const left = Math.max(0, Number(c.hours_limit) - Number(c.hours_used));
           const blocked = c.on_holiday || c.serving_that_day;
           const status = c.on_holiday
             ? 'On holiday'
             : c.serving_that_day
               ? 'Already serving that day'
-              : atLimit
+              : noSunday
+                ? 'Needs a Sunday off'
+                : atLimit
                 ? left > 0 ? `Only ${left} h left` : 'No hours left'
                 : `${left} h left`;
           return (

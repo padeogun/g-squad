@@ -14,6 +14,7 @@ import { hasRole, useMe } from '../../auth/useMe';
 import { GridStatus } from '../sunday/GridStatus';
 import { EngagementBar } from './EngagementBar';
 import { ShortfallsCard } from './Shortfalls';
+import { FairShareCard, ServingRulesCard } from './FairShare';
 
 const { SectionHeading, Card, Notice, StatTile, DataTable, Chip } = TEC;
 
@@ -58,6 +59,9 @@ export function ChurchDashboard() {
       <Card title="Engagement mix">
         <EngagementBar mix={d.engagement} />
       </Card>
+
+      {/* Steps 3 to 5 (migration 30): fair share, rest and leaders' load. */}
+      <FairShareCard month={d.as_of.slice(0, 7) + '-01'} />
 
       {/* Decision of 25 Oct 2026: volunteer shortfalls are always shown on the dashboard. */}
       <ShortfallsCard />
@@ -146,6 +150,7 @@ export function ChurchDashboard() {
           </Card>
         )}
       </div>
+      <ServingRulesCard />
     </>
   );
 }

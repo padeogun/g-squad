@@ -223,3 +223,12 @@
 .app-event-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-3); overflow-wrap: break-word; min-width: 0; }
 /* SECURITY REVIEW 19 (Z07): the assign panel takes focus when it opens; the card shows where it is. */
 .app-assign-panel { outline: none; }
+
+/* ---------- Fair share bands (migration 30) ---------- */
+.app-bands { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.app-bands > li { display: grid; grid-template-columns: minmax(84px, 7rem) 1fr 2.5rem; align-items: center; gap: var(--space-3); }
+.app-band-label { font-size: 14px; color: var(--ink); }
+.app-band-track { height: 12px; border-radius: var(--radius-pill); background: var(--neutral-soft); overflow: hidden; }
+.app-band-bar { display: block; height: 100%; border-radius: var(--radius-pill); background: var(--navy); }
+.app-band-bar.is-over { background: var(--danger); }
+.app-band-count { text-align: right; font-variant-numeric: tabular-nums; }

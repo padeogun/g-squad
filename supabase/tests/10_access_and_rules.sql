@@ -3411,6 +3411,76 @@ select test.ok(not has_function_privilege('authenticated', 'app.hours_in_month(u
                'Z10: signed-in users cannot call the hours helpers directly');
 select test.ok(not has_function_privilege('authenticated', 'app.demand_hours_sync()', 'execute'), 'Z10: nor the demand trigger');
 
+-- =====================================================================================
+-- F. Migrations 29-30: fair share, a Sunday off each month, leaders' load
+-- =====================================================================================
+-- Fixture (system): Obi (pN2) joins Production; the limit is raised to 10 slots for these
+-- checks so only the Sunday rule decides; every Sunday eight months ahead gets a grid.
+select test.login('');
+insert into public.unit_memberships (church_id, person_id, unit_id) values (test.id('churchA'), test.id('pN2'), test.id('A1'));
+update public.church_settings set serving_limit_per_month = 10 where church_id = test.id('churchA');
+create temporary table f_sundays as
+  select d::date as d, row_number() over (order by d) as n
+  from generate_series(date_trunc('month', current_date + interval '8 months'),
+                       date_trunc('month', current_date + interval '8 months') + interval '1 month - 1 day', interval '1 day') d
+  where extract(isodow from d) = 7;
+grant select on f_sundays to authenticated;
+select test.login('ops'); set role authenticated;
+select public.create_sunday_service(d) from f_sundays;
+select test.ok(app_sundays.allowed = (select count(*) from f_sundays) - 1, 'F01: Sundays allowed = the month''s Sundays less one')
+from (select a.sundays_allowed as allowed from public.rota_candidates(test.id('A1'), (select d from f_sundays where n = 1)) a
+      where a.person_id = test.id('pN2')) app_sundays;
+do $$
+declare r record;
+begin
+  for r in select f.d, f.n from f_sundays f where f.n < (select count(*) from f_sundays) order by f.n loop
+    insert into public.assignments (project_id, person_id, unit_id, serve_date)
+    select g.project_id, test.id('pN2'), test.id('A1'), r.d from public.service_grids g where g.service_date = r.d;
+  end loop;
+end $$;
+select test.ok((select sundays_served from public.rota_candidates(test.id('A1'), (select d from f_sundays where n = 1)) where person_id = test.id('pN2'))
+               = (select count(*) - 1 from f_sundays), 'F02: every Sunday but one is booked');
+select test.throws(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) select project_id, %L, %L, service_date from public.service_grids where service_date = %L',
+                          test.id('pN2'), test.id('A1'), (select max(d) from f_sundays)),
+                   'F03: the last Sunday is refused: at least one Sunday off');
+select test.lives(format('insert into public.assignments (project_id, person_id, unit_id, serve_date, override_reason) select project_id, %L, %L, service_date, %L from public.service_grids where service_date = %L',
+                         test.id('pN2'), test.id('A1'), 'Covering an emergency', (select max(d) from f_sundays)),
+                  'F04: the Operations Lead can override with a reason');
+reset role;
+select test.ok((select count(*) from public.audit_log where action = 'override_rest' and detail ->> 'person_id' = test.id('pN2')::text) = 1,
+               'F04: the rest override is logged');
+-- Leaders' load: allow one leadership role, so Team Leads with two teams are over.
+select test.login('');
+update public.church_settings set leader_roles_max = 1, serving_limit_per_month = 3 where church_id = test.id('churchA');
+select test.login('coord'); set role authenticated;
+select test.ok(exists (select 1 from public.leaders_carrying_too_much() where user_id = test.id('ul_a')),
+               'F05: the Coordinator sees leaders carrying more than the church allows');
+select test.ok((public.fair_share(current_date) ->> 'leaders_over')::int >= 1, 'F05: the Dashboard counts them');
+select test.ok(public.fair_share(current_date) ?& array['bands', 'busiest_fifth_share', 'not_asked_3_months', 'members'],
+               'F06: fair share gives bands, the busiest fifth''s share and members not asked');
+select test.ok((select sum(value::int) from jsonb_each_text(public.fair_share(current_date) -> 'bands'))
+               = (public.fair_share(current_date) ->> 'members')::int, 'F06: the bands add up to all members');
+select test.ok((public.fair_share((current_date + interval '8 months')::date) ->> 'busiest_fifth_share')::int = 100
+               or (public.fair_share((current_date + interval '8 months')::date) ->> 'busiest_fifth_share')::int > 0,
+               'F06: the busiest fifth''s share is a percentage');
+reset role;
+select test.login('ul_b'); set role authenticated;
+select test.throws('select * from public.leaders_carrying_too_much()', 'F07: a Team Lead cannot list leaders by name');
+reset role;
+select test.login('teci'); set role authenticated;
+select test.throws('select public.fair_share(current_date)', 'F07: the TECi Coordinator does not see the fair-share panel');
+reset role;
+select test.login('anon'); set role anon;
+select test.throws('select public.fair_share(current_date)', 'F07: nor anonymous callers');
+reset role;
+-- The nightly job raises a check-in flag for a leader linked to their own record.
+select test.login('');
+update public.app_users set person_id = test.id('pN2') where id = test.id('ul_a');
+select app.raise_automatic_flags();
+select test.ok(exists (select 1 from public.checkin_flags where person_id = test.id('pN2') and source = 'leader_load'),
+               'F08: a leader carrying too much gets a pastoral check-in flag');
+update public.church_settings set leader_roles_max = 2 where church_id = test.id('churchA');
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;

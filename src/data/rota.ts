@@ -290,3 +290,12 @@ export function buildEvents(
 export function fitsLimit(c: { hours_used: number; hours_limit: number }, hours: number): boolean {
   return Number(c.hours_used) + hours <= Number(c.hours_limit) + 1e-9;
 }
+
+// Migration 30: a Sunday place needs a Sunday left this month (at least one Sunday off). A
+// person already serving that Sunday in another place uses no new Sunday.
+export function needsSundayOff(
+  c: { sundays_served: number; sundays_allowed: number; serving_that_day: boolean },
+  isSunday: boolean,
+): boolean {
+  return isSunday && !c.serving_that_day && c.sundays_served >= c.sundays_allowed;
+}

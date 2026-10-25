@@ -167,3 +167,54 @@ export function shortfalls(rows: { unit_name: string; month: string; spare: numb
   }
   return out;
 }
+
+// ---------- Fair share, rest and leaders' load (migration 30) ----------
+export interface FairShare {
+  month: string;
+  members: number;
+  bands: { none: number; up_to_3: number; three_to_6: number; six_to_9: number; over_9: number };
+  total_hours: number;
+  busiest_fifth_share: number | null; // percentage of all hours; null when nobody served
+  not_asked_3_months: number;
+  leaders_over: number;
+}
+
+// Counts only, for the Church Dashboard audience (public.fair_share).
+export const useFairShare = (month: string, enabled: boolean) =>
+  useQuery({
+    queryKey: ['dashboard', 'fair_share', month],
+    enabled,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('fair_share', { p_month: month });
+      if (error) throw error;
+      return data as unknown as FairShare;
+    },
+  });
+
+// By name, for the G-Squad Coordinator, Resident Pastor, Operations Lead and Pastoral Lead.
+export const LEADER_CARE_ROLES = ['gsquad_coordinator', 'resident_pastor', 'operations_lead', 'pastoral_lead'] as const;
+export const useLeadersCarryingTooMuch = (enabled: boolean) =>
+  useQuery({
+    queryKey: ['dashboard', 'leaders_load'],
+    enabled,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('leaders_carrying_too_much');
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+
+// The bands in reading order, with their labels.
+export const HOUR_BANDS: { key: keyof FairShare['bands']; label: string }[] = [
+  { key: 'none', label: 'Not serving' },
+  { key: 'up_to_3', label: 'Up to 3 h' },
+  { key: 'three_to_6', label: '3 to 6 h' },
+  { key: 'six_to_9', label: '6 to 9 h' },
+  { key: 'over_9', label: 'Over 9 h' },
+];
+
+// Width of a band's bar as a percentage of the largest band (0 when there are no members).
+export function bandWidth(count: number, bands: FairShare['bands']): number {
+  const max = Math.max(...Object.values(bands));
+  return max > 0 ? Math.round((count / max) * 100) : 0;
+}
