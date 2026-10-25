@@ -17,7 +17,12 @@
 -- Runs as the database owner, so the triggers treat it as a system change (app.is_system()):
 -- the guards and audit triggers still run, and the hours columns are filled by the database.
 -- All names are invented. Nothing here describes a real person.
+--
+-- SECURITY REVIEW 21 (K03): one transaction, so a failure part-way (say in the roles step)
+-- leaves nothing half loaded.
 -- =====================================================================================
+
+begin;
 
 do $$
 declare
@@ -58,6 +63,11 @@ declare
 begin
   if v_church is null then
     raise exception 'Run supabase/seed.sql first: the church is missing';
+  end if;
+  -- SECURITY REVIEW 21 (K03): once the Resident Pastor has switched on sending to members
+  -- (after the DPIA), this is a live church: invented people must never be mixed in again.
+  if exists (select 1 from public.church_settings where church_id = v_church and newsletter_live) then
+    raise exception 'Sending to members is switched on, so this church is live: sample data is not loaded';
   end if;
   if exists (select 1 from public.people where email like '%@g-squad.example') then
     raise notice 'Sample data is already loaded; nothing changed';
@@ -215,32 +225,91 @@ begin
   raise notice 'Sample data loaded: % people, % Sundays', array_length(v_people, 1), array_length(v_sundays, 1);
 end $$;
 
--- 9. The tester's sign-in gets every leader role (scoped roles take the first sample team).
--- __TEST_EMAIL__ is replaced by the workflow after it checks the address is a plain email
--- (letters, digits and . _ % + - only), so no quote can reach this SQL. Left as is, nothing
--- matches and no role is given.
+-- 9. The tester's sign-in gets the leader roles (scoped roles take a sample team).
+-- __TEST_EMAIL__ is replaced by scripts/sample-data-prepare.sh after it checks the address is
+-- a plain email (letters, digits and . _ % + - only), so no quote can reach this SQL. Left as
+-- is, nothing matches and no role is given.
+--
+-- SECURITY REVIEW 21:
+--   K02  The Resident Pastor role is given only when the workflow's "Also give the tester the
+--        Resident Pastor role" box is ticked (__GIVE_RESIDENT_PASTOR__ becomes 'yes'). In the
+--        app only the Resident Pastor gives that role; here the database owner does, so it is
+--        opt-in, and the workflow is off unless an admin switches it on.
+--   K05  The audit trigger logs these grants with no actor (the database owner made them), so
+--        nobody could tell who gave them. Each role given also writes an audit row naming the
+--        GitHub user and run. sample-data-remove.sql uses those rows to take the roles back.
+--   Paul's decision (25 Oct 2026): one test sign-in per role is needed too (admin@ as the
+--        Resident Pastor, operations@ as a Team Lead), so the workflow chooses a set of roles:
+--        __ROLE_SET__ becomes 'all', 'resident_pastor' or 'team_lead'. "Resident Pastor only"
+--        still needs the K02 box ticked.
+--   K06  The Team Lead role went to Ushers even when Ushers already had a Team Lead, and the
+--        one-Team-Lead rule then stopped the whole load. It now goes to the first sample team
+--        without one (or is skipped).
 do $$
 declare
   v_church uuid := (select id from public.churches where slug = 'tec-manchester');
   v_user uuid := (select u.id from auth.users u join public.app_users a on a.id = u.id
                   where lower(u.email) = lower('__TEST_EMAIL__') and a.church_id = v_church);
-  v_unit uuid := (select id from public.units where church_id = v_church and name = 'Ushers');
+  v_give_rp boolean := '__GIVE_RESIDENT_PASTOR__' = 'yes';
+  -- Which roles: every role, or just one so a single role's view can be checked. Left as
+  -- the placeholder (or anything unexpected), it means every role, as before.
+  v_set text := case when '__ROLE_SET__' in ('resident_pastor', 'team_lead') then '__ROLE_SET__' else 'all' end;
+  v_unit uuid;
   v_purpose uuid := (select purpose_id from public.units where church_id = v_church and name = 'Ushers');
+  v_given int;
 begin
   if v_user is null then
     raise notice 'No signed-up leader with that email yet: invite them in the app first, then run this again';
     return;
   end if;
-  insert into public.role_assignments (church_id, user_id, role, purpose_id, unit_id)
-  select v_church, v_user, x.r::public.app_role, x.p, x.u
-  from (values ('resident_pastor', null::uuid, null::uuid), ('gsquad_coordinator', null, null),
-               ('operations_lead', null, null), ('teci_coordinator', null, null),
-               ('pastoral_lead', null, null), ('newsletter_editor', null, null), ('finance', null, null),
-               ('purpose_head', v_purpose, null), ('unit_lead', null, v_unit)) as x(r, p, u)
+  if exists (select 1 from public.church_settings where church_id = v_church and newsletter_live) then
+    raise exception 'Sending to members is switched on, so this church is live: no test roles are given';
+  end if;
+  -- The first sample team (in the order sample-data.sql lists them) with no other Team Lead.
+  select u.id into v_unit
+  from unnest(array['Ushers','Hospitality','Elevation Priests of Praise (EPOP)','Missions','412 Nation','Maturity'])
+       with ordinality t(name, n)
+  join public.units u on u.church_id = v_church and u.name = t.name
   where not exists (select 1 from public.role_assignments ra
-                    where ra.user_id = v_user and ra.role = x.r::public.app_role and ra.is_active);
-  raise notice 'Every leader role given to the test sign-in';
+                    where ra.unit_id = u.id and ra.role = 'unit_lead' and ra.is_active and ra.user_id <> v_user)
+  order by t.n limit 1;
+
+  with wanted as (
+    select x.r::public.app_role as role, x.p as purpose_id, x.u as unit_id
+    from (values ('resident_pastor', null::uuid, null::uuid), ('gsquad_coordinator', null, null),
+                 ('operations_lead', null, null), ('teci_coordinator', null, null),
+                 ('pastoral_lead', null, null), ('newsletter_editor', null, null), ('finance', null, null),
+                 ('purpose_head', v_purpose, null), ('unit_lead', null, v_unit)) as x(r, p, u)
+    where (v_set = 'all' or (v_set = 'resident_pastor' and x.r = 'resident_pastor')
+                         or (v_set = 'team_lead' and x.r = 'unit_lead'))
+      and (x.r <> 'resident_pastor' or v_give_rp)
+      and (x.r <> 'unit_lead' or v_unit is not null)
+      and (x.r <> 'purpose_head' or v_purpose is not null)
+  ), given as (
+    insert into public.role_assignments (church_id, user_id, role, purpose_id, unit_id)
+    select v_church, v_user, w.role, w.purpose_id, w.unit_id
+    from wanted w
+    where not exists (select 1 from public.role_assignments ra
+                      where ra.user_id = v_user and ra.role = w.role and ra.is_active)
+    returning id, role
+  ), logged as (
+    -- Ids and labels only (audit_log never holds personal free text).
+    insert into public.audit_log (church_id, actor_id, action, table_name, record_id, detail)
+    select v_church, null, 'sample_data_grant', 'role_assignments', g.id,
+           jsonb_build_object('role', g.role, 'source', 'supabase/sample-data.sql',
+                              'github_user', '__RUN_BY__', 'github_run', '__RUN_ID__')
+    from given g
+    returning 1
+  )
+  select count(*) into v_given from logged;
+  raise notice 'Gave the test sign-in % leader role(s)%', v_given,
+    case when v_give_rp then ', including Resident Pastor' else ' (not Resident Pastor)' end;
+  if v_unit is null then
+    raise notice 'Every sample team already has a Team Lead, so the Team Lead role was not given';
+  end if;
 end $$;
+
+commit;
 
 -- What the workflow log shows (notices from the blocks above may not reach it).
 select (select count(*) from public.people where email like '%@g-squad.example') as sample_people,
