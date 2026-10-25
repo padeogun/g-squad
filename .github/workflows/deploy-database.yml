@@ -19,7 +19,7 @@ on:
   push:
     branches: [main]
     # Database migrations and Edge Functions (slice 1 added supabase/functions).
-    paths: ['supabase/migrations/**', 'supabase/functions/**']
+    paths: ['supabase/migrations/**', 'supabase/functions/**', 'supabase/templates/**']
   workflow_dispatch:
     inputs:
       include_seed:
@@ -93,3 +93,69 @@ jobs:
           # Slice 6: The Greatness Brief (settings from supabase/config.toml).
           npx --no-install supabase functions deploy send-newsletter --project-ref "$SUPABASE_PROJECT_REF"
           npx --no-install supabase functions deploy email-link --project-ref "$SUPABASE_PROJECT_REF"
+      # Sign-in and invitation emails (supabase/templates). Supabase reads these from the
+      # project's auth settings, not from the repository, so they are sent with the Management
+      # API. Only the settings listed in the jq below are changed; nothing else is touched.
+      # The subjects match supabase/config.toml. jq builds the JSON from the files, so nothing
+      # in a template can break out of it.
+      # SECURITY REVIEW 22:
+      #  (L04) The token is passed to curl on stdin as a header, not on the command line, where
+      #        any process on the runner could read it.
+      #  (L01) The templates link to the project's Site URL, so it is checked first: https and
+      #        not localhost, or the step stops before changing anything. A wildcard in the
+      #        redirect allow-list is warned about (it no longer reaches the emails, but it is
+      #        still a way to send a leader's sign-in to another site, see review 5).
+      #  (L05) Afterwards the saved settings are compared with what was sent, so a field
+      #        Supabase ignored (renamed, or refused without custom SMTP) fails the run instead
+      #        of leaving leaders on the old links. Neither reply is printed: it is the whole auth
+      #        configuration. Only field names and true/false are shown.
+      #  (L02) The "confirm signup" email is included; (L03) codes are 8 digits.
+      - name: Update the sign-in email templates
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          api="https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/config/auth"
+          auth_header() { printf 'Authorization: Bearer %s\n' "$SUPABASE_ACCESS_TOKEN"; }
+          before="$RUNNER_TEMP/auth-before.json"
+          reply="$RUNNER_TEMP/auth-reply.json"
+          body="$RUNNER_TEMP/auth-templates.json"
+          trap 'rm -f "$before" "$reply" "$body"' EXIT
+
+          auth_header | curl --fail -sS -H @- "$api" -o "$before" \
+            || { echo "Could not read the auth settings (nothing changed)"; exit 1; }
+          if ! jq -e '(.site_url // "") | test("^https://[^/]+") and (test("localhost|127\\.0\\.0\\.1") | not)' "$before" > /dev/null; then
+            echo "::error::The project's Site URL is not the app's https address. Set it in Supabase > Authentication > URL Configuration first (nothing changed)."
+            exit 1
+          fi
+          if jq -e '(.uri_allow_list // "") | contains("*")' "$before" > /dev/null; then
+            echo "::warning::The auth redirect allow-list contains a wildcard. Keep it to exact production addresses (SECURITY_LOG review 5)."
+          fi
+
+          jq -n \
+            --rawfile invite supabase/templates/invite.html \
+            --rawfile magic supabase/templates/magic_link.html \
+            --rawfile confirm supabase/templates/confirmation.html \
+            '{mailer_subjects_invite: "Invitation to the G-Squad Planner",
+              mailer_templates_invite_content: $invite,
+              mailer_subjects_magic_link: "Your G-Squad Planner sign-in",
+              mailer_templates_magic_link_content: $magic,
+              mailer_subjects_confirmation: "Your G-Squad Planner sign-in",
+              mailer_templates_confirmation_content: $confirm,
+              mailer_otp_length: 8}' > "$body"
+          code=$(auth_header | curl -sS -X PATCH "$api" -H @- \
+            -H "Content-Type: application/json" \
+            --data-binary @"$body" -o "$reply" -w '%{http_code}') || code=000
+          if [ "$code" != 200 ]; then
+            # An error reply is a short message, not the settings, so its start is safe to show.
+            echo "Updating the templates failed (HTTP $code):"; head -c 300 "$reply" 2>/dev/null || true; echo
+            exit 1
+          fi
+          # Every field sent must now read back the same (read again, not trusted from the reply).
+          auth_header | curl --fail -sS -H @- "$api" -o "$reply" \
+            || { echo "::error::Templates sent, but the settings could not be read back to check them."; exit 1; }
+          jq -e --slurpfile sent "$body" \
+            '. as $now | $sent[0] | to_entries | map({key, value: ($now[.key] == .value)}) | from_entries' "$reply" \
+            | tee /dev/stderr | jq -e 'all(.[]; .)' > /dev/null \
+            || { echo "::error::Supabase did not keep every template setting (false above)."; exit 1; }
+          echo "Sign-in email templates updated"

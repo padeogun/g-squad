@@ -163,3 +163,37 @@ describe('sample data workflow input (K01)', () => {
     }
   });
 });
+
+// SECURITY REVIEW 22: the auth email templates. Each must link only to the app's own
+// /auth/confirm page with a token hash (which signs in only when a button is pressed), at the
+// admin-set Site URL, never Supabase's /verify link (used up by email scanners) or the
+// requester-chosen RedirectTo (L01). Every template file must also be deployed (L02, L05).
+describe('sign-in email templates (L01, L02, L05)', () => {
+  const dir = join(root, 'supabase/templates');
+  const files = readdirSync(dir).filter((f) => f.endsWith('.html'));
+  const workflow = readFileSync(join(root, '.github/workflows/deploy-database.yml'), 'utf8');
+  const config = readFileSync(join(root, 'supabase/config.toml'), 'utf8');
+
+  it('covers the invite, magic link and confirm signup emails', () => {
+    expect(files.sort()).toEqual(['confirmation.html', 'invite.html', 'magic_link.html']);
+  });
+
+  it.each(files)('%s links only to /auth/confirm at the Site URL', (file) => {
+    const html = readFileSync(join(dir, file), 'utf8');
+    expect(html).not.toMatch(/ConfirmationURL|RedirectTo\s*\}\}|\/auth\/v1\/verify/);
+    const hrefs = [...html.matchAll(/href="([^"]*)"/g)].map((m) => m[1]);
+    expect(hrefs.length).toBeGreaterThan(0);
+    for (const href of hrefs) {
+      expect(href).toMatch(/^\{\{ \.SiteURL \}\}\/auth\/confirm\?token_hash=\{\{ \.TokenHash \}\}&type=(invite|email)$/);
+    }
+    // Template actions in the leading comment would be filled in too; keep them out of it.
+    const comment = html.slice(0, html.indexOf('-->'));
+    expect(comment).not.toContain('{{');
+  });
+
+  it.each(files)('%s is deployed by the workflow and set for the local stack', (file) => {
+    expect(workflow).toContain(`--rawfile`);
+    expect(workflow).toContain(`supabase/templates/${file}`);
+    expect(config).toContain(`content_path = "./supabase/templates/${file}"`);
+  });
+});
