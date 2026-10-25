@@ -45,7 +45,7 @@ export const useUnitDemand = (unitId: string, projectIds: string[]) =>
     queryFn: async () => {
       const { data, error } = await supabase
         .from('team_demand')
-        .select('id, project_id, unit_id, church_role_id, on_date, slots_needed')
+        .select('id, project_id, unit_id, church_role_id, on_date, slots_needed, hours')
         .eq('unit_id', unitId)
         .in('project_id', projectIds);
       if (error) throw error;
@@ -61,7 +61,7 @@ export const useUnitAssignments = (unitId: string, from: string, to: string) =>
     queryFn: async () => {
       const { data, error } = await supabase
         .from('assignments')
-        .select('id, project_id, person_id, unit_id, church_role_id, serve_date, status, override_reason')
+        .select('id, project_id, person_id, unit_id, church_role_id, serve_date, status, override_reason, hours')
         .eq('unit_id', unitId)
         .gte('serve_date', from)
         .lte('serve_date', to)
@@ -71,7 +71,36 @@ export const useUnitAssignments = (unitId: string, from: string, to: string) =>
     },
   });
 
-// Who can serve in a unit on a date (fewest slots this month first).
+// Migration 28: one unit's places on events, outreach and team activities in a month (every
+// project except Sunday services that is approved or under way), with each project's name.
+export const useUnitEventDemand = (unitId: string, from: string, to: string) =>
+  useQuery({
+    queryKey: ['demand', 'unit-events', unitId, from, to],
+    enabled: !!unitId,
+    queryFn: async () => {
+      const { data: demand, error } = await supabase
+        .from('team_demand')
+        .select('id, project_id, unit_id, church_role_id, on_date, slots_needed, hours')
+        .eq('unit_id', unitId)
+        .gte('on_date', from)
+        .lte('on_date', to)
+        .order('on_date');
+      if (error) throw error;
+      const ids = [...new Set(demand.map((d) => d.project_id))];
+      if (!ids.length) return { demand: [], projects: [] };
+      const { data: projects, error: pErr } = await supabase
+        .from('projects')
+        .select('id, name, status, is_sunday_service, level')
+        .in('id', ids)
+        .eq('is_sunday_service', false)
+        .in('status', ['approved', 'in_progress']);
+      if (pErr) throw pErr;
+      const open = new Set(projects.map((p) => p.id));
+      return { demand: demand.filter((d) => open.has(d.project_id)), projects };
+    },
+  });
+
+// Who can serve in a unit on a date (fewest hours this month first).
 export const useCandidates = (unitId: string, date: string | null) =>
   useQuery({
     queryKey: ['candidates', unitId, date],
@@ -151,4 +180,55 @@ export function buildRota(
     }
   }
   return rows;
+}
+
+// ---------- Pure helper: events and team activities as lists of places (migration 28) ----------
+
+export interface EventDemand extends DemandRow {
+  hours: number | null;
+}
+
+export interface EventGroup {
+  projectId: string;
+  name: string;
+  date: string;
+  hours: number | null; // null = the church's usual hours per slot
+  slots: RotaSlot[];
+}
+
+// One group per project and day, in date order; each needed place is a slot, filled in a stable
+// order by that day's assignments for the role. Assignments beyond the places asked for are
+// kept so nothing booked is hidden.
+export function buildEvents(
+  demand: EventDemand[],
+  projects: { id: string; name: string }[],
+  assignments: Pick<Assignment, 'id' | 'person_id' | 'status' | 'church_role_id' | 'serve_date' | 'project_id'>[],
+): EventGroup[] {
+  const names = new Map(projects.map((p) => [p.id, p.name]));
+  const groups = new Map<string, EventGroup>();
+  const need = new Map<string, number>(); // group|role -> places
+  for (const d of demand) {
+    if (!names.has(d.project_id)) continue;
+    const gk = `${d.on_date}|${d.project_id}`;
+    if (!groups.has(gk)) groups.set(gk, { projectId: d.project_id, name: names.get(d.project_id)!, date: d.on_date, hours: d.hours, slots: [] });
+    const g = groups.get(gk)!;
+    if (d.hours !== null && (g.hours === null || d.hours > g.hours)) g.hours = d.hours;
+    const rk = `${gk}|${d.church_role_id ?? '*'}`;
+    need.set(rk, (need.get(rk) ?? 0) + d.slots_needed);
+  }
+  for (const [rk, n] of need) {
+    const [date, projectId, role] = rk.split('|');
+    const roleId = role === '*' ? null : role;
+    const booked = assignments
+      .filter((a) => a.project_id === projectId && a.serve_date === date && (a.church_role_id ?? null) === roleId)
+      .sort((x, y) => x.id.localeCompare(y.id));
+    const g = groups.get(`${date}|${projectId}`)!;
+    for (let i = 0; i < Math.max(n, booked.length); i++) g.slots.push({ roleId, date, projectId, assignment: booked[i] ?? null });
+  }
+  return [...groups.values()].sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name));
+}
+
+// Whether a person can take a slot of `hours` without going over their monthly limit.
+export function fitsLimit(c: { hours_used: number; hours_limit: number }, hours: number): boolean {
+  return Number(c.hours_used) + hours <= Number(c.hours_limit) + 1e-9;
 }

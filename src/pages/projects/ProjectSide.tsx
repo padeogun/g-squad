@@ -13,7 +13,7 @@ import { supabase } from '../../lib/supabase';
 import { friendlyError } from '../../data/errors';
 import { byId, useChurchRoles, useLeaders, useUnits } from '../../data/reference';
 import { useDemand, shortDate, todayIso } from '../../data/sundays';
-import { isoToLondon, safeHttpsUrl, SHORTFALL_ACTIONS, useInputs, useRefreshProject, type Input, type Project, type Readiness } from '../../data/projects';
+import { isoToLondon, safeHttpsUrl, SHORTFALL_ACTIONS, useInputs, useRefreshProject, weeklyDates, type Input, type Project, type Readiness } from '../../data/projects';
 
 const { Card, Notice, Button, Chip, TextField, SelectField, Checkbox } = TEC;
 
@@ -76,23 +76,29 @@ export function DemandCard({ p, canManage, shortfall }: { p: Project; canManage:
   const refresh = useRefreshProject(p.id);
   const first = isoToLondon(p.starts_at).date;
   const last = isoToLondon(p.ends_at).date;
-  const [v, setV] = useState({ unit: '', role: '', date: first, slots: '1' });
+  // Migration 28: hours each person gives (blank = the church's hours per slot), and an
+  // optional weekly repeat for team activities such as rehearsals.
+  const [v, setV] = useState({ unit: '', role: '', date: first, slots: '1', hours: '', until: '' });
   const unitMap = byId(units.data);
   const roleMap = byId(roles.data);
 
   const add = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase.from('team_demand').insert({
-        project_id: p.id,
-        unit_id: v.unit,
-        church_role_id: v.role || null,
-        on_date: v.date,
-        slots_needed: Number(v.slots),
-      });
+      const dates = weeklyDates(v.date, v.until || v.date, last);
+      const { error } = await supabase.from('team_demand').insert(
+        dates.map((d) => ({
+          project_id: p.id,
+          unit_id: v.unit,
+          church_role_id: v.role || null,
+          on_date: d,
+          slots_needed: Number(v.slots),
+          hours: v.hours ? Number(v.hours) : null,
+        })),
+      );
       if (error) throw error;
     },
     onSuccess: () => {
-      setV({ unit: '', role: '', date: first, slots: '1' });
+      setV({ unit: '', role: '', date: first, slots: '1', hours: '', until: '' });
       refresh();
     },
   });
@@ -107,10 +113,16 @@ export function DemandCard({ p, canManage, shortfall }: { p: Project; canManage:
   const rows = demand.data ?? [];
   const total = rows.reduce((n, d) => n + d.slots_needed, 0);
   const slots = Number(v.slots);
-  const valid = !!v.unit && !!v.date && Number.isInteger(slots) && slots >= 1 && slots <= 500;
+  const hours = v.hours ? Number(v.hours) : null;
+  const valid =
+    !!v.unit && !!v.date && Number.isInteger(slots) && slots >= 1 && slots <= 500 &&
+    (hours === null || (hours >= 0.5 && hours <= 16 && Number.isInteger(hours * 2))) && (!v.until || v.until >= v.date);
 
   return (
-    <Card title="Volunteers needed" action={total ? <span className="type-caption">{total} slots</span> : undefined}>
+    <Card title="Volunteers needed" action={total ? <span className="type-caption">{total} places</span> : undefined}>
+      <p className="type-caption" style={{ margin: 0 }}>
+        Each team's Team Lead names people for these places on their Rota page. Hours count towards each person's monthly limit.
+      </p>
       {demand.isPending && <p>Loading…</p>}
       {demand.error && <Notice tone="danger">{friendlyError(demand.error)}</Notice>}
       {demand.data && rows.length === 0 && <p style={{ margin: 0 }}>No volunteers requested yet.</p>}
@@ -124,7 +136,10 @@ export function DemandCard({ p, canManage, shortfall }: { p: Project; canManage:
                 <span className="type-caption">{first !== last ? ` · ${shortDate(d.on_date)}` : ''}</span>
               </span>
               <span className="app-inline-row">
-                <span>{d.slots_needed} slot{d.slots_needed > 1 ? 's' : ''}</span>
+                <span>
+                  {d.slots_needed} {d.slots_needed > 1 ? 'people' : 'person'}
+                  {d.hours ? ` · ${d.hours} h each` : ''}
+                </span>
                 {canManage && (
                   <button
                     type="button"
@@ -166,7 +181,12 @@ export function DemandCard({ p, canManage, shortfall }: { p: Project; canManage:
           {first !== last && (
             <TextField id="dm-date" label="Day" type="date" min={first} max={last} value={v.date} onChange={(e) => setV({ ...v, date: e.target.value })} />
           )}
-          <TextField id="dm-slots" label="Slots" type="number" inputMode="numeric" min={1} max={500} value={v.slots} onChange={(e) => setV({ ...v, slots: e.target.value })} />
+          <TextField id="dm-slots" label="People" type="number" inputMode="numeric" min={1} max={500} value={v.slots} onChange={(e) => setV({ ...v, slots: e.target.value })} />
+          {/* Migration 28: hours count towards each person's monthly limit across all serving. */}
+          <TextField id="dm-hours" label="Hours each" hint="(blank: usual slot)" type="number" inputMode="decimal" min={0.5} max={16} step={0.5} value={v.hours} onChange={(e) => setV({ ...v, hours: e.target.value })} />
+          {first !== last && (
+            <TextField id="dm-until" label="Repeat weekly until" hint="(optional)" type="date" min={v.date} max={last} value={v.until} onChange={(e) => setV({ ...v, until: e.target.value })} />
+          )}
           <div>
             <Button size="sm" variant="secondary" disabled={!valid || add.isPending} onClick={() => add.mutate()}>
               Add

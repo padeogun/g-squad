@@ -3213,6 +3213,64 @@ where n.nspname in ('public', 'app')
                     'newsletter_release_deliveries','newsletter_finish','peek_email_link','redeem_email_link','newsletter_content',
                     'newsletter_content_version','newsletter_test_list','is_leader_email','email_link_usable','issue_project_only_inputs');
 
+-- =====================================================================================
+-- Z. Migration 28: one limit for all serving, counted in hours
+-- =====================================================================================
+-- Fixture (system): Nia (pN1) joins Production (A1); an approved outreach five months ahead
+-- needs Production people for 4 hours on two days and 1 hour on two others.
+select test.login('');
+insert into public.unit_memberships (church_id, person_id, unit_id) values (test.id('churchA'), test.id('pN1'), test.id('A1'));
+insert into public.projects (church_id, level, name, starts_at, ends_at, status, owner_user_id)
+values (test.id('churchA'), 'church', 'Autumn outreach',
+        date_trunc('month', current_date) + interval '5 months',
+        date_trunc('month', current_date) + interval '6 months' - interval '1 second', 'approved', test.id('ops'));
+insert into test.ids select 'zoutreach', id from public.projects where name = 'Autumn outreach';
+create temporary table z_days as select (date_trunc('month', current_date) + interval '5 months')::date + n as d, n from generate_series(0, 9) n;
+grant select on z_days to authenticated;
+insert into public.team_demand (church_id, project_id, unit_id, on_date, slots_needed, hours)
+select test.id('churchA'), test.id('zoutreach'), test.id('A1'), d, 2, case when n in (0, 1) then 4 when n in (2, 3) then 1 end
+from z_days where n <= 4;
+
+select test.login('ops'); set role authenticated;
+select test.lives(format('insert into public.assignments (project_id, person_id, unit_id, serve_date, hours) values (%L, %L, %L, %L, 0.5)',
+                         test.id('zoutreach'), test.id('pN1'), test.id('A1'), (select d from z_days where n = 0)),
+                  'Z01: a 4-hour outreach slot is booked');
+select test.ok((select hours from public.assignments where project_id = test.id('zoutreach') and serve_date = (select d from z_days where n = 0)) = 4,
+               'Z01: its hours come from the volunteers-needed row, not the caller');
+select test.lives(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) values (%L, %L, %L, %L)',
+                         test.id('zoutreach'), test.id('pN1'), test.id('A1'), (select d from z_days where n = 1)),
+                  'Z02: a second 4-hour slot (8 of 9 hours)');
+select test.lives(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) values (%L, %L, %L, %L)',
+                         test.id('zoutreach'), test.id('pN1'), test.id('A1'), (select d from z_days where n = 2)),
+                  'Z02: a 1-hour activity still fits (9 of 9 hours)');
+select test.throws(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) values (%L, %L, %L, %L)',
+                          test.id('zoutreach'), test.id('pN1'), test.id('A1'), (select d from z_days where n = 3)),
+                   'Z02: one more hour goes over the monthly limit, across all serving');
+select test.throws(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) values (%L, %L, %L, %L)',
+                          test.id('zoutreach'), test.id('pN1'), test.id('A1'), (select d from z_days where n = 4)),
+                   'Z03: a slot with no hours given counts the church default (3 hours), also over');
+select test.lives(format('insert into public.assignments (project_id, person_id, unit_id, serve_date, override_reason) values (%L, %L, %L, %L, %L)',
+                         test.id('zoutreach'), test.id('pN1'), test.id('A1'), (select d from z_days where n = 3), 'Only trained sound engineer'),
+                  'Z04: the Operations Lead can go over with a reason');
+update public.assignments set hours = 0.5 where project_id = test.id('zoutreach') and serve_date = (select d from z_days where n = 0);
+select test.ok((select hours from public.assignments where project_id = test.id('zoutreach') and serve_date = (select d from z_days where n = 0)) = 4,
+               'Z05: nobody can change a slot''s hours directly');
+select test.ok((select hours_used = 10 and hours_limit = 9 from public.rota_candidates(test.id('A1'), (select d from z_days where n = 5)) where person_id = test.id('pN1')),
+               'Z06: who-can-serve shows hours used and the limit in hours');
+select test.ok((select (public.church_dashboard() ->> 'over_limit')::int) >= 0, 'Z07: the Church Dashboard still answers');
+reset role;
+select test.ok((select count(*) from public.audit_log where action = 'override_limit' and detail ->> 'person_id' = test.id('pN1')::text and detail ? 'limit_hours') = 1,
+               'Z04: the override is logged with hours');
+select test.login('');
+select test.ok(app.hours_in_month(test.id('pN1'), (select d from z_days where n = 0)) = 10, 'Z08: hours across the month add up');
+select test.ok(app.hours_limit(test.id('pN1')) = 9, 'Z08: the default limit is 3 slots x 3 hours');
+update public.people set available_hours_month = 5 where id = test.id('pN1');
+select test.ok(app.hours_limit(test.id('pN1')) = 5, 'Z08: a member who gives fewer hours has a lower limit');
+update public.people set available_hours_month = null where id = test.id('pN1');
+select test.login('anon'); set role anon;
+select test.throws($q$select app.hours_in_month(gen_random_uuid(), current_date)$q$, 'Z09: anonymous callers cannot use the hours helpers');
+reset role;
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;

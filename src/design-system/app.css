@@ -216,3 +216,8 @@
 /* SECURITY REVIEW 18 (Y13): the link page's heading and live region. */
 .app-link-title { margin: 0; font: 700 24px var(--font-display); color: var(--ink); }
 .app-link-body { display: flex; flex-direction: column; gap: var(--space-3); outline: none; }
+
+/* ---------- Rota: events and team activities (migration 28) ---------- */
+.app-event-group { display: flex; flex-direction: column; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--line); min-width: 0; }
+.app-event-group:first-of-type { border-top: 0; padding-top: 0; }
+.app-event-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-3); overflow-wrap: break-word; min-width: 0; }
