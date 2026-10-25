@@ -65,6 +65,9 @@ export interface UnitDashboard {
     engagement: keyof EngagementMix | 'left';
     slots_this_month: number;
     slot_limit: number;
+    // Migration 28: the limit in hours across all serving.
+    hours_this_month: number;
+    hours_limit: number;
     holiday_from: string | null;
     holiday_to: string | null;
     last_one_to_one: string | null;

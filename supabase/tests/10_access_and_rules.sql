@@ -143,6 +143,12 @@ values (test.id('churchA'), 'church', 'Sunday rota',
         date_trunc('month', current_date) + interval '4 months' - interval '1 second',
         'approved', true, test.id('ops'));
 insert into test.ids select 'rota', id from public.projects where name = 'Sunday rota';
+-- SECURITY REVIEW 19 (Z04): it has no service grid, so (like any event) a slot needs a place:
+-- A1 is asked for one person, any role, on each day of the month.
+insert into public.team_demand (church_id, project_id, unit_id, on_date, slots_needed)
+select test.id('churchA'), test.id('rota'), test.id('A1'), d::date, 1
+from generate_series(date_trunc('month', current_date) + interval '3 months',
+                     date_trunc('month', current_date) + interval '4 months' - interval '1 day', interval '1 day') d;
 
 -- =====================================================================================
 -- 1. Church isolation and anonymous access
@@ -1922,6 +1928,13 @@ set timezone = 'UTC';
 select test.login('ops'); set role authenticated;
 insert into public.projects (name, level, starts_at, ends_at)
 values ('Night of worship', 'church', timestamptz '2027-06-12 00:30 Europe/London', timestamptz '2027-06-12 02:00 Europe/London');
+-- SECURITY REVIEW 19 (Z04): a booking fills a place on an approved project, so the event is
+-- approved and asks A1 for someone (system change).
+reset role; select test.login('');
+update public.projects set status = 'approved' where name = 'Night of worship';
+insert into public.team_demand (church_id, project_id, unit_id, on_date, slots_needed)
+select church_id, id, test.id('A1'), '2027-06-12', 1 from public.projects where name = 'Night of worship';
+select test.login('ops'); set role authenticated;
 select test.throws(format($q$insert into public.assignments (project_id, person_id, unit_id, serve_date) values ((select id from public.projects where name = 'Night of worship'), %L, %L, '2027-06-11')$q$,
                           test.id('rt1'), test.id('A1')),
                    'Q07: the day before (UK) is outside the event');
@@ -3212,6 +3225,191 @@ where n.nspname in ('public', 'app')
   and p.proname in ('newsletter_claim_due','newsletter_send_content','newsletter_next_recipients','newsletter_record_deliveries',
                     'newsletter_release_deliveries','newsletter_finish','peek_email_link','redeem_email_link','newsletter_content',
                     'newsletter_content_version','newsletter_test_list','is_leader_email','email_link_usable','issue_project_only_inputs');
+
+-- =====================================================================================
+-- Z. Migration 28: one limit for all serving, counted in hours
+-- =====================================================================================
+-- Fixture (system): Nia (pN1) joins Production (A1); an approved outreach five months ahead
+-- needs Production people for 4 hours on two days and 1 hour on two others.
+select test.login('');
+insert into public.unit_memberships (church_id, person_id, unit_id) values (test.id('churchA'), test.id('pN1'), test.id('A1'));
+insert into public.projects (church_id, level, name, starts_at, ends_at, status, owner_user_id)
+values (test.id('churchA'), 'church', 'Autumn outreach',
+        date_trunc('month', current_date) + interval '5 months',
+        date_trunc('month', current_date) + interval '6 months' - interval '1 second', 'approved', test.id('ops'));
+insert into test.ids select 'zoutreach', id from public.projects where name = 'Autumn outreach';
+create temporary table z_days as select (date_trunc('month', current_date) + interval '5 months')::date + n as d, n from generate_series(0, 9) n;
+grant select on z_days to authenticated;
+insert into public.team_demand (church_id, project_id, unit_id, on_date, slots_needed, hours)
+select test.id('churchA'), test.id('zoutreach'), test.id('A1'), d, 2, case when n in (0, 1) then 4 when n in (2, 3) then 1 end
+from z_days where n <= 4;
+
+select test.login('ops'); set role authenticated;
+select test.lives(format('insert into public.assignments (project_id, person_id, unit_id, serve_date, hours) values (%L, %L, %L, %L, 0.5)',
+                         test.id('zoutreach'), test.id('pN1'), test.id('A1'), (select d from z_days where n = 0)),
+                  'Z01: a 4-hour outreach slot is booked');
+select test.ok((select hours from public.assignments where project_id = test.id('zoutreach') and serve_date = (select d from z_days where n = 0)) = 4,
+               'Z01: its hours come from the volunteers-needed row, not the caller');
+select test.lives(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) values (%L, %L, %L, %L)',
+                         test.id('zoutreach'), test.id('pN1'), test.id('A1'), (select d from z_days where n = 1)),
+                  'Z02: a second 4-hour slot (8 of 9 hours)');
+select test.lives(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) values (%L, %L, %L, %L)',
+                         test.id('zoutreach'), test.id('pN1'), test.id('A1'), (select d from z_days where n = 2)),
+                  'Z02: a 1-hour activity still fits (9 of 9 hours)');
+select test.throws(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) values (%L, %L, %L, %L)',
+                          test.id('zoutreach'), test.id('pN1'), test.id('A1'), (select d from z_days where n = 3)),
+                   'Z02: one more hour goes over the monthly limit, across all serving');
+select test.throws(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) values (%L, %L, %L, %L)',
+                          test.id('zoutreach'), test.id('pN1'), test.id('A1'), (select d from z_days where n = 4)),
+                   'Z03: a slot with no hours given counts the church default (3 hours), also over');
+select test.lives(format('insert into public.assignments (project_id, person_id, unit_id, serve_date, override_reason) values (%L, %L, %L, %L, %L)',
+                         test.id('zoutreach'), test.id('pN1'), test.id('A1'), (select d from z_days where n = 3), 'Only trained sound engineer'),
+                  'Z04: the Operations Lead can go over with a reason');
+update public.assignments set hours = 0.5 where project_id = test.id('zoutreach') and serve_date = (select d from z_days where n = 0);
+select test.ok((select hours from public.assignments where project_id = test.id('zoutreach') and serve_date = (select d from z_days where n = 0)) = 4,
+               'Z05: nobody can change a slot''s hours directly');
+select test.ok((select hours_used = 10 and hours_limit = 9 from public.rota_candidates(test.id('A1'), (select d from z_days where n = 5)) where person_id = test.id('pN1')),
+               'Z06: who-can-serve shows hours used and the limit in hours');
+select test.ok((select (public.church_dashboard() ->> 'over_limit')::int) >= 0, 'Z07: the Church Dashboard still answers');
+reset role;
+select test.ok((select count(*) from public.audit_log where action = 'override_limit' and detail ->> 'person_id' = test.id('pN1')::text and detail ? 'limit_hours') = 1,
+               'Z04: the override is logged with hours');
+select test.login('');
+select test.ok(app.hours_in_month(test.id('pN1'), (select d from z_days where n = 0)) = 10, 'Z08: hours across the month add up');
+select test.ok(app.hours_limit(test.id('pN1')) = 9, 'Z08: the default limit is 3 slots x 3 hours');
+update public.people set available_hours_month = 5 where id = test.id('pN1');
+select test.ok(app.hours_limit(test.id('pN1')) = 5, 'Z08: a member who gives fewer hours has a lower limit');
+update public.people set available_hours_month = null where id = test.id('pN1');
+select test.login('anon'); set role anon;
+select test.throws($q$select app.hours_in_month(gen_random_uuid(), current_date)$q$, 'Z09: anonymous callers cannot use the hours helpers');
+reset role;
+
+-- ---------- Security review 19 (Z01-Z12) ----------------------------------------------
+-- Fixture (system): Zed and Zoe join Production (A1). "Review outreach" (approved, owned by the
+-- Purpose Head, seven months ahead) asks A1 for: day 0 anyone 1 h; day 1 Member 1 h and
+-- Welfare 8 h; day 2 anyone (church default); day 3 anyone 4 h. "Review draft" (draft) and
+-- "Review other team" (approved, asks A2 only) ask nothing of A1 that A1 may fill.
+select test.login('');
+insert into public.people (church_id, first_name, surname) values (test.id('churchA'), 'Zed', 'Reviewer'), (test.id('churchA'), 'Zoe', 'Reviewer');
+insert into test.ids select 'pZ' || first_name, id from public.people where surname = 'Reviewer';
+insert into public.unit_memberships (church_id, person_id, unit_id)
+select test.id('churchA'), id, test.id('A1') from public.people where surname = 'Reviewer';
+insert into test.ids select 'zrMember', id from public.church_roles where church_id = test.id('churchA') and name = 'Member';
+insert into test.ids select 'zrWelfare', id from public.church_roles where church_id = test.id('churchA') and name = 'Welfare and Pastoral Coordinator';
+insert into public.projects (church_id, level, name, starts_at, ends_at, status, owner_user_id)
+select test.id('churchA'), 'church', x.name, date_trunc('month', current_date) + interval '7 months',
+       date_trunc('month', current_date) + interval '8 months' - interval '1 second', x.status::public.project_status, test.id('ph')
+from (values ('Review outreach', 'approved'), ('Review draft', 'draft'), ('Review other team', 'approved')) x(name, status);
+insert into test.ids select 'zr' || replace(substr(name, 8), ' ', ''), id from public.projects where name like 'Review %';
+create temporary table z2 as select n, (date_trunc('month', current_date) + interval '7 months')::date + n as d from generate_series(0, 9) n;
+grant select on z2 to authenticated;
+insert into public.team_demand (church_id, project_id, unit_id, church_role_id, on_date, slots_needed, hours) values
+  (test.id('churchA'), test.id('zroutreach'), test.id('A1'), null,                (select d from z2 where n = 0), 2, 1),
+  (test.id('churchA'), test.id('zroutreach'), test.id('A1'), test.id('zrMember'),  (select d from z2 where n = 1), 1, 1),
+  (test.id('churchA'), test.id('zroutreach'), test.id('A1'), test.id('zrWelfare'), (select d from z2 where n = 1), 1, 8),
+  (test.id('churchA'), test.id('zroutreach'), test.id('A1'), null,                (select d from z2 where n = 2), 2, null),
+  (test.id('churchA'), test.id('zroutreach'), test.id('A1'), null,                (select d from z2 where n = 3), 2, 4),
+  (test.id('churchA'), test.id('zrdraft'),    test.id('A1'), null,                (select d from z2 where n = 0), 2, 1),
+  (test.id('churchA'), test.id('zrotherteam'), test.id('A2'), null,               (select d from z2 where n = 0), 2, 1);
+create or replace function pg_temp.zbook(p_project text, p_person text, p_day int, p_role text default null) returns text
+language sql as $$
+  select format('insert into public.assignments (project_id, person_id, unit_id, church_role_id, serve_date) values (%L, %L, %L, %L, %L)',
+                test.id(p_project), test.id(p_person), test.id('A1'), case when p_role is null then null else test.id(p_role) end,
+                (select d from z2 where n = p_day))
+$$;
+create or replace function pg_temp.zhours(p_person text, p_day int) returns numeric
+language sql as $$
+  select hours from public.assignments where person_id = test.id(p_person) and serve_date = (select d from z2 where n = p_day) and status = 'planned'
+$$;
+
+grant execute on function pg_temp.zbook(text, text, int, text), pg_temp.zhours(text, int) to authenticated;
+select test.login('ul_a'); set role authenticated;
+select test.lives(pg_temp.zbook('zroutreach', 'pZZed', 2), 'Z01: (Zed takes a default slot, 3 h)');
+select test.lives(pg_temp.zbook('zroutreach', 'pZZed', 1, 'zrMember'), 'Z02: Zed takes a 1-hour Member place (4 of 9 h)');
+select test.ok(pg_temp.zhours('pZZed', 1) = 1, 'Z02: ... counted as 1 hour');
+select test.throws(format('update public.assignments set church_role_id = %L where person_id = %L and serve_date = %L',
+                          test.id('zrWelfare'), test.id('pZZed'), (select d from z2 where n = 1)),
+                   'Z02: switching the booking to the 8-hour Welfare place in place is checked against the limit (11 of 9 h)');
+select test.ok(pg_temp.zhours('pZZed', 1) = 1, 'Z02: ... and the booking keeps its 1 hour');
+select test.lives(pg_temp.zbook('zroutreach', 'pZZed', 0), 'Z01: Zed takes a 1-hour place on day 0 (5 of 9 h)');
+reset role;
+
+-- Z01: the project owner (Purpose Head) changes the hours after people are booked.
+select test.login('ph'); set role authenticated;
+select test.throws(format('update public.team_demand set hours = 8 where project_id = %L and on_date = %L',
+                          test.id('zroutreach'), (select d from z2 where n = 0)),
+                   'Z01: raising a place to 8 hours that would take a booked person over the limit is refused');
+select test.lives(format('update public.team_demand set hours = 4 where project_id = %L and on_date = %L',
+                         test.id('zroutreach'), (select d from z2 where n = 0)),
+                  'Z01: raising it to 4 hours (8 of 9 h) is allowed');
+reset role;
+select test.ok(pg_temp.zhours('pZZed', 0) = 4, 'Z01: ... and the booking now counts 4 hours');
+select test.ok(exists (select 1 from public.audit_log where action = 'demand_hours' and detail ->> 'to' = '4.0'),
+               'Z09: the change of hours on a booked place is logged');
+select test.login('ph'); set role authenticated;
+select test.lives(format('update public.team_demand set hours = 2 where project_id = %L and on_date = %L',
+                         test.id('zroutreach'), (select d from z2 where n = 0)),
+                  'Z01: lowering a place''s hours is allowed');
+reset role;
+select test.ok(pg_temp.zhours('pZZed', 0) = 2, 'Z01: ... and the booking follows it (2 h)');
+select test.login('ph'); set role authenticated;
+-- Z03: a second row for the same place with fewer hours does not lower the default place.
+select test.lives(format('insert into public.team_demand (project_id, unit_id, on_date, slots_needed, hours) values (%L, %L, %L, 1, 0.5)',
+                         test.id('zroutreach'), test.id('A1'), (select d from z2 where n = 2)),
+                  'Z03: (owner adds a half-hour row beside the default-hours row on day 2)');
+reset role;
+select test.ok(pg_temp.zhours('pZZed', 2) = 3, 'Z03: the default-hours booking still counts 3 hours');
+select test.login('ul_a'); set role authenticated;
+select test.lives(pg_temp.zbook('zroutreach', 'pZZoe', 2), 'Z03: (Zoe books day 2)');
+select test.ok(pg_temp.zhours('pZZoe', 2) = 3, 'Z03: ... counted at the larger of the two (3 h, not 0.5)');
+select test.lives(pg_temp.zbook('zroutreach', 'pZZoe', 3, 'zrMember'), 'Z03: (Zoe books the 4-hour any-role place on day 3 naming a role)');
+select test.ok(pg_temp.zhours('pZZoe', 3) = 4, 'Z03: ... counted at that place''s 4 hours, not the default 3');
+-- Z04: a booking fills a place the team was asked for, on an approved project.
+select test.throws(pg_temp.zbook('zrdraft', 'pZZoe', 0), 'Z04: no booking on a draft project');
+select test.throws(pg_temp.zbook('zrotherteam', 'pZZoe', 0), 'Z04: no booking on a project that did not ask this team');
+select test.throws(pg_temp.zbook('zroutreach', 'pZZoe', 5), 'Z04: no booking on a day with no place for the team');
+select test.throws(format('update public.assignments set project_id = %L where person_id = %L and serve_date = %L',
+                          test.id('zrdraft'), test.id('pZZed'), (select d from z2 where n = 0)),
+                   'Z04: a booking cannot be moved onto a draft project');
+reset role;
+-- Z05: the guard holds a per-person lock for the month, so two bookings at once queue (the race
+-- itself was re-run by hand with two sessions). The booking is rolled back.
+do $$
+declare v boolean := false;
+begin
+  begin
+    perform test.login('ul_a');
+    set local role authenticated;
+    execute pg_temp.zbook('zroutreach', 'pZZoe', 0);
+    reset role;
+    v := exists (select 1 from pg_locks where locktype = 'advisory' and pid = pg_backend_pid() and granted);
+    raise exception 'roll back' using errcode = 'P0001';
+  exception when sqlstate 'P0001' then null;
+  end;
+  perform test.ok(v, 'Z05: booking takes the person''s monthly lock until the transaction ends');
+end $$;
+-- Z06: removing a place keeps the hours of people booked for it.
+select test.login('ph'); set role authenticated;
+select test.lives(format('delete from public.team_demand where project_id = %L and on_date = %L', test.id('zroutreach'), (select d from z2 where n = 0)),
+                  'Z06: (owner removes the day-0 place)');
+reset role;
+select test.ok(pg_temp.zhours('pZZed', 0) = 2, 'Z06: the booking keeps its 2 hours');
+-- Z08: hours in half-hour steps; the church''s hours per slot within what a slot can hold.
+select test.login('ph'); set role authenticated;
+select test.throws(format('insert into public.team_demand (project_id, unit_id, on_date, slots_needed, hours) values (%L, %L, %L, 1, 0.7)',
+                          test.id('zroutreach'), test.id('A1'), (select d from z2 where n = 4)),
+                   'Z08: hours are in half-hour steps');
+reset role;
+select test.login('');
+select test.throws(format('update public.church_settings set hours_per_slot = 20 where church_id = %L', test.id('churchA')),
+                   'Z08: hours per slot cannot exceed 16 (a slot''s maximum)');
+-- Z10: the hours helpers are for the database only.
+select test.ok(not has_function_privilege('authenticated', 'app.hours_in_month(uuid, date, uuid)', 'execute')
+               and not has_function_privilege('authenticated', 'app.hours_limit(uuid)', 'execute')
+               and not has_function_privilege('authenticated', 'app.slot_hours(uuid, uuid, uuid, date)', 'execute')
+               and not has_function_privilege('authenticated', 'app.place_hours(uuid, uuid, uuid, date)', 'execute'),
+               'Z10: signed-in users cannot call the hours helpers directly');
+select test.ok(not has_function_privilege('authenticated', 'app.demand_hours_sync()', 'execute'), 'Z10: nor the demand trigger');
 
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail

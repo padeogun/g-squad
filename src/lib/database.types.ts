@@ -40,14 +40,14 @@ isOneToOne: false
                   ]
                 },"assignments": {
                   Row: {
-                    "assigned_by": string | null,"church_id": string,"church_role_id": string | null,"created_at": string,"id": string,"override_reason": string | null,"person_id": string,"project_id": string,"serve_date": string,"status": Database["public"]['Enums']["assignment_status"],"unit_id": string,"updated_at": string
+                    "assigned_by": string | null,"church_id": string,"church_role_id": string | null,"created_at": string,"hours": number,"id": string,"override_reason": string | null,"person_id": string,"project_id": string,"serve_date": string,"status": Database["public"]['Enums']["assignment_status"],"unit_id": string,"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "assigned_by"?: string | null,"church_id"?: string,"church_role_id"?: string | null,"created_at"?: string,"id"?: string,"override_reason"?: string | null,"person_id": string,"project_id": string,"serve_date": string,"status"?: Database["public"]['Enums']["assignment_status"],"unit_id": string,"updated_at"?: string
+                    "assigned_by"?: string | null,"church_id"?: string,"church_role_id"?: string | null,"created_at"?: string,"hours"?: number,"id"?: string,"override_reason"?: string | null,"person_id": string,"project_id": string,"serve_date": string,"status"?: Database["public"]['Enums']["assignment_status"],"unit_id": string,"updated_at"?: string
                   }
                   Update: {
-                    "assigned_by"?: string | null,"church_id"?: string,"church_role_id"?: string | null,"created_at"?: string,"id"?: string,"override_reason"?: string | null,"person_id"?: string,"project_id"?: string,"serve_date"?: string,"status"?: Database["public"]['Enums']["assignment_status"],"unit_id"?: string,"updated_at"?: string
+                    "assigned_by"?: string | null,"church_id"?: string,"church_role_id"?: string | null,"created_at"?: string,"hours"?: number,"id"?: string,"override_reason"?: string | null,"person_id"?: string,"project_id"?: string,"serve_date"?: string,"status"?: Database["public"]['Enums']["assignment_status"],"unit_id"?: string,"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -1160,14 +1160,14 @@ isOneToOne: false
                   ]
                 },"team_demand": {
                   Row: {
-                    "church_id": string,"church_role_id": string | null,"created_at": string,"id": string,"on_date": string,"project_id": string,"slots_needed": number,"unit_id": string
+                    "church_id": string,"church_role_id": string | null,"created_at": string,"hours": number | null,"id": string,"on_date": string,"project_id": string,"slots_needed": number,"unit_id": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "church_id"?: string,"church_role_id"?: string | null,"created_at"?: string,"id"?: string,"on_date": string,"project_id": string,"slots_needed": number,"unit_id": string
+                    "church_id"?: string,"church_role_id"?: string | null,"created_at"?: string,"hours"?: number | null,"id"?: string,"on_date": string,"project_id": string,"slots_needed": number,"unit_id": string
                   }
                   Update: {
-                    "church_id"?: string,"church_role_id"?: string | null,"created_at"?: string,"id"?: string,"on_date"?: string,"project_id"?: string,"slots_needed"?: number,"unit_id"?: string
+                    "church_id"?: string,"church_role_id"?: string | null,"created_at"?: string,"hours"?: number | null,"id"?: string,"on_date"?: string,"project_id"?: string,"slots_needed"?: number,"unit_id"?: string
                   }
                   Relationships: [
                     {
@@ -1508,7 +1508,7 @@ isOneToOne: false
                            },
 "rota_candidates":
 { Args: { "p_date": string,"p_unit": string }; Returns: {
-              "church_role_id": string,"first_name": string,"on_holiday": boolean,"person_id": string,"serving_that_day": boolean,"slot_limit": number,"slots_used": number,"surname": string
+              "church_role_id": string,"first_name": string,"hours_limit": number,"hours_used": number,"on_holiday": boolean,"person_id": string,"serving_that_day": boolean,"slot_limit": number,"slots_used": number,"surname": string
             }[]
                            },
 "set_event_safeguarding":

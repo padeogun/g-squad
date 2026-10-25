@@ -45,7 +45,7 @@ export function ChurchDashboard() {
         <StatTile label="Team places" value={d.team_places} note={`${d.multi_unit} serve in 2+ units`} />
         <StatTile label="Units" value={d.units} note={`across ${d.purposes} purposes`} />
         <StatTile label="Active members" value={d.engagement.active} note="served 2+ times in 8 weeks" />
-        <StatTile label="Over limit" value={d.over_limit} note="more slots than their limit this month" tone={d.over_limit ? 'danger' : 'default'} />
+        <StatTile label="Over limit" value={d.over_limit} note="more hours than their monthly limit, across all serving" tone={d.over_limit ? 'danger' : 'default'} />
         <StatTile label="Check-ins open" value={d.checkins_open} note="flags only, no reasons" />
         <StatTile
           label="Inputs overdue"
