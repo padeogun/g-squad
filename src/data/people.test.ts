@@ -7,7 +7,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { changedColumns, cleanFaith } from './people';
+import { changedColumns, cleanFaith, repeatedAt } from './people';
 
 describe('changedColumns (L06)', () => {
   it('returns only the fields that differ', () => {
@@ -15,6 +15,24 @@ describe('changedColumns (L06)', () => {
     expect(changedColumns(before, { ...before })).toEqual({});
     expect(changedColumns(before, { ...before, area: 'M6' })).toEqual({ area: 'M6' });
     expect(changedColumns(before, { ...before, email: null as unknown as string })).toEqual({ email: null });
+  });
+  // V07 (review 16): lists are compared by their entries, not as objects.
+  it('treats two copies of the same list as unchanged', () => {
+    const before = { phones: ['07700 900123'], other_emails: [] as string[] };
+    expect(changedColumns(before, { phones: ['07700 900123'], other_emails: [] })).toEqual({});
+    expect(changedColumns(before, { phones: ['07700 900123', '0161 496 0000'], other_emails: [] })).toEqual({
+      phones: ['07700 900123', '0161 496 0000'],
+    });
+    expect(changedColumns(before, { phones: [], other_emails: [] })).toEqual({ phones: [] });
+  });
+});
+
+describe('repeatedAt (V05, review 16)', () => {
+  it('finds entries that repeat an earlier one', () => {
+    expect(repeatedAt(['a@example.org', 'B@example.org ', 'b@example.org'], true)).toEqual([2]);
+    expect(repeatedAt(['a@example.org', 'A@example.org'])).toEqual([]);
+    expect(repeatedAt(['07700 900123', '', '07700 900123'])).toEqual([2]);
+    expect(repeatedAt(['', ''])).toEqual([]);
   });
 });
 

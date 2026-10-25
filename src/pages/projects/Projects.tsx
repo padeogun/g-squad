@@ -1,7 +1,7 @@
 // -------------------------------------------------------------------------------------
 // Projects and events: every project and event in the church (Sunday services are under
 // Sunday Operations), soonest first. At the top: inputs asked of this leader, and projects
-// waiting for their decision (the Resident Pastor for church projects, a Purpose Head for
+// waiting for their decision (the Operations Lead for church projects, a Purpose Head for
 // units in their purpose). Anyone who may create projects sees "New project"; the database
 // decides who may create which (projects_insert, migration 7).
 // -------------------------------------------------------------------------------------
@@ -32,14 +32,14 @@ export function Projects() {
   const leaderMap = byId(leaders.data);
   const projectMap = byId(projects.data);
 
-  // Waiting for my decision: submitted church projects for the Resident Pastor; submitted unit
+  // Waiting for my decision: submitted church projects for the Operations Lead; submitted unit
   // projects in a purpose I head. (A courtesy list; the database checks the approval itself.)
   const myPurposes = (me.data?.roles ?? []).filter((r) => r.role === 'purpose_head').map((r) => r.purpose_id);
-  const isRp = hasRole(me.data, 'resident_pastor');
+  const isOps = hasRole(me.data, 'operations_lead');
   const awaiting = (projects.data ?? []).filter(
     (p) =>
       p.status === 'submitted' &&
-      ((p.level === 'church' && isRp) || (p.level === 'unit' && myPurposes.includes(unitMap.get(p.unit_id ?? '')?.purpose_id ?? null))),
+      ((p.level === 'church' && isOps) || (p.level === 'unit' && myPurposes.includes(unitMap.get(p.unit_id ?? '')?.purpose_id ?? null))),
   );
 
   const isPast = (p: Project) => isPastProject(p, today);

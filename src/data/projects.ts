@@ -97,6 +97,8 @@ export interface Readiness {
   review_done: boolean | null;
   can_manage: boolean;
   can_approve: boolean;
+  // The caller would approve a project they own (allowed for the Operations Lead; flagged).
+  self_approval: boolean;
 }
 
 // The approval checks; refused (and then not shown) for roles outside planning.
@@ -121,6 +123,31 @@ export function useRefreshProject(id: string) {
   };
 }
 
+// Coming projects short of volunteers (public.volunteer_shortfalls, migration 25): all units
+// for the Church Dashboard, one unit for My Unit. Always shown, not only at approval.
+export interface Shortfall {
+  project_id: string;
+  project_name: string;
+  is_sunday_service: boolean;
+  grid_id: string | null;
+  project_status: ProjectStatus;
+  unit_id: string;
+  unit_name: string;
+  month: string;
+  slots_needed: number;
+  spare: number;
+}
+export const useShortfalls = (unitId: string | null, enabled = true) =>
+  useQuery({
+    queryKey: ['shortfalls', unitId],
+    enabled,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('volunteer_shortfalls', unitId ? { p_unit: unitId } : {});
+      if (error) throw error;
+      return data as Shortfall[];
+    },
+  });
+
 export const useProjectTypes = () =>
   useQuery({
     queryKey: ['ref', 'project_types'],
@@ -131,7 +158,8 @@ export const useSites = () =>
   useQuery({ queryKey: ['ref', 'sites'], queryFn: () => rows(supabase.from('sites').select('id, name').order('name')) });
 
 // Roles that may start a project (mirrors projects_insert; Team Leads for their own team).
-export const PROJECT_CREATORS = ['operations_lead', 'gsquad_coordinator', 'resident_pastor', 'purpose_head', 'unit_lead'] as const;
+// The Resident Pastor does not own projects (decision of 25 Oct 2026, migration 25).
+export const PROJECT_CREATORS = ['operations_lead', 'gsquad_coordinator', 'purpose_head', 'unit_lead'] as const;
 
 // ---------- Words ----------
 export const STATUS_LABEL: Record<ProjectStatus, string> = {
@@ -377,8 +405,8 @@ export const PLAN_SECTIONS: PlanSection[] = [
       area('Logistics plan', 'logistics_plan'),
       yesNo('Childcare needed', 'childcare_needed'),
       yesNo('Risk assessment needed', 'risk_assessment_needed'),
-      // Event plans are readable by every leader in the church (open item since review 1).
-      area('Safeguarding notes', 'safeguarding_notes', 2000, 'Every leader in the church can read this: arrangements only, never names, ages, needs or concerns about anyone'),
+      // Safeguarding notes are not a plan field any more: they are restricted and logged
+      // (migration 25) and have their own panel in this section (SafeguardingPanel).
     ],
   },
   {

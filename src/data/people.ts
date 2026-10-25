@@ -22,7 +22,7 @@ export type Faith = Database['public']['Functions']['get_person_faith']['Returns
 const PERSON_COLUMNS =
   'id, first_name, other_names, surname, date_joined, date_left, status, birth_day, birth_month, email, area, ' +
   'marital_status, anniversary_day, anniversary_month, teci_stage_id, greatness_community_id, ' +
-  'newsletter_subscribed, celebration_opt_in, anonymised_at';
+  'newsletter_subscribed, celebration_opt_in, anonymised_at, phones, other_emails';
 
 export const usePeople = () =>
   useQuery({
@@ -161,8 +161,28 @@ export async function saveFaith(personId: string, input: FaithInput): Promise<vo
 
 // Only the columns that changed, so an edit never re-sends (and so never overwrites, or trips
 // a column rule on) fields the leader did not touch. Pure, so it is unit-tested.
+// SECURITY REVIEW 16 (V07): lists (phones, other_emails) are compared by their entries. With
+// !== two copies of the same list always differed, so every save re-sent both lists: a leader
+// saving an unrelated change overwrote numbers another leader had just changed (the lost update
+// L06 fixed), and a save with no changes still wrote the record.
+const same = (a: unknown, b: unknown): boolean =>
+  Array.isArray(a) && Array.isArray(b) ? a.length === b.length && a.every((x, i) => x === b[i]) : a === b;
 export function changedColumns<T extends Record<string, unknown>>(before: T, after: T): Partial<T> {
   const out: Partial<T> = {};
-  for (const k of Object.keys(after) as (keyof T)[]) if (before[k] !== after[k]) out[k] = after[k];
+  for (const k of Object.keys(after) as (keyof T)[]) if (!same(before[k], after[k])) out[k] = after[k];
+  return out;
+}
+
+// SECURITY REVIEW 16 (V05): the positions of entries that repeat an earlier one (compared as
+// stored: trimmed, emails in lower case), for the member form. The database refuses repeats.
+export function repeatedAt(values: string[], lower = false): number[] {
+  const seen = new Set<string>();
+  const out: number[] = [];
+  values.forEach((raw, i) => {
+    const v = lower ? raw.trim().toLowerCase() : raw.trim();
+    if (!v) return;
+    if (seen.has(v)) out.push(i);
+    else seen.add(v);
+  });
   return out;
 }
