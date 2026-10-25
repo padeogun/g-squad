@@ -55,6 +55,12 @@ export function LeadershipQuestions() {
       {!allowed && <Notice tone="info">Leadership questions are set by the G-Squad Coordinator or the Resident Pastor.</Notice>}
       {allowed && (
         <Card title="Add a question" tone="tint">
+          {/* SECURITY REVIEW 17 (W07): answers are read by everyone who reads the one-to-one,
+              including the team's Purpose Head, so they are not the place for faith or pastoral matters. */}
+          <p className="type-caption" style={{ margin: 0 }}>
+            Answers are read by everyone who reads the one-to-one, including the team&apos;s Purpose Head. Do not ask about a
+            member&apos;s walk with God, health or other pastoral matters here. Once a question has answers its wording cannot change.
+          </p>
           <div className="tec-fields">
             <TextField id="lq-q" label="Question" maxLength={300} value={v.question} onChange={(e) => setV({ ...v, question: e.target.value })} />
             <TextField id="lq-from" label="Asked from" type="date" value={v.from} onChange={(e) => setV({ ...v, from: e.target.value })} />

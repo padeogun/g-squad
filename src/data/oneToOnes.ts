@@ -11,6 +11,7 @@
 import { useQuery } from '@tanstack/react-query';
 import type { Database } from '../lib/database.types';
 import { supabase } from '../lib/supabase';
+import { friendlyError } from './errors';
 
 type T = Database['public']['Tables'];
 export type OneToOne = T['one_to_ones']['Row'];
@@ -128,4 +129,42 @@ export function recentQuarters(todayIso: string, back = 4): string[] {
 // The leadership questions being asked on a day.
 export function promptsFor(prompts: Prompt[], day: string): Prompt[] {
   return prompts.filter((p) => p.is_active && p.starts_on <= day && day <= p.ends_on);
+}
+
+// ---------- Form rules (security review 17) ----------
+// The latest "held on" date the picker offers: the end of the quarter or today, whichever is
+// earlier (W02: the database refuses a date after today, London time).
+export function heldOnMax(qStart: string, today: string): string {
+  const end = quarterEnd(qStart);
+  return end < today ? end : today;
+}
+
+// Why a "held on" date cannot be saved, or null. An existing one-to-one keeps its quarter.
+export function heldOnProblem(heldOn: string, today: string, keepQuarter: string | null): string | null {
+  if (!heldOn) return 'Give the date it was held.';
+  if (heldOn > today) return 'The date held must be today or earlier.';
+  if (keepQuarter && quarterStart(heldOn) !== keepQuarter) return `Keep the date within ${quarterLabel(keepQuarter)}.`;
+  return null;
+}
+
+// What the walk-with-God panel offers (W05). The database decides (get_one_to_one_walk);
+// this only avoids offering a button that is bound to be refused, and never hides one the
+// database would allow: the writer is offered it even if they no longer lead the team (a
+// refusal, for example while they are its Deputy, is then shown).
+//   'edit'  new one-to-one, written by its Team Lead: an empty box
+//   'ask'   an existing one: a button that loads it (each view is logged)
+//   'none'  not for this reader
+export function walkAccess(o: { isNew: boolean; canWrite: boolean; isWriter: boolean; isWide: boolean }): 'edit' | 'ask' | 'none' {
+  if (o.isNew) return o.canWrite ? 'edit' : 'none';
+  return o.isWriter || o.isWide ? 'ask' : 'none';
+}
+
+// The message when a save fails (W04). The one-to-one is saved first and the walk, answers
+// and check-in after it, so a failure after the first step must not say "Not saved": the
+// one-to-one exists, and saving again updates it.
+export function saveErrorMessage(err: unknown, oneToOneSaved: boolean): string {
+  const e = (err ?? {}) as { code?: string };
+  if (!oneToOneSaved && e.code === '23505') return 'A one-to-one is already recorded for this member this quarter. Open it from the list to change it.';
+  const msg = friendlyError(err);
+  return oneToOneSaved ? `The one-to-one was saved, but not everything with it: ${msg} Save again to finish.` : msg;
 }

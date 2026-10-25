@@ -13,7 +13,7 @@
 // R19) and a pastoral check-in flag (pastoral matters are not written in the one-to-one).
 // Only the Team Lead who wrote it edits it; others who may read it see it read-only.
 // -------------------------------------------------------------------------------------
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { TEC } from '../../design-system';
@@ -24,15 +24,18 @@ import { usePersonNames } from '../../data/people';
 import { shortDate, todayIso } from '../../data/sundays';
 import {
   FEELINGS,
+  heldOnMax,
+  heldOnProblem,
   promptsFor,
-  quarterEnd,
   quarterLabel,
   quarterStart,
+  saveErrorMessage,
   SUPPORT,
   useAnswers,
   useCoreValues,
   useOneToOne,
   usePrompts,
+  walkAccess,
   type OneToOne,
 } from '../../data/oneToOnes';
 import { hasRole, ledUnitIds, useMe } from '../../auth/useMe';
@@ -108,6 +111,12 @@ function Form({ oto, unitId, personId }: { oto: OneToOne | null; unitId: string;
   const [walkTouched, setWalkTouched] = useState(false);
   const [flag, setFlag] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // SECURITY REVIEW 17 (W04): the one-to-one is saved first, then the walk, answers and
+  // check-in. If a later step fails, the new one-to-one already exists: remember its id so
+  // that saving again updates it (rather than failing as a second one for the quarter), and
+  // say that it was saved.
+  const savedId = useRef<string | undefined>(oto?.id);
+  const [savedFirst, setSavedFirst] = useState(false);
 
   const save = useMutation({
     mutationFn: async () => {
@@ -126,7 +135,8 @@ function Form({ oto, unitId, personId }: { oto: OneToOne | null; unitId: string;
         development_goal: t(v.development_goal),
         notes: t(v.notes),
       };
-      let otoId = oto?.id;
+      setSavedFirst(false);
+      let otoId = savedId.current;
       if (otoId) {
         const { error: e } = await supabase.from('one_to_ones').update(row).eq('id', otoId).select('id').single();
         if (e) throw e;
@@ -138,7 +148,9 @@ function Form({ oto, unitId, personId }: { oto: OneToOne | null; unitId: string;
           .single();
         if (e) throw e;
         otoId = data.id;
+        savedId.current = otoId;
       }
+      setSavedFirst(true);
       // The walk with God only when written or changed this visit (it is read only on request).
       if (walkTouched) {
         const { error: e } = await supabase.rpc('set_one_to_one_walk', { p_one_to_one: otoId!, p_notes: walk });
@@ -166,6 +178,9 @@ function Form({ oto, unitId, personId }: { oto: OneToOne | null; unitId: string;
       return otoId!;
     },
     onSuccess: (otoId) => {
+      setFlag(false);   // W04: a check-in is asked for once, not again on the next save
+      setWalkTouched(false);
+      setTyped({});
       for (const k of [['one_to_ones'], ['one_to_one_answers'], ['unit_dashboard']]) qc.invalidateQueries({ queryKey: k });
       navigate(`/one-to-ones/${otoId}`, { replace: true });
     },
@@ -174,8 +189,10 @@ function Form({ oto, unitId, personId }: { oto: OneToOne | null; unitId: string;
   function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!v.feeling) return setError('Choose how they are finding serving.');
-    if (!v.held_on || v.held_on > today) return setError('The date held must be today or earlier.');
-    if (oto && quarterStart(v.held_on) !== oto.quarter_start) return setError(`Keep the date within ${quarterLabel(oto.quarter_start)}.`);
+    const dateProblem = heldOnProblem(v.held_on, today, oto?.quarter_start ?? null);
+    if (dateProblem) return setError(dateProblem);
+    // W06: without the saved answers, a typed answer would be added a second time.
+    if (oto && !answers.data) return setError('The saved answers to the leadership questions have not loaded yet. Try again in a moment.');
     setError(null);
     save.mutate();
   }
@@ -199,11 +216,17 @@ function Form({ oto, unitId, personId }: { oto: OneToOne | null; unitId: string;
         <Link to="/one-to-ones">All one-to-ones</Link>
       </p>
       {ro && <Notice tone="info">View only: one-to-ones are written by the Team Lead who held them.</Notice>}
+      {/* W06: a list that failed to load must not look like an empty one. */}
+      {(values.error || prompts.error || answers.error) && (
+        <Notice tone="danger" title="Part of this one-to-one did not load">
+          {friendlyError(values.error ?? prompts.error ?? answers.error)}
+        </Notice>
+      )}
 
       <form className="app-form" onSubmit={onSubmit} noValidate>
         <Card title="Serving">
           <fieldset className="app-fieldset tec-fields" disabled={ro}>
-            <TextField id="o-held" label="Held on" type="date" min={oto ? oto.quarter_start : quarterStart(today)} max={oto ? quarterEnd(oto.quarter_start) : today} value={v.held_on} onChange={(e) => set('held_on', e.target.value)} />
+            <TextField id="o-held" label="Held on" type="date" min={oto ? oto.quarter_start : quarterStart(today)} max={heldOnMax(oto ? oto.quarter_start : quarterStart(today), today)} value={v.held_on} onChange={(e) => set('held_on', e.target.value)} />
             <SelectField id="o-feeling" label="How are they finding serving?" value={v.feeling} onChange={(e) => set('feeling', e.target.value)} options={[{ value: '', label: 'Choose' }, ...FEELINGS]} />
             <SelectField id="o-support" label="Support needed" value={v.support_needed} onChange={(e) => set('support_needed', e.target.value)} options={SUPPORT} />
           </fieldset>
@@ -222,9 +245,9 @@ function Form({ oto, unitId, personId }: { oto: OneToOne | null; unitId: string;
           <p className="type-caption" style={{ margin: 0 }}>A value they have lived out, and one to grow in. Names and notes only: values are never scored or rated.</p>
           <fieldset className="app-fieldset tec-fields" disabled={ro}>
             <SelectField id="o-lived" label="A value lived out" value={v.value_lived_id} onChange={(e) => set('value_lived_id', e.target.value)} options={valueOpts} />
-            <TextField id="o-lived-note" label="How" maxLength={280} disabled={!v.value_lived_id} value={v.value_lived_note} onChange={(e) => set('value_lived_note', e.target.value)} />
+            <TextField id="o-lived-note" label="How they live it out" hint={v.value_lived_id ? undefined : 'Choose a value first'} maxLength={280} disabled={!v.value_lived_id} value={v.value_lived_note} onChange={(e) => set('value_lived_note', e.target.value)} />
             <SelectField id="o-grow" label="A value to grow in" value={v.value_to_grow_id} onChange={(e) => set('value_to_grow_id', e.target.value)} options={valueOpts} />
-            <TextField id="o-grow-note" label="How" maxLength={280} disabled={!v.value_to_grow_id} value={v.value_to_grow_note} onChange={(e) => set('value_to_grow_note', e.target.value)} />
+            <TextField id="o-grow-note" label="How they could grow in it" hint={v.value_to_grow_id ? undefined : 'Choose a value first'} maxLength={280} disabled={!v.value_to_grow_id} value={v.value_to_grow_note} onChange={(e) => set('value_to_grow_note', e.target.value)} />
           </fieldset>
         </Card>
 
@@ -249,11 +272,19 @@ function Form({ oto, unitId, personId }: { oto: OneToOne | null; unitId: string;
           {canWrite && (
             <Checkbox id="o-flag" label="Ask for a pastoral check-in (a flag only: no reasons are recorded)" checked={flag} onChange={(e) => setFlag(e.target.checked)} />
           )}
+          {/* SECURITY REVIEW 17 (W08): "Support needed: a pastoral check-in" is a note on the
+              one-to-one only; the pastoral team is told only by the flag. */}
+          {canWrite && v.support_needed === 'pastoral_check_in' && !flag && (
+            <p className="type-caption" role="status" style={{ margin: 0 }}>
+              You chose a pastoral check-in as the support needed. Tick the box above so the pastoral team is told; the one-to-one
+              itself is not shared with them.
+            </p>
+          )}
         </Card>
 
         {(error || save.error) && (
-          <Notice tone="danger" title="Not saved">
-            {error ?? friendlyError(save.error)}
+          <Notice tone="danger" title={error || !savedFirst ? 'Not saved' : 'Partly saved'}>
+            {error ?? saveErrorMessage(save.error, savedFirst)}
           </Notice>
         )}
         {canWrite && (
@@ -272,10 +303,18 @@ function Form({ oto, unitId, personId }: { oto: OneToOne | null; unitId: string;
 }
 
 // ---------- Personal walk with God: restricted and logged ----------
+// SECURITY REVIEW 17 (W05): who is offered the panel follows walkAccess (the writer even if
+// they no longer lead the team, so a refusal from the database is shown, not hidden); the
+// button names the section and says the view is recorded, and the loaded notes are announced.
 function WalkPanel({ oto, canWrite, value, onChange, onLoaded }: { oto: OneToOne | null; canWrite: boolean; value: string; onChange: (v: string) => void; onLoaded: (v: string) => void }) {
   const me = useMe();
-  const [shown, setShown] = useState<boolean>(!oto);
-  const mayRead = !oto || canWrite || hasRole(me.data, 'gsquad_coordinator', 'resident_pastor');
+  const access = walkAccess({
+    isNew: !oto,
+    canWrite,
+    isWriter: !!oto && oto.lead_user_id === me.data?.id,
+    isWide: hasRole(me.data, 'gsquad_coordinator', 'resident_pastor'),
+  });
+  const [shown, setShown] = useState<boolean>(access === 'edit');
   const read = useMutation({
     mutationFn: async () => {
       const { data, error } = await supabase.rpc('get_one_to_one_walk', { p_one_to_one: oto!.id });
@@ -289,26 +328,26 @@ function WalkPanel({ oto, canWrite, value, onChange, onLoaded }: { oto: OneToOne
   });
   return (
     <Card title="Personal walk with God">
-      <p className="type-caption" style={{ margin: 0 }}>
+      <p id="o-walk-who" className="type-caption" style={{ margin: 0 }}>
         Seen only by the Team Lead who held the one-to-one, the G-Squad Coordinator and the Resident Pastor. Every view is recorded.
       </p>
-      {!mayRead ? (
+      {access === 'none' ? (
         <p style={{ margin: 0 }}>Not shown to your role.</p>
       ) : !shown ? (
         <div>
-          <Button size="sm" variant="secondary" icon="lock" disabled={read.isPending} onClick={() => read.mutate()}>
+          <Button size="sm" variant="secondary" icon="lock" disabled={read.isPending} onClick={() => read.mutate()} aria-label="Show the personal walk with God notes (your view is recorded)" aria-describedby="o-walk-who">
             {read.isPending ? 'Opening…' : 'Show this section'}
           </Button>
         </div>
       ) : canWrite ? (
         <label className="tec-field" htmlFor="o-walk">
           <span>
-            Notes <span className="tec-hint">(optional)</span>
+            Notes on their walk with God <span className="tec-hint">(optional)</span>
           </span>
-          <textarea id="o-walk" className="tec-input app-textarea" rows={3} maxLength={1000} value={value} onChange={(e) => onChange(e.target.value)} />
+          <textarea id="o-walk" className="tec-input app-textarea" rows={3} maxLength={1000} value={value} aria-describedby="o-walk-who" onChange={(e) => onChange(e.target.value)} />
         </label>
       ) : (
-        <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{value || 'Nothing recorded.'}</p>
+        <p role="status" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{value || 'Nothing recorded.'}</p>
       )}
       {read.error && <Notice tone="danger">{friendlyError(read.error)}</Notice>}
     </Card>
