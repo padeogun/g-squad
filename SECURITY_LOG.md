@@ -1071,7 +1071,7 @@ Independent review of commit `8e45fe8` on `fair-share-rest-leaders` ("Fair share
 
 1. **Small counts are still counts.** The bands and "not asked" figures go to every dashboard reader, Team Leads included, as decided. In a small church a Team Lead who knows their own team's hours may guess who is in a band of one. Note it in the DPIA.
 2. **The 90-day quiet period for leaders' check-ins (F02) is a choice.** Confirm it with the Pastoral Lead. The older automatic flags (many teams, over the limit two months running, inactive) still come back the night after they are closed; consider the same rule for them.
-3. **The hours override (migration 28) still keeps its reason only on the slot.** Add it to that log entry in a later migration, as F07 does for Sundays.
+3. ~~**The hours override (migration 28) still keeps its reason only on the slot.**~~ Fixed after this review: migration 28 had not reached the live database (PR #16 merged into the newsletter branch, not main), so its `override_limit` entry now records the reason too (check Z04).
 4. **Who may switch the Sundays rule off.** The Coordinator, as well as the Operations Lead, may set Sundays off to 0 for the whole church (logged). The decision gives individual overrides to the Operations Lead only; decide whether this setting should be theirs alone.
 5. **A Sunday is a calendar Sunday.** A month's allowance is its Sundays less the Sundays off, so a Sunday with no service grid (an off-site joint service, say) counts as a Sunday off. Recording a Sunday already served beyond the rule needs the Operations Lead, as for hours.
 6. **Sample data only** until the DPIA is signed (unchanged).

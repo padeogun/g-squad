@@ -3272,7 +3272,8 @@ select test.ok((select hours_used = 10 and hours_limit = 9 from public.rota_cand
                'Z06: who-can-serve shows hours used and the limit in hours');
 select test.ok((select (public.church_dashboard() ->> 'over_limit')::int) >= 0, 'Z07: the Church Dashboard still answers');
 reset role;
-select test.ok((select count(*) from public.audit_log where action = 'override_limit' and detail ->> 'person_id' = test.id('pN1')::text and detail ? 'limit_hours') = 1,
+select test.ok((select count(*) from public.audit_log where action = 'override_limit' and detail ->> 'person_id' = test.id('pN1')::text and detail ? 'limit_hours'
+                and detail ->> 'reason' = 'Only trained sound engineer') = 1,
                'Z04: the override is logged with hours');
 select test.login('');
 select test.ok(app.hours_in_month(test.id('pN1'), (select d from z_days where n = 0)) = 10, 'Z08: hours across the month add up');

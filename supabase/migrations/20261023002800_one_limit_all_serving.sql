@@ -223,7 +223,10 @@ begin
     if app.has_role('operations_lead') and coalesce(length(trim(new.override_reason)), 0) >= 5 then
       perform app.audit('override_limit', 'assignments', new.id,
                         jsonb_build_object('person_id', new.person_id, 'month', date_trunc('month', new.serve_date)::date,
-                                           'limit_hours', v_limit_h, 'hours_before', v_used_h, 'hours', new.hours));
+                                           'limit_hours', v_limit_h, 'hours_before', v_used_h, 'hours', new.hours,
+                                           -- SECURITY REVIEW 20 (F07): the written reason is kept in the log too,
+                                           -- where a later change to the slot cannot blank it.
+                                           'reason', left(trim(new.override_reason), 500)));
     else
       raise exception 'This person already has % of % hours this month; this needs %',
         trim_scale(v_used_h), trim_scale(v_limit_h), trim_scale(new.hours)
