@@ -1,5 +1,5 @@
 // -------------------------------------------------------------------------------------
-// All routes. Everything except /sign-in sits behind RequireAuth and inside the AppShell.
+// All routes. Everything except /sign-in and /e/<token> (newsletter links) sits behind RequireAuth and inside the AppShell.
 // Screens not yet built are generated from navigation.ts as ComingSoon pages.
 // -------------------------------------------------------------------------------------
 import { createBrowserRouter } from 'react-router-dom';
@@ -29,9 +29,14 @@ import { Project } from '../pages/projects/Project';
 import { OneToOnes } from '../pages/care/OneToOnes';
 import { OneToOneForm } from '../pages/care/OneToOneForm';
 import { LeadershipQuestions } from '../pages/care/LeadershipQuestions';
+import { Issues } from '../pages/newsletter/Issues';
+import { Issue } from '../pages/newsletter/Issue';
+import { EmailLink } from '../pages/EmailLink';
 
 export const router = createBrowserRouter([
   { path: '/sign-in', element: <SignIn /> },
+  // Slice 6: members' personal newsletter links. Public: members do not sign in.
+  { path: '/e/:token', element: <EmailLink /> },
   {
     element: <RequireAuth />,
     children: [
@@ -59,6 +64,8 @@ export const router = createBrowserRouter([
           { path: '/one-to-ones/new', element: <OneToOneForm /> },
           { path: '/one-to-ones/questions', element: <LeadershipQuestions /> },
           { path: '/one-to-ones/:id', element: <OneToOneForm /> },
+          { path: '/newsletter', element: <Issues /> },
+          { path: '/newsletter/:id', element: <Issue /> },
           { path: '/admin/forms/:formId', element: <ReferenceForm /> },
           ...PLACEHOLDER_ITEMS.map((i) => ({
             path: i.path,

@@ -70,7 +70,15 @@ export const NAV: NavGroup[] = [
   },
   {
     label: 'Communication',
-    items: [{ label: 'Newsletter', path: '/newsletter', slice: 6 }],
+    items: [
+      {
+        label: 'The Greatness Brief',
+        path: '/newsletter',
+        slice: 6,
+        built: true,
+        roles: ['newsletter_editor', 'gsquad_coordinator', 'resident_pastor', 'operations_lead'],
+      },
+    ],
   },
   {
     label: 'Admin',

@@ -419,3 +419,16 @@ enabled = true
 [functions.invite-leader]
 enabled = true
 verify_jwt = true
+
+# G-Squad slice 6: sends The Greatness Brief. verify_jwt off because the database's scheduled
+# job calls it without a user; the function itself only sends issues the database says are
+# approved and due, and checks the caller's token for test sends.
+[functions.send-newsletter]
+enabled = true
+verify_jwt = false
+
+# G-Squad slice 6: members' personal newsletter links (RSVP, reactions, unsubscribe). Members
+# do not sign in; the random token in the link is checked by the database.
+[functions.email-link]
+enabled = true
+verify_jwt = false

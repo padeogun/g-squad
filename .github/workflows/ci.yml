@@ -36,6 +36,10 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm test
+      # Slice 6: type-check the Edge Functions with Deno (the runtime Supabase uses).
+      # --no-lock: no lock file is written into the repository.
+      - name: Type-check Edge Functions
+        run: npx -y deno@2.5.6 check --no-lock supabase/functions/*/index.ts
       - name: Build
         run: npm run build
         env:

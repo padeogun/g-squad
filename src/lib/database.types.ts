@@ -156,14 +156,14 @@ isOneToOne: false
                   ]
                 },"church_settings": {
                   Row: {
-                    "active_min_serves": number,"active_window_weeks": number,"church_id": string,"grid_finalise_dow": number,"hours_per_slot": number,"inactive_after_weeks": number,"input_reminder_days": number,"labels": NonNullable<Json>,"lead_time_large_weeks": number,"lead_time_medium_weeks": number,"lead_time_small_weeks": number,"monthly_report_due_day": number,"new_volunteer_days": number,"newsletter_update_due_day": number,"one_to_one_reminder_days": number,"purpose_heads_read_pastoral": boolean,"recognition_retention_months": number,"retention_months": number,"serving_limit_per_month": number,"unfilled_reminder_weeks": (number)[],"units_before_approval": number,"updated_at": string
+                    "active_min_serves": number,"active_window_weeks": number,"church_id": string,"grid_finalise_dow": number,"hours_per_slot": number,"inactive_after_weeks": number,"input_reminder_days": number,"labels": NonNullable<Json>,"lead_time_large_weeks": number,"lead_time_medium_weeks": number,"lead_time_small_weeks": number,"monthly_report_due_day": number,"new_volunteer_days": number,"newsletter_live": boolean,"newsletter_send_hour": number,"newsletter_test_recipients": (string)[],"newsletter_update_due_day": number,"one_to_one_reminder_days": number,"purpose_heads_read_pastoral": boolean,"recognition_retention_months": number,"retention_months": number,"serving_limit_per_month": number,"unfilled_reminder_weeks": (number)[],"units_before_approval": number,"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "active_min_serves"?: number,"active_window_weeks"?: number,"church_id": string,"grid_finalise_dow"?: number,"hours_per_slot"?: number,"inactive_after_weeks"?: number,"input_reminder_days"?: number,"labels"?: NonNullable<Json>,"lead_time_large_weeks"?: number,"lead_time_medium_weeks"?: number,"lead_time_small_weeks"?: number,"monthly_report_due_day"?: number,"new_volunteer_days"?: number,"newsletter_update_due_day"?: number,"one_to_one_reminder_days"?: number,"purpose_heads_read_pastoral"?: boolean,"recognition_retention_months"?: number,"retention_months"?: number,"serving_limit_per_month"?: number,"unfilled_reminder_weeks"?: (number)[],"units_before_approval"?: number,"updated_at"?: string
+                    "active_min_serves"?: number,"active_window_weeks"?: number,"church_id": string,"grid_finalise_dow"?: number,"hours_per_slot"?: number,"inactive_after_weeks"?: number,"input_reminder_days"?: number,"labels"?: NonNullable<Json>,"lead_time_large_weeks"?: number,"lead_time_medium_weeks"?: number,"lead_time_small_weeks"?: number,"monthly_report_due_day"?: number,"new_volunteer_days"?: number,"newsletter_live"?: boolean,"newsletter_send_hour"?: number,"newsletter_test_recipients"?: (string)[],"newsletter_update_due_day"?: number,"one_to_one_reminder_days"?: number,"purpose_heads_read_pastoral"?: boolean,"recognition_retention_months"?: number,"retention_months"?: number,"serving_limit_per_month"?: number,"unfilled_reminder_weeks"?: (number)[],"units_before_approval"?: number,"updated_at"?: string
                   }
                   Update: {
-                    "active_min_serves"?: number,"active_window_weeks"?: number,"church_id"?: string,"grid_finalise_dow"?: number,"hours_per_slot"?: number,"inactive_after_weeks"?: number,"input_reminder_days"?: number,"labels"?: NonNullable<Json>,"lead_time_large_weeks"?: number,"lead_time_medium_weeks"?: number,"lead_time_small_weeks"?: number,"monthly_report_due_day"?: number,"new_volunteer_days"?: number,"newsletter_update_due_day"?: number,"one_to_one_reminder_days"?: number,"purpose_heads_read_pastoral"?: boolean,"recognition_retention_months"?: number,"retention_months"?: number,"serving_limit_per_month"?: number,"unfilled_reminder_weeks"?: (number)[],"units_before_approval"?: number,"updated_at"?: string
+                    "active_min_serves"?: number,"active_window_weeks"?: number,"church_id"?: string,"grid_finalise_dow"?: number,"hours_per_slot"?: number,"inactive_after_weeks"?: number,"input_reminder_days"?: number,"labels"?: NonNullable<Json>,"lead_time_large_weeks"?: number,"lead_time_medium_weeks"?: number,"lead_time_small_weeks"?: number,"monthly_report_due_day"?: number,"new_volunteer_days"?: number,"newsletter_live"?: boolean,"newsletter_send_hour"?: number,"newsletter_test_recipients"?: (string)[],"newsletter_update_due_day"?: number,"one_to_one_reminder_days"?: number,"purpose_heads_read_pastoral"?: boolean,"recognition_retention_months"?: number,"retention_months"?: number,"serving_limit_per_month"?: number,"unfilled_reminder_weeks"?: (number)[],"units_before_approval"?: number,"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -468,16 +468,48 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
-                },"newsletter_issues": {
+                },"newsletter_deliveries": {
                   Row: {
-                    "church_id": string,"coordinator_approved_at": string | null,"coordinator_approved_by": string | null,"headline": string | null,"id": string,"issue_month": string,"pastor_approved_at": string | null,"pastor_approved_by": string | null,"pastor_name": string | null,"pastor_word": string | null,"project_id": string,"send_on": string | null,"sent_at": string | null,"standfirst": string | null,"status": Database["public"]['Enums']["issue_status"],"updated_at": string
+                    "church_id": string,"id": number,"issue_id": string,"person_id": string | null,"provider_id": string | null,"sent_at": string,"test_address": string | null
                   }
                   ComputedFields: never
                   Insert: {
-                    "church_id"?: string,"coordinator_approved_at"?: string | null,"coordinator_approved_by"?: string | null,"headline"?: string | null,"id"?: string,"issue_month": string,"pastor_approved_at"?: string | null,"pastor_approved_by"?: string | null,"pastor_name"?: string | null,"pastor_word"?: string | null,"project_id": string,"send_on"?: string | null,"sent_at"?: string | null,"standfirst"?: string | null,"status"?: Database["public"]['Enums']["issue_status"],"updated_at"?: string
+                    "church_id": string,"id"?: never,"issue_id": string,"person_id"?: string | null,"provider_id"?: string | null,"sent_at"?: string,"test_address"?: string | null
                   }
                   Update: {
-                    "church_id"?: string,"coordinator_approved_at"?: string | null,"coordinator_approved_by"?: string | null,"headline"?: string | null,"id"?: string,"issue_month"?: string,"pastor_approved_at"?: string | null,"pastor_approved_by"?: string | null,"pastor_name"?: string | null,"pastor_word"?: string | null,"project_id"?: string,"send_on"?: string | null,"sent_at"?: string | null,"standfirst"?: string | null,"status"?: Database["public"]['Enums']["issue_status"],"updated_at"?: string
+                    "church_id"?: string,"id"?: never,"issue_id"?: string,"person_id"?: string | null,"provider_id"?: string | null,"sent_at"?: string,"test_address"?: string | null
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "newsletter_deliveries_church_id_issue_id_fkey"
+      columns: ["church_id","issue_id"]
+isOneToOne: false
+      referencedRelation: "newsletter_issues"
+      referencedColumns: ["church_id","id"]
+    },{
+      foreignKeyName: "newsletter_deliveries_church_id_person_id_fkey"
+      columns: ["church_id","person_id"]
+isOneToOne: false
+      referencedRelation: "people"
+      referencedColumns: ["church_id","id"]
+    },{
+      foreignKeyName: "newsletter_deliveries_church_id_person_id_fkey"
+      columns: ["church_id","person_id"]
+isOneToOne: false
+      referencedRelation: "v_engagement"
+      referencedColumns: ["church_id","person_id"]
+    }
+                  ]
+                },"newsletter_issues": {
+                  Row: {
+                    "approved_version": string | null,"church_id": string,"coordinator_approved_at": string | null,"coordinator_approved_by": string | null,"excluded": (string)[],"headline": string | null,"id": string,"issue_month": string,"pastor_approved_at": string | null,"pastor_approved_by": string | null,"pastor_name": string | null,"pastor_word": string | null,"project_id": string,"send_attempts": number,"send_error": string | null,"send_live": boolean | null,"send_now_at": string | null,"send_on": string | null,"send_started_at": string | null,"sent_as_test": boolean,"sent_at": string | null,"standfirst": string | null,"status": Database["public"]['Enums']["issue_status"],"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "approved_version"?: string | null,"church_id"?: string,"coordinator_approved_at"?: string | null,"coordinator_approved_by"?: string | null,"excluded"?: (string)[],"headline"?: string | null,"id"?: string,"issue_month": string,"pastor_approved_at"?: string | null,"pastor_approved_by"?: string | null,"pastor_name"?: string | null,"pastor_word"?: string | null,"project_id": string,"send_attempts"?: number,"send_error"?: string | null,"send_live"?: boolean | null,"send_now_at"?: string | null,"send_on"?: string | null,"send_started_at"?: string | null,"sent_as_test"?: boolean,"sent_at"?: string | null,"standfirst"?: string | null,"status"?: Database["public"]['Enums']["issue_status"],"updated_at"?: string
+                  }
+                  Update: {
+                    "approved_version"?: string | null,"church_id"?: string,"coordinator_approved_at"?: string | null,"coordinator_approved_by"?: string | null,"excluded"?: (string)[],"headline"?: string | null,"id"?: string,"issue_month"?: string,"pastor_approved_at"?: string | null,"pastor_approved_by"?: string | null,"pastor_name"?: string | null,"pastor_word"?: string | null,"project_id"?: string,"send_attempts"?: number,"send_error"?: string | null,"send_live"?: boolean | null,"send_now_at"?: string | null,"send_on"?: string | null,"send_started_at"?: string | null,"sent_as_test"?: boolean,"sent_at"?: string | null,"standfirst"?: string | null,"status"?: Database["public"]['Enums']["issue_status"],"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -581,6 +613,26 @@ isOneToOne: false
       columns: ["church_id","project_id"]
 isOneToOne: false
       referencedRelation: "projects"
+      referencedColumns: ["church_id","id"]
+    }
+                  ]
+                },"newsletter_snapshots": {
+                  Row: {
+                    "church_id": string,"content": NonNullable<Json>,"issue_id": string,"taken_at": string,"taken_by": string | null
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "church_id": string,"content": NonNullable<Json>,"issue_id": string,"taken_at"?: string,"taken_by"?: string | null
+                  }
+                  Update: {
+                    "church_id"?: string,"content"?: NonNullable<Json>,"issue_id"?: string,"taken_at"?: string,"taken_by"?: string | null
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "newsletter_snapshots_church_id_issue_id_fkey"
+      columns: ["church_id","issue_id"]
+isOneToOne: false
+      referencedRelation: "newsletter_issues"
       referencedColumns: ["church_id","id"]
     }
                   ]
@@ -1401,9 +1453,25 @@ isOneToOne: false
               "day": number,"display_name": string,"kind": string,"month": number
             }[]
                            },
+"newsletter_claim_due":
+{ Args: Record<PropertyKey, never>; Returns: {
+              "church_id": string,"issue_id": string,"live": boolean
+            }[]
+                           },
+"newsletter_finish":
+{ Args: { "p_error"?: string,"p_issue": string }; Returns: string
+                           },
+"newsletter_issue_content":
+{ Args: { "p_issue": string }; Returns: Json
+                           },
 "newsletter_issue_stats":
 { Args: { "p_issue": string }; Returns: {
               "item": string,"label": string,"total": number
+            }[]
+                           },
+"newsletter_next_recipients":
+{ Args: { "p_issue": string,"p_limit"?: number }; Returns: {
+              "email": string,"first_name": string,"links": Json,"person_id": string
             }[]
                            },
 "newsletter_recipient_count":
@@ -1413,6 +1481,21 @@ isOneToOne: false
 { Args: { "p_issue_month": string }; Returns: {
               "description": string,"display_name": string,"recognised_on": string,"value_letter": string,"value_name": string
             }[]
+                           },
+"newsletter_record_deliveries":
+{ Args: { "p_issue": string,"p_rows": Json }; Returns: number
+                           },
+"newsletter_release_deliveries":
+{ Args: { "p_issue": string,"p_rows": Json }; Returns: number
+                           },
+"newsletter_send_content":
+{ Args: { "p_issue": string }; Returns: Json
+                           },
+"newsletter_test_send":
+{ Args: { "p_issue": string }; Returns: (string)[]
+                           },
+"peek_email_link":
+{ Args: { "p_token": string }; Returns: Json
                            },
 "project_readiness":
 { Args: { "p_project": string }; Returns: Json
@@ -1436,6 +1519,9 @@ isOneToOne: false
                            },
 "set_person_faith":
 { Args: { "p_holy_spirit_baptism": boolean,"p_holy_spirit_baptism_date": string,"p_person": string,"p_salvation_date": string,"p_speaks_in_tongues": boolean,"p_speaks_in_tongues_date": string,"p_water_baptism": boolean,"p_water_baptism_date": string }; Returns: undefined
+                           },
+"start_newsletter_issue":
+{ Args: { "p_month": string }; Returns: string
                            },
 "unit_dashboard":
 { Args: { "p_unit": string }; Returns: Json
