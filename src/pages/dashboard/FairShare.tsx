@@ -15,7 +15,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { TEC } from '../../design-system';
 import { supabase } from '../../lib/supabase';
 import { friendlyError } from '../../data/errors';
-import { bandWidth, HOUR_BANDS, LEADER_CARE_ROLES, useFairShare, useLeadersCarryingTooMuch } from '../../data/dashboards';
+import { bandWidth, HOUR_BANDS, LEADER_CARE_ROLES, SERVING_RULES, servingRulesPatch, useFairShare, useLeadersCarryingTooMuch, type ServingRules } from '../../data/dashboards';
 import { useSettings } from '../../data/newsletter';
 import { hasRole, useMe } from '../../auth/useMe';
 
@@ -50,9 +50,10 @@ export function FairShareCard({ month }: { month: string }) {
           </ul>
           <div className="tec-stats" style={{ padding: 0 }}>
             <StatTile
-              label="Busiest fifth carry"
+              label="Carried by the busiest fifth"
               value={f.busiest_fifth_share === null ? '–' : `${f.busiest_fifth_share}%`}
-              note="of all hours served; 20% would be perfectly even"
+              // SECURITY REVIEW 20 (F01): not shown for fewer than 10 members.
+              note={f.busiest_fifth_share !== null ? 'of all hours served; 20% would be perfectly even' : f.members < 10 ? 'shown when there are 10 or more members' : 'no hours served yet'}
               tone={f.busiest_fifth_share !== null && f.busiest_fifth_share >= 60 ? 'danger' : 'default'}
             />
             <StatTile label="Not asked in 3 months" value={f.not_asked_3_months} note={`of ${f.members} active members`} />
@@ -86,56 +87,86 @@ export function FairShareCard({ month }: { month: string }) {
 }
 
 // The serving rules everyone plans against.
+// SECURITY REVIEW 20 (F03): checked before saving (servingRulesPatch) and only changed values
+// are sent. The Resident Pastor and others see the rules read-only; the database refuses
+// changes from anyone but the Operations Lead or G-Squad Coordinator (church_settings_guard).
 export function ServingRulesCard() {
   const me = useMe();
   const qc = useQueryClient();
   const settings = useSettings();
   const canEdit = hasRole(me.data, 'operations_lead', 'gsquad_coordinator');
   const s = settings.data;
-  const [v, setV] = useState<Record<string, string> | null>(null);
-  const val = (k: string, fallback: number | undefined) => v?.[k] ?? String(fallback ?? '');
+  const [edits, setEdits] = useState<Partial<Record<keyof ServingRules, string>>>({});
+  const [invalid, setInvalid] = useState<string | null>(null);
 
   const save = useMutation({
-    mutationFn: async () => {
-      const patch = {
-        serving_limit_per_month: Number(val('limit', s?.serving_limit_per_month)),
-        hours_per_slot: Number(val('hours', s?.hours_per_slot)),
-        sundays_off_per_month: Number(val('off', s?.sundays_off_per_month)),
-        leader_roles_max: Number(val('leaders', s?.leader_roles_max)),
-      };
+    mutationFn: async (patch: Partial<ServingRules>) => {
       const { error } = await supabase.from('church_settings').update(patch).eq('church_id', s!.church_id).select('church_id').single();
       if (error) throw error;
     },
     onSuccess: () => {
-      setV(null);
+      setEdits({});
       qc.invalidateQueries({ queryKey: ['church_settings'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['candidates'] });
     },
   });
 
   if (!s) return null;
-  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => setV({ ...(v ?? {}), [k]: e.target.value });
+  const current: ServingRules = {
+    serving_limit_per_month: Number(s.serving_limit_per_month),
+    hours_per_slot: Number(s.hours_per_slot),
+    sundays_off_per_month: Number(s.sundays_off_per_month),
+    leader_roles_max: Number(s.leader_roles_max),
+  };
+  const off = current.sundays_off_per_month;
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const { patch, error } = servingRulesPatch(edits, current);
+    setInvalid(error ?? null);
+    if (error) return;
+    if (Object.keys(patch).length === 0) {
+      setEdits({});
+      return;
+    }
+    save.mutate(patch);
+  };
   return (
     <Card title="Serving rules">
       <p className="type-caption" style={{ margin: 0 }}>
-        Each member may serve up to {Number(s.serving_limit_per_month) * Number(s.hours_per_slot)} hours a month across all teams,
-        with at least {s.sundays_off_per_month} Sunday{s.sundays_off_per_month === 1 ? '' : 's'} off. Change the hours at the start
-        of a month: places already booked keep their hours.
+        Each member may serve up to {current.serving_limit_per_month * current.hours_per_slot} hours a month across all teams
+        {off > 0 ? `, with at least ${off} Sunday${off === 1 ? '' : 's'} off` : '; Sundays off are not required'}.
+        {canEdit && ' Change the hours at the start of a month: places already booked keep their hours.'}
       </p>
-      <div className="tec-fields" style={{ padding: 0 }}>
-        <TextField id="sr-limit" label="Usual slots a month" type="number" min={1} max={31} disabled={!canEdit} value={val('limit', s.serving_limit_per_month)} onChange={set('limit')} />
-        <TextField id="sr-hours" label="Hours in a usual slot" type="number" min={0.5} max={16} step={0.5} disabled={!canEdit} value={val('hours', s.hours_per_slot)} onChange={set('hours')} />
-        <TextField id="sr-off" label="Sundays off a month" type="number" min={0} max={3} disabled={!canEdit} value={val('off', s.sundays_off_per_month)} onChange={set('off')} />
-        <TextField id="sr-leaders" label="Leadership roles at once" type="number" min={1} max={10} disabled={!canEdit} value={val('leaders', s.leader_roles_max)} onChange={set('leaders')} />
-      </div>
-      {save.isError && <Notice tone="danger">{friendlyError(save.error)}</Notice>}
-      {canEdit && (
-        <div>
-          <Button variant="secondary" disabled={!v || save.isPending} onClick={() => save.mutate()}>
-            Save serving rules
-          </Button>
+      <form onSubmit={submit} noValidate>
+        <div className="tec-fields" style={{ padding: 0 }}>
+          {SERVING_RULES.map((r) => (
+            <TextField
+              key={r.key}
+              id={`sr-${r.key}`}
+              label={r.label}
+              type="number"
+              inputMode="decimal"
+              min={r.min}
+              max={r.max}
+              step={r.step}
+              readOnly={!canEdit}
+              aria-invalid={invalid?.startsWith(r.label) || undefined}
+              value={edits[r.key] ?? String(current[r.key])}
+              onChange={(e) => setEdits({ ...edits, [r.key]: e.target.value })}
+            />
+          ))}
         </div>
-      )}
+        {invalid && <Notice tone="danger">{invalid}</Notice>}
+        {save.isError && <Notice tone="danger">{friendlyError(save.error)}</Notice>}
+        {canEdit && (
+          <div>
+            <Button type="submit" variant="secondary" disabled={Object.keys(edits).length === 0 || save.isPending}>
+              Save serving rules
+            </Button>
+          </div>
+        )}
+      </form>
     </Card>
   );
 }

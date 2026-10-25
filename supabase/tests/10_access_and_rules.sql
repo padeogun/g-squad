@@ -3481,6 +3481,125 @@ select test.ok(exists (select 1 from public.checkin_flags where person_id = test
                'F08: a leader carrying too much gets a pastoral check-in flag');
 update public.church_settings set leader_roles_max = 2 where church_id = test.id('churchA');
 
+-- =====================================================================================
+-- F (review 20). Security review 20: fair share, rest and leaders' load
+-- =====================================================================================
+-- Months with four and five Sundays, and 0 to 3 Sundays off (February 2026 has 4, March 5).
+select test.login('');
+update public.church_settings set sundays_off_per_month = 0 where church_id = test.id('churchA');
+select test.ok(app.sundays_allowed(test.id('churchA'), '2026-02-10') = 4 and app.sundays_allowed(test.id('churchA'), '2026-03-10') = 5,
+               'F11: no Sundays off: every Sunday of a 4- or 5-Sunday month may be served');
+update public.church_settings set sundays_off_per_month = 3 where church_id = test.id('churchA');
+select test.ok(app.sundays_allowed(test.id('churchA'), '2026-02-10') = 1 and app.sundays_allowed(test.id('churchA'), '2026-03-10') = 2,
+               'F11: three Sundays off leaves 1 of 4 and 2 of 5');
+-- A fresh month for Obi (pN2), nine months ahead, every Sunday with a grid; two Sundays off.
+update public.church_settings set sundays_off_per_month = 2, serving_limit_per_month = 10 where church_id = test.id('churchA');
+create temporary table r20_sundays as
+  select d::date as d, row_number() over (order by d) as n
+  from generate_series(date_trunc('month', current_date + interval '9 months'),
+                       date_trunc('month', current_date + interval '9 months') + interval '1 month - 1 day', interval '1 day') d
+  where extract(isodow from d) = 7;
+grant select on r20_sundays to authenticated;
+select test.login('ops'); set role authenticated;
+select public.create_sunday_service(d) from r20_sundays;
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.lives(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) select g.project_id, %L, %L, g.service_date from public.service_grids g join r20_sundays s on s.d = g.service_date where s.n <= (select count(*) - 2 from r20_sundays)',
+                         test.id('pN2'), test.id('A1')),
+                  'F11: every Sunday but two can be booked when the church asks for two off');
+select test.throws(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) select g.project_id, %L, %L, g.service_date from public.service_grids g join r20_sundays s on s.d = g.service_date where s.n = (select count(*) - 1 from r20_sundays)',
+                          test.id('pN2'), test.id('A1')),
+                   'F11: one more Sunday is refused');
+select test.ok((select detail from test.results order by n desc limit 1) like '%2 Sundays off a month%',
+               'F10: the refusal says how many Sundays off the church asks for');
+-- Cancelling frees a Sunday; bringing the cancelled slot back is checked again.
+select test.lives(format('update public.assignments set status = ''cancelled'' where person_id = %L and serve_date = (select d from r20_sundays where n = 1)',
+                         test.id('pN2')), 'F12: a Sunday slot can be cancelled');
+select test.lives(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) select g.project_id, %L, %L, g.service_date from public.service_grids g join r20_sundays s on s.d = g.service_date where s.n = (select count(*) - 1 from r20_sundays)',
+                         test.id('pN2'), test.id('A1')),
+                  'F12: ... which frees a Sunday for another booking');
+select test.throws(format('update public.assignments set status = ''planned'' where person_id = %L and serve_date = (select d from r20_sundays where n = 1)',
+                          test.id('pN2')), 'F12: bringing the cancelled slot back is refused (no Sunday left)');
+-- Moving a slot to another Sunday keeps the count; moving it is checked like a new booking.
+select test.lives(format('update public.assignments a set serve_date = g.service_date, project_id = g.project_id from public.service_grids g, r20_sundays s where s.n = (select count(*) from r20_sundays) and g.service_date = s.d and a.person_id = %L and a.status = ''planned'' and a.serve_date = (select d from r20_sundays where n = (select count(*) - 1 from r20_sundays))',
+                         test.id('pN2')), 'F12: a Sunday slot can be moved to a Sunday not yet served');
+select test.lives(format('update public.assignments a set serve_date = g.service_date, project_id = g.project_id from public.service_grids g, r20_sundays s where s.n = (select count(*) - 1 from r20_sundays) and g.service_date = s.d and a.person_id = %L and a.status = ''planned'' and a.serve_date = (select d from r20_sundays where n = 2)',
+                         test.id('pN2')), 'F12: moving a slot from one Sunday to another uses no extra Sunday, even at the limit');
+select test.ok((select sundays_served = sundays_allowed from public.rota_candidates(test.id('A1'), (select d from r20_sundays where n = 1)) where person_id = test.id('pN2')),
+               'F12: ... and the count is still at the limit, not over it');
+reset role;
+-- SECURITY REVIEW 20 (F07): the Operations Lead's reason is in the log, not only on the slot.
+select test.ok((select bool_and(detail ? 'reason') from public.audit_log where action = 'override_rest'),
+               'F07: the rest override''s written reason is logged');
+-- SECURITY REVIEW 20 (F06): the rest guard takes the per-person monthly lock itself.
+select test.ok(pg_get_functiondef('app.assignment_rest_guard'::regproc) like '%pg_advisory_xact_lock%',
+               'F06: the rest guard holds the per-person monthly lock, whatever order the triggers fire in');
+select test.login('');
+update public.church_settings set sundays_off_per_month = 1, serving_limit_per_month = 3 where church_id = test.id('churchA');
+
+-- SECURITY REVIEW 20 (F01): no total, and no busiest-fifth figure under 10 members.
+select test.login('b_ops'); set role authenticated;
+select test.ok(not (public.fair_share(current_date) ? 'total_hours'), 'F01: fair share no longer returns the church''s total hours');
+select test.ok((public.fair_share(current_date) ->> 'members')::int < 10 and public.fair_share(current_date) -> 'busiest_fifth_share' = 'null'::jsonb,
+               'F01: with fewer than 10 members the busiest fifth''s share is not given');
+-- SECURITY REVIEW 20 (F05): one church only.
+select test.ok((public.fair_share(current_date) ->> 'leaders_over')::int = 0, 'F05: another church''s leaders are not counted');
+select test.ok(not exists (select 1 from public.leaders_carrying_too_much() where user_id = test.id('ul_a')),
+               'F05: nor listed');
+reset role;
+select test.login('rp'); set role authenticated;
+select test.lives('select * from public.leaders_carrying_too_much()', 'F05: the Resident Pastor sees the named list');
+reset role;
+select test.login('pastoral'); set role authenticated;
+select test.lives('select * from public.leaders_carrying_too_much()', 'F05: so does the Pastoral Lead');
+reset role;
+
+-- SECURITY REVIEW 20 (F04): a project flagged as a Sunday by its owner still counts; a role
+-- on a closed team does not.
+select test.login('');
+create temporary table r20_before as select team_roles, live_projects from app.leader_loads(test.id('churchA')) where user_id = test.id('ul_a');
+insert into public.projects (church_id, level, name, starts_at, ends_at, status, is_sunday_service, owner_user_id)
+values (test.id('churchA'), 'church', 'Flagged as a Sunday', now() + interval '20 days', now() + interval '20 days 2 hours', 'approved', true, test.id('ul_a'));
+insert into public.units (church_id, purpose_id, name, is_active) values (test.id('churchA'), test.id('P1'), 'Closed team', false);
+insert into public.role_assignments (church_id, user_id, role, unit_id)
+select test.id('churchA'), test.id('ul_a'), 'deputy_unit_lead', u.id from public.units u where u.name = 'Closed team';
+select test.ok((select l.live_projects = b.live_projects + 1 from app.leader_loads(test.id('churchA')) l, r20_before b where l.user_id = test.id('ul_a')),
+               'F04: a project its owner flagged as a Sunday service still counts as a live project');
+select test.ok((select l.team_roles = b.team_roles from app.leader_loads(test.id('churchA')) l, r20_before b where l.user_id = test.id('ul_a')),
+               'F04: a deputy role on a closed team does not count');
+select test.ok(not has_function_privilege('authenticated', 'app.leader_loads(uuid)', 'execute'),
+               'F05: leader_loads is not callable by signed-in users');
+
+-- SECURITY REVIEW 20 (F02): a closed leaders' check-in is not raised again the next night,
+-- and none is raised on someone who has left.
+update public.church_settings set leader_roles_max = 1 where church_id = test.id('churchA');
+update public.checkin_flags set status = 'closed', closed_at = now() where person_id = test.id('pN2') and source = 'leader_load' and status = 'open';
+select app.raise_automatic_flags();
+select test.ok(not exists (select 1 from public.checkin_flags where person_id = test.id('pN2') and source = 'leader_load' and status = 'open'),
+               'F02: a closed leaders'' check-in is not raised again the next night');
+insert into public.people (church_id, first_name, surname, status, date_joined, date_left) values (test.id('churchA'), 'Lena', 'Gone', 'left', current_date - 400, current_date - 10);
+update public.app_users set person_id = (select id from public.people where first_name = 'Lena' and surname = 'Gone') where id = test.id('ul_a');
+select app.raise_automatic_flags();
+select test.ok(not exists (select 1 from public.checkin_flags f join public.people p on p.id = f.person_id
+                           where p.first_name = 'Lena' and p.surname = 'Gone' and f.source = 'leader_load'),
+               'F02: no check-in flag on a leader whose record has left');
+update public.app_users set person_id = test.id('pN2') where id = test.id('ul_a');
+update public.church_settings set leader_roles_max = 2 where church_id = test.id('churchA');
+
+-- SECURITY REVIEW 20 (F09): the usual slot is in half-hours.
+select test.login('coord'); set role authenticated;
+select test.throws(format('update public.church_settings set hours_per_slot = 2.7 where church_id = %L', test.id('churchA')),
+                   'F09: hours per slot must be in half-hours');
+select test.lives(format('update public.church_settings set hours_per_slot = 2.5 where church_id = %L', test.id('churchA')),
+                  'F09: half-hours are accepted');
+reset role;
+select test.login('rp'); set role authenticated;
+select test.throws(format('update public.church_settings set sundays_off_per_month = 0 where church_id = %L', test.id('churchA')),
+                   'F03: the Resident Pastor cannot change the Sundays off (Operations Lead or Coordinator only)');
+reset role;
+select test.login('');
+update public.church_settings set hours_per_slot = 3 where church_id = test.id('churchA');
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;

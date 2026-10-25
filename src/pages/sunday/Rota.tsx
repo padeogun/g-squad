@@ -242,6 +242,7 @@ function MonthRota({ unitId, month, isOps, canEdit }: { unitId: string; month: s
           hours={picking.hours ?? defaultHours}
           // Migration 30: the rest rule (at least one Sunday off) applies to Sunday places.
           isSunday={projectIds.includes(picking.projectId)}
+          sundaysOff={Number(settings.data?.sundays_off_per_month ?? 1)}
           roleName={picking.roleId ? roleMap.get(picking.roleId)?.name ?? 'Role' : 'Any role'}
           isOps={isOps}
           onClose={() => setPicking(null)}
@@ -257,6 +258,7 @@ function AssignPanel({
   slot,
   hours,
   isSunday,
+  sundaysOff,
   roleName,
   isOps,
   onClose,
@@ -265,6 +267,7 @@ function AssignPanel({
   slot: RotaSlot;
   hours: number;
   isSunday: boolean;
+  sundaysOff: number;
   roleName: string;
   isOps: boolean;
   onClose: () => void;
@@ -307,7 +310,8 @@ function AssignPanel({
     <Card title={`Assign ${roleName} · ${shortDate(slot.date)} · ${hours} h`} tone="tint" action={<Button size="sm" variant="quiet" onClick={onClose}>Close</Button>}>
       <p className="type-caption" style={{ margin: 0 }}>
         Fewest hours this month first. One limit counts across all teams, Sundays, events and team activities
-        {isSunday ? ', and everyone keeps at least one Sunday off a month' : ''}.
+        {/* SECURITY REVIEW 20 (F10): the church's own number of Sundays off (0 to 3), not always one. */}
+        {isSunday && sundaysOff > 0 ? `, and everyone keeps at least ${sundaysOff} Sunday${sundaysOff === 1 ? '' : 's'} off a month` : ''}.
       </p>
       {candidates.isPending && <p>Loading…</p>}
       {candidates.error && <Notice tone="danger">{friendlyError(candidates.error)}</Notice>}
@@ -337,6 +341,8 @@ function AssignPanel({
                 <span className="type-caption">
                   {' '}
                   {Number(c.hours_used)} of {Number(c.hours_limit)} hours this month
+                  {/* SECURITY REVIEW 20 (F10): on Sunday places, the Sundays already served too. */}
+                  {isSunday ? `, ${c.sundays_served} of ${c.sundays_allowed} Sundays` : ''}
                 </span>
               </span>
               <Chip tone={blocked ? 'neutral' : atLimit ? 'warn' : 'ok'}>{status}</Chip>
@@ -358,7 +364,7 @@ function AssignPanel({
         <div className="app-form">
           <TextField
             id="override-reason"
-            label="Reason for going over the limit"
+            label={isSunday ? 'Reason for going over the limit or the Sundays off' : 'Reason for going over the limit'}
             hint="(logged; at least a few words)"
             maxLength={500}
             value={reason}

@@ -20,6 +20,13 @@ alter table public.church_settings
   add column sundays_off_per_month smallint not null default 1 check (sundays_off_per_month between 0 and 3),
   add column leader_roles_max      smallint not null default 2 check (leader_roles_max between 1 and 10);
 
+-- SECURITY REVIEW 20 (F09): the usual slot is in half-hours, as volunteers-needed rows are
+-- (review 19, Z08) and as the Serving rules card offers. Before, 2.7 hours could be saved by
+-- typing it in, giving limits and bookings that no screen could show or match. NOT VALID, as
+-- Z08's range check is, so a stored value cannot stop this migration; new changes are checked.
+alter table public.church_settings
+  add constraint church_settings_hours_per_slot_half_hours check (hours_per_slot * 2 = trunc(hours_per_slot * 2)) not valid;
+
 -- -------------------------------------------------------------------------------------
 -- 1. Sundays (step 4)
 -- -------------------------------------------------------------------------------------
@@ -64,6 +71,7 @@ as $$
 declare
   v_allowed int;
   v_served int;
+  v_off int;
 begin
   if app.is_system() or new.status not in ('planned', 'served') then return new; end if;
   if tg_op = 'UPDATE' and new.serve_date = old.serve_date and new.project_id = old.project_id
@@ -71,6 +79,12 @@ begin
     return new;
   end if;
   if not exists (select 1 from public.service_grids g where g.project_id = new.project_id) then return new; end if;
+  -- SECURITY REVIEW 20 (F06): take the same per-person, per-month lock as assignment_guard
+  -- (review 19, Z05) here too. Every path that reaches this point has already taken it there,
+  -- but only because triggers fire in name order; renaming either trigger would have let two
+  -- Sunday bookings at the same moment both pass. The lock is re-entrant, so this costs nothing.
+  perform pg_advisory_xact_lock(hashtextextended('gsquad-hours:' || new.person_id::text || ':'
+                                                 || to_char(new.serve_date, 'YYYY-MM'), 0));
   -- Already serving that Sunday in another slot: no new Sunday is used.
   if exists (select 1 from public.assignments a
              where a.person_id = new.person_id and a.serve_date = new.serve_date and a.id <> new.id
@@ -81,13 +95,20 @@ begin
   v_allowed := app.sundays_allowed(new.church_id, new.serve_date);
   v_served  := app.sundays_served(new.person_id, new.serve_date, new.id);
   if v_served + 1 > v_allowed then
+    -- SECURITY REVIEW 20 (F07): the written reason goes into the log as well. Before, it lived
+    -- only on the slot, where a later change to the slot (by the Team Lead too, on the same day
+    -- and project, which this guard lets through) could blank or rewrite it.
     if app.has_role('operations_lead') and coalesce(length(trim(new.override_reason)), 0) >= 5 then
       perform app.audit('override_rest', 'assignments', new.id,
                         jsonb_build_object('person_id', new.person_id, 'month', date_trunc('month', new.serve_date)::date,
-                                           'sundays_allowed', v_allowed, 'sundays_before', v_served));
+                                           'sundays_allowed', v_allowed, 'sundays_before', v_served,
+                                           'reason', left(trim(new.override_reason), 500)));
     else
-      raise exception 'This person already serves % of the % Sundays they may serve this month (at least one Sunday off)',
-        v_served, v_allowed
+      -- SECURITY REVIEW 20 (F10): say how many Sundays off the church asks for (0 to 3), not
+      -- always "one".
+      v_off := coalesce((select s.sundays_off_per_month from public.church_settings s where s.church_id = new.church_id), 1);
+      raise exception 'This person already serves % of the % Sundays they may serve this month (% Sunday% off a month)',
+        v_served, v_allowed, v_off, case when v_off = 1 then '' else 's' end
         using errcode = '23514', hint = 'The Operations Lead can override with a written reason.';
     end if;
   end if;
@@ -148,7 +169,14 @@ grant execute on function public.rota_candidates(uuid, date) to authenticated, s
 -- One row per active leader account: Team Lead and Deputy roles held, live projects owned
 -- (submitted, approved or under way, not Sunday services, which the Operations Lead owns by
 -- design), and whether that is more than the church allows.
-create or replace function app.leader_loads()
+-- SECURITY REVIEW 20 (F05): for one church (p_church), or every church only for the nightly
+-- job (null). Before, the Dashboard and the named list worked out every leader in every church
+-- on each call and filtered afterwards.
+-- SECURITY REVIEW 20 (F04): roles count only in active teams (a role left on a closed team is
+-- not load), and a Sunday service is a project with a service grid (review 19, Z04). Before,
+-- any project flagged is_sunday_service was left out, a flag the owner of a church project
+-- sets themselves, so a leader could take their own projects out of the count.
+create or replace function app.leader_loads(p_church uuid default null)
 returns table (church_id uuid, user_id uuid, person_id uuid, display_name text, team_roles integer, live_projects integer, over boolean)
 language sql stable security definer set search_path = ''
 as $$
@@ -157,15 +185,16 @@ as $$
   from public.app_users u
   left join public.church_settings s on s.church_id = u.church_id
   cross join lateral (select count(*)::int as n from public.role_assignments ra
-                      where ra.user_id = u.id and ra.is_active and ra.role in ('unit_lead', 'deputy_unit_lead')) r
+                      where ra.user_id = u.id and ra.is_active and ra.role in ('unit_lead', 'deputy_unit_lead')
+                        and (ra.unit_id is null
+                             or exists (select 1 from public.units un where un.id = ra.unit_id and un.is_active))) r
   cross join lateral (select count(*)::int as n from public.projects p
                       where p.owner_user_id = u.id and p.status in ('submitted', 'approved', 'in_progress')
-                        and not p.is_sunday_service
                         and not exists (select 1 from public.service_grids g where g.project_id = p.id)) pr
-  where u.is_active
+  where u.is_active and (p_church is null or u.church_id = p_church)
 $$;
-revoke all on function app.leader_loads() from public, anon, authenticated;
-grant execute on function app.leader_loads() to service_role;
+revoke all on function app.leader_loads(uuid) from public, anon, authenticated;
+grant execute on function app.leader_loads(uuid) to service_role;
 
 -- By name, for those who look after leaders.
 create or replace function public.leaders_carrying_too_much()
@@ -173,13 +202,14 @@ returns table (user_id uuid, display_name text, team_roles integer, live_project
 language plpgsql stable security definer set search_path = ''
 as $$
 begin
-  if not app.has_any_role(array['gsquad_coordinator','resident_pastor','operations_lead','pastoral_lead']::public.app_role[]) then
+  if app.current_church_id() is null
+     or not app.has_any_role(array['gsquad_coordinator','resident_pastor','operations_lead','pastoral_lead']::public.app_role[]) then
     raise exception 'Not allowed' using errcode = '42501';
   end if;
   return query
     select l.user_id, l.display_name, l.team_roles, l.live_projects
-    from app.leader_loads() l
-    where l.church_id = app.current_church_id() and l.over
+    from app.leader_loads(app.current_church_id()) l
+    where l.over
     order by l.team_roles + l.live_projects desc, l.display_name;
 end $$;
 revoke all on function public.leaders_carrying_too_much() from public, anon;
@@ -199,19 +229,25 @@ declare
   v jsonb;
 begin
   -- The Church Dashboard's readers (migration 22: not the TECi Coordinator).
-  if not app.is_dashboard_reader() then
+  if v_church is null or not app.is_dashboard_reader() then
     raise exception 'Not allowed' using errcode = '42501';
   end if;
   with members as (
     -- Active members in at least one team.
+    -- SECURITY REVIEW 20 (F08): ... that is still running, as the Church Dashboard counts
+    -- (migration 28). Before, members left only in a closed team were counted as "not asked".
     select p.id from public.people p
     where p.church_id = v_church and p.status = 'active' and p.anonymised_at is null
-      and exists (select 1 from public.unit_memberships m where m.person_id = p.id and m.status = 'active')
+      and exists (select 1 from public.unit_memberships m join public.units u on u.id = m.unit_id and u.is_active
+                  where m.person_id = p.id and m.status = 'active')
   ),
   hrs as (
-    select m.id, coalesce(sum(a.hours) filter (where a.status in ('planned', 'served')
-                                                 and a.serve_date >= v_from and a.serve_date < v_to), 0) as h
-    from members m left join public.assignments a on a.person_id = m.id
+    -- SECURITY REVIEW 20 (F05): only this month's live slots are joined (the person and date
+    -- index), not every slot each member ever had.
+    select m.id, coalesce(sum(a.hours), 0) as h
+    from members m
+    left join public.assignments a on a.person_id = m.id and a.status in ('planned', 'served')
+                                   and a.serve_date >= v_from and a.serve_date < v_to
     group by m.id
   ),
   ranked as (
@@ -226,10 +262,14 @@ begin
       'three_to_6',  (select count(*) from hrs where h > 3 and h <= 6),
       'six_to_9',    (select count(*) from hrs where h > 6 and h <= 9),
       'over_9',      (select count(*) from hrs where h > 9)),
-    'total_hours', (select coalesce(sum(h), 0) from hrs),
-    -- Share of all hours given by the busiest fifth (at least one person); null with no hours.
-    'busiest_fifth_share', (select case when sum(h) > 0
-                                        then round(100 * sum(h) filter (where rn <= greatest(1, ceil(n * 0.2))) / sum(h))
+    -- Share of all hours given by the busiest fifth; null with no hours.
+    -- SECURITY REVIEW 20 (F01): and null with fewer than 10 members, so the busiest fifth is
+    -- always at least two people. Before, with five members or fewer the "fifth" was one person
+    -- and, with the church's total hours (also returned), every dashboard reader, Team Leads
+    -- included, could work out that one person's hours. The total is no longer returned: the
+    -- screen never showed it.
+    'busiest_fifth_share', (select case when sum(h) > 0 and count(*) >= 10
+                                        then round(100 * sum(h) filter (where rn <= ceil(n * 0.2)) / sum(h))
                                    end from ranked),
     -- Active members with no slot at all (any status but cancelled) in the three months to the
     -- end of this one.
@@ -238,7 +278,7 @@ begin
                                              where a.person_id = m.id and a.status <> 'cancelled'
                                                and a.serve_date >= (v_from - interval '2 months')::date
                                                and a.serve_date < v_to)),
-    'leaders_over', (select count(*) from app.leader_loads() l where l.church_id = v_church and l.over)
+    'leaders_over', (select count(*) from app.leader_loads(v_church) l where l.over)
   ) into v;
   return v;
 end $$;
@@ -292,10 +332,18 @@ begin
   -- Migration 30 (decision of 25 Oct 2026): leaders holding more leadership at once than the
   -- church allows (Team Lead or Deputy roles, plus live projects they own), when their account
   -- is linked to their G-Squad record. A flag only: their serving limit is unchanged.
+  -- SECURITY REVIEW 20 (F02): only on a current G-Squad member (not left, paused or
+  -- anonymised), and not again within 90 days of the last such check-in being closed. Before,
+  -- a flag closed by the Pastoral Lead ("we have talked") was raised again the next night for
+  -- as long as the leader held the same roles, and a flag could be raised on an anonymised record.
   insert into public.checkin_flags (church_id, person_id, source, raised_by)
   select l.church_id, l.person_id, 'leader_load', null
-  from app.leader_loads() l
-  where l.person_id is not null and l.over
+  from app.leader_loads(null) l
+  join public.people p on p.id = l.person_id and p.church_id = l.church_id
+  where l.over and p.status = 'active' and p.anonymised_at is null
+    and not exists (select 1 from public.checkin_flags f
+                    where f.person_id = l.person_id and f.source = 'leader_load'
+                      and (f.status = 'open' or f.closed_at > now() - interval '90 days'))
   on conflict do nothing;
   get diagnostics v_rows = row_count; v_count := v_count + v_rows;
 
