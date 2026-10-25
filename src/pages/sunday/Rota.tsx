@@ -8,7 +8,7 @@
 // The database checks every slot (migration 8): membership, holidays (R10) and one monthly
 // limit across all units (R1/R2), which only the Operations Lead may go over, with a reason.
 // -------------------------------------------------------------------------------------
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { TEC } from '../../design-system';
@@ -287,7 +287,11 @@ function AssignPanel({
   });
 
   const list = candidates.data ?? [];
+  // The panel opens below the lists: bring it into view so the leader sees who can serve.
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => box.current?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' }), [slot]);
   return (
+    <div ref={box}>
     <Card title={`Assign ${roleName} · ${shortDate(slot.date)} · ${hours} h`} tone="tint" action={<Button size="sm" variant="quiet" onClick={onClose}>Close</Button>}>
       <p className="type-caption" style={{ margin: 0 }}>
         Fewest hours this month first. One limit counts across all teams, Sundays, events and team activities.
@@ -305,7 +309,7 @@ function AssignPanel({
             : c.serving_that_day
               ? 'Already serving that day'
               : atLimit
-                ? `Only ${left} h left`
+                ? left > 0 ? `Only ${left} h left` : 'No hours left'
                 : `${left} h left`;
           return (
             <li key={c.person_id}>
@@ -360,6 +364,7 @@ function AssignPanel({
         </Notice>
       )}
     </Card>
+    </div>
   );
 }
 
