@@ -584,16 +584,88 @@ isOneToOne: false
       referencedColumns: ["church_id","id"]
     }
                   ]
-                },"one_to_ones": {
+                },"one_to_one_answers": {
                   Row: {
-                    "church_id": string,"created_at": string,"development_goal": string | null,"feeling": Database["public"]['Enums']["serving_feeling"],"held_on": string,"id": string,"lead_user_id": string,"notes": string | null,"person_id": string,"quarter_start": string,"support_needed": Database["public"]['Enums']["support_need"],"unit_id": string,"updated_at": string,"value_lived_id": string | null,"value_lived_note": string | null,"value_to_grow_id": string | null,"value_to_grow_note": string | null
+                    "answer": string,"church_id": string,"created_at": string,"id": string,"one_to_one_id": string,"prompt_id": string,"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "church_id"?: string,"created_at"?: string,"development_goal"?: string | null,"feeling": Database["public"]['Enums']["serving_feeling"],"held_on": string,"id"?: string,"lead_user_id"?: string,"notes"?: string | null,"person_id": string,"quarter_start": string,"support_needed"?: Database["public"]['Enums']["support_need"],"unit_id": string,"updated_at"?: string,"value_lived_id"?: string | null,"value_lived_note"?: string | null,"value_to_grow_id"?: string | null,"value_to_grow_note"?: string | null
+                    "answer": string,"church_id"?: string,"created_at"?: string,"id"?: string,"one_to_one_id": string,"prompt_id": string,"updated_at"?: string
                   }
                   Update: {
-                    "church_id"?: string,"created_at"?: string,"development_goal"?: string | null,"feeling"?: Database["public"]['Enums']["serving_feeling"],"held_on"?: string,"id"?: string,"lead_user_id"?: string,"notes"?: string | null,"person_id"?: string,"quarter_start"?: string,"support_needed"?: Database["public"]['Enums']["support_need"],"unit_id"?: string,"updated_at"?: string,"value_lived_id"?: string | null,"value_lived_note"?: string | null,"value_to_grow_id"?: string | null,"value_to_grow_note"?: string | null
+                    "answer"?: string,"church_id"?: string,"created_at"?: string,"id"?: string,"one_to_one_id"?: string,"prompt_id"?: string,"updated_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "one_to_one_answers_church_id_prompt_id_fkey"
+      columns: ["church_id","prompt_id"]
+isOneToOne: false
+      referencedRelation: "one_to_one_prompts"
+      referencedColumns: ["church_id","id"]
+    },{
+      foreignKeyName: "one_to_one_answers_one_to_one_id_fkey"
+      columns: ["one_to_one_id"]
+isOneToOne: false
+      referencedRelation: "one_to_ones"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"one_to_one_prompts": {
+                  Row: {
+                    "church_id": string,"created_at": string,"created_by": string | null,"ends_on": string,"id": string,"is_active": boolean,"question": string,"starts_on": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "church_id"?: string,"created_at"?: string,"created_by"?: string | null,"ends_on": string,"id"?: string,"is_active"?: boolean,"question": string,"starts_on": string
+                  }
+                  Update: {
+                    "church_id"?: string,"created_at"?: string,"created_by"?: string | null,"ends_on"?: string,"id"?: string,"is_active"?: boolean,"question"?: string,"starts_on"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "one_to_one_prompts_church_id_fkey"
+      columns: ["church_id"]
+isOneToOne: false
+      referencedRelation: "churches"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"one_to_one_walk": {
+                  Row: {
+                    "church_id": string,"notes": string,"one_to_one_id": string,"updated_at": string,"updated_by": string | null
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "church_id": string,"notes": string,"one_to_one_id": string,"updated_at"?: string,"updated_by"?: string | null
+                  }
+                  Update: {
+                    "church_id"?: string,"notes"?: string,"one_to_one_id"?: string,"updated_at"?: string,"updated_by"?: string | null
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "one_to_one_walk_church_id_fkey"
+      columns: ["church_id"]
+isOneToOne: false
+      referencedRelation: "churches"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "one_to_one_walk_one_to_one_id_fkey"
+      columns: ["one_to_one_id"]
+isOneToOne: true
+      referencedRelation: "one_to_ones"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"one_to_ones": {
+                  Row: {
+                    "church_id": string,"competence": string | null,"created_at": string,"development_goal": string | null,"feeling": Database["public"]['Enums']["serving_feeling"],"held_on": string,"id": string,"lead_user_id": string,"notes": string | null,"person_id": string,"quarter_start": string,"sense_of_family": string | null,"support_needed": Database["public"]['Enums']["support_need"],"unit_id": string,"updated_at": string,"value_lived_id": string | null,"value_lived_note": string | null,"value_to_grow_id": string | null,"value_to_grow_note": string | null
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "church_id"?: string,"competence"?: string | null,"created_at"?: string,"development_goal"?: string | null,"feeling": Database["public"]['Enums']["serving_feeling"],"held_on": string,"id"?: string,"lead_user_id"?: string,"notes"?: string | null,"person_id": string,"quarter_start": string,"sense_of_family"?: string | null,"support_needed"?: Database["public"]['Enums']["support_need"],"unit_id": string,"updated_at"?: string,"value_lived_id"?: string | null,"value_lived_note"?: string | null,"value_to_grow_id"?: string | null,"value_to_grow_note"?: string | null
+                  }
+                  Update: {
+                    "church_id"?: string,"competence"?: string | null,"created_at"?: string,"development_goal"?: string | null,"feeling"?: Database["public"]['Enums']["serving_feeling"],"held_on"?: string,"id"?: string,"lead_user_id"?: string,"notes"?: string | null,"person_id"?: string,"quarter_start"?: string,"sense_of_family"?: string | null,"support_needed"?: Database["public"]['Enums']["support_need"],"unit_id"?: string,"updated_at"?: string,"value_lived_id"?: string | null,"value_lived_note"?: string | null,"value_to_grow_id"?: string | null,"value_to_grow_note"?: string | null
                   }
                   Relationships: [
                     {
@@ -1274,6 +1346,9 @@ isOneToOne: false
 "get_event_safeguarding":
 { Args: { "p_project": string }; Returns: string
                            },
+"get_one_to_one_walk":
+{ Args: { "p_one_to_one": string }; Returns: string
+                           },
 "get_pastoral_notes":
 { Args: { "p_person": string }; Returns: {
               "author_id": string,
@@ -1355,6 +1430,9 @@ isOneToOne: false
                            },
 "set_event_safeguarding":
 { Args: { "p_notes": string,"p_project": string }; Returns: undefined
+                           },
+"set_one_to_one_walk":
+{ Args: { "p_notes": string,"p_one_to_one": string }; Returns: undefined
                            },
 "set_person_faith":
 { Args: { "p_holy_spirit_baptism": boolean,"p_holy_spirit_baptism_date": string,"p_person": string,"p_salvation_date": string,"p_speaks_in_tongues": boolean,"p_speaks_in_tongues_date": string,"p_water_baptism": boolean,"p_water_baptism_date": string }; Returns: undefined

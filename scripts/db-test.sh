@@ -98,6 +98,7 @@ echo "== checks"
 out="$(mktemp)"
 status=0
 psql "$TEST_URL" -v ON_ERROR_STOP=1 -q -t -f tests/10_access_and_rules.sql > "$out" || status=$?
-grep -E '\| FAIL \|' "$out" || true
+# The result column is padded ("FAIL  "), so allow spaces before the bar.
+grep -E '\| FAIL +\|' "$out" || true
 rm -f "$out"
 exit "$status"

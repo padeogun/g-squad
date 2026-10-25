@@ -2681,6 +2681,136 @@ select test.ok((select phones = '{"07700 900111"}' and other_emails = '{"other.d
                'V05: ... and keeps each phone and email once, the main email only as the main one');
 reset role;
 
+-- ---------- Migration 26: one-to-ones (slice 5) ----------
+-- s3_member's one-to-one in A1 this quarter was written by ul_a (the Team Lead); ul_b is A1's
+-- Deputy; 'ph' is A1's Purpose Head.
+select test.login('nobody');
+insert into test.ids select 'oto1', o.id from public.one_to_ones o
+where o.person_id = test.id('s3_member') and o.unit_id = test.id('A1') order by o.held_on desc limit 1;
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$update public.one_to_ones set sense_of_family = 'Feels part of the team', competence = 'Confident on camera 2' where id = %L$q$, test.id('oto1')),
+                  'M26: the Team Lead records sense of family and competence');
+select test.lives(format('select public.set_one_to_one_walk(%L, %L)', test.id('oto1'), 'Reading through John; joined a prayer group'),
+                  'M26: ... and their personal walk with God, held apart');
+select test.ok(public.get_one_to_one_walk(test.id('oto1')) like 'Reading through John%', 'M26: the Team Lead who wrote it reads it back');
+select test.throws('select * from public.one_to_one_walk', 'M26: no one reads the walk-with-God table directly');
+reset role;
+select test.login('coord'); set role authenticated;
+select test.lives(format('select public.get_one_to_one_walk(%L)', test.id('oto1')), 'M26: the G-Squad Coordinator reads it');
+select test.throws(format('select public.set_one_to_one_walk(%L, %L)', test.id('oto1'), 'x'), 'M26: ... but does not write it');
+reset role;
+select test.login('rp'); set role authenticated;
+select test.lives(format('select public.get_one_to_one_walk(%L)', test.id('oto1')), 'M26: the Resident Pastor reads it');
+select test.ok(jsonb_array_length(public.export_person(test.id('s3_member')) -> 'one_to_one_walk') = 1,
+               'M26: a subject access export includes it');
+reset role;
+select test.login('ph'); set role authenticated;
+select test.ok(exists (select 1 from public.one_to_ones where id = test.id('oto1') and sense_of_family is not null),
+               'M26: the Purpose Head reads the rest of the one-to-one');
+select test.throws(format('select public.get_one_to_one_walk(%L)', test.id('oto1')), 'M26: ... but not the walk with God');
+reset role;
+select test.login('ul_b'); set role authenticated;
+select test.throws(format('select public.get_one_to_one_walk(%L)', test.id('oto1')), 'M26: the Deputy Team Lead does not read it');
+reset role;
+select test.login('nobody');
+select test.ok((select count(*) from public.audit_log where action = 'view_walk' and record_id = test.id('oto1')) >= 3,
+               'M26: every view of the walk with God is logged');
+
+-- Leadership questions and answers.
+select test.login('ul_a'); set role authenticated;
+select test.throws($q$insert into public.one_to_one_prompts (question, starts_on, ends_on) values ('Team Leads cannot ask', current_date, current_date + 30)$q$,
+                   'M26: Team Leads do not set the leadership questions');
+reset role;
+select test.login('coord'); set role authenticated;
+select test.lives($q$insert into public.one_to_one_prompts (question, starts_on, ends_on) values ('How are you finding the new service times?', date_trunc('quarter', current_date)::date, current_date + 60)$q$,
+                  'M26: the G-Squad Coordinator sets a leadership question for a period');
+insert into public.one_to_one_prompts (question, starts_on, ends_on) values ('An old question', current_date - 400, current_date - 300);
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$insert into public.one_to_one_answers (one_to_one_id, prompt_id, answer)
+                            values (%L, (select id from public.one_to_one_prompts where question like 'How are you finding%%'), 'The 10:00 start suits me')$q$, test.id('oto1')),
+                  'M26: the Team Lead records the answer in the one-to-one');
+select test.throws(format($q$insert into public.one_to_one_answers (one_to_one_id, prompt_id, answer)
+                             values (%L, (select id from public.one_to_one_prompts where question = 'An old question'), 'x')$q$, test.id('oto1')),
+                   'M26: ... only for questions asked when it was held');
+reset role;
+select test.login('ph'); set role authenticated;
+select test.ok((select count(*) from public.one_to_one_answers where one_to_one_id = test.id('oto1')) = 1,
+               'M26: answers are read by whoever reads the one-to-one');
+select test.throws(format($q$insert into public.one_to_one_answers (one_to_one_id, prompt_id, answer)
+                             values (%L, (select id from public.one_to_one_prompts where question like 'How are you finding%%'), 'y')$q$, test.id('oto1')),
+                   'M26: ... and written only by the Team Lead who wrote it');
+reset role;
+select test.login('ul_b'); set role authenticated;
+select test.ok((select count(*) from public.one_to_one_answers) = 0, 'M26: the Deputy Team Lead sees no answers');
+reset role;
+select test.login('coord'); set role authenticated;
+select test.throws($q$delete from public.one_to_one_prompts where question like 'How are you finding%'$q$,
+                   'M26: an answered question is switched off, not deleted');
+reset role;
+
+-- ---------- Security review 17 (one-to-ones) ------------------------------------------
+-- W01: the audit log's entries about walk-with-God notes (who wrote, changed or viewed them)
+-- are for the Resident Pastor only, like those about faith fields and pastoral notes.
+select test.login('ops'); set role authenticated;
+select test.ok((select count(*) from public.audit_log where table_name = 'one_to_one_walk' or action = 'view_walk') = 0,
+               'W01: the Operations Lead does not see who wrote or viewed walk-with-God notes');
+reset role;
+select test.login('rp'); set role authenticated;
+select test.ok((select count(*) from public.audit_log where table_name = 'one_to_one_walk' or action = 'view_walk') >= 4,
+               'W01: ... the Resident Pastor still does');
+reset role;
+
+-- W02: a one-to-one is never dated in the future, and its date cannot move outside the
+-- period of a leadership question it already has an answer to. otoW is s3_member's one-to-one
+-- in A1 last quarter (fixture, written by ul_a).
+select test.login('nobody');
+insert into public.one_to_ones (church_id, person_id, unit_id, lead_user_id, quarter_start, held_on, feeling)
+values (test.id('churchA'), test.id('s3_member'), test.id('A1'), test.id('ul_a'),
+        date_trunc('quarter', current_date - interval '3 months')::date,
+        date_trunc('quarter', current_date - interval '3 months')::date + 10, 'doing_well');
+insert into test.ids select 'otoW', o.id from public.one_to_ones o
+where o.person_id = test.id('s3_member') and o.unit_id = test.id('A1')
+  and o.quarter_start = date_trunc('quarter', current_date - interval '3 months')::date;
+select test.login('ul_a'); set role authenticated;
+select test.throws(format('update public.one_to_ones set held_on = current_date + 1 where id = %L', test.id('oto1')),
+                   'W02: a one-to-one cannot be dated in the future');
+select test.lives(format('update public.one_to_ones set held_on = held_on + 1 where id = %L', test.id('otoW')),
+                  'W02: ... and with no answers its date moves freely within the quarter');
+select test.lives(format('update public.one_to_ones set held_on = held_on - 1 where id = %L', test.id('otoW')),
+                  'W02: ... (and back)');
+reset role;
+select test.login('coord'); set role authenticated;
+insert into public.one_to_one_prompts (question, starts_on, ends_on)
+select 'A one-day question', o.held_on, o.held_on from public.one_to_ones o where o.id = test.id('otoW');
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$insert into public.one_to_one_answers (one_to_one_id, prompt_id, answer)
+                            values (%L, (select id from public.one_to_one_prompts where question = 'A one-day question'), 'Answered on the day')$q$, test.id('otoW')),
+                  'W02 fixture: the one-day question is answered');
+select test.throws(format('update public.one_to_ones set held_on = held_on + 1 where id = %L', test.id('otoW')),
+                   'W02: the date cannot move outside the period of a question already answered');
+reset role;
+
+-- W03: once answered, a leadership question keeps its wording, and its period always covers
+-- the one-to-ones that answered it. The author is always the caller.
+select test.login('coord'); set role authenticated;
+select test.throws($q$update public.one_to_one_prompts set question = 'Something else entirely' where question like 'How are you finding%'$q$,
+                   'W03: an answered question cannot be reworded');
+select test.throws($q$update public.one_to_one_prompts set starts_on = starts_on - 1, ends_on = ends_on - 1 where question = 'A one-day question'$q$,
+                   'W03: ... nor re-dated so its answers fall outside it');
+select test.lives($q$update public.one_to_one_prompts set ends_on = ends_on + 10 where question = 'A one-day question'$q$,
+                  'W03: ... but its period can grow');
+select test.lives($q$update public.one_to_one_prompts set question = 'An old question, reworded' where question = 'An old question'$q$,
+                  'W03: an unanswered question can still be reworded');
+insert into public.one_to_one_prompts (question, starts_on, ends_on, created_by)
+select 'Who asked?', current_date, current_date, test.id('ul_a');
+select test.ok((select created_by from public.one_to_one_prompts where question = 'Who asked?') = test.id('coord'),
+               'W03: a question is always recorded as set by the caller');
+select test.throws(format($q$update public.one_to_one_prompts set created_by = %L where question = 'Who asked?'$q$, test.id('ul_a')),
+                   'W03: ... and its author cannot be changed');
+reset role;
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;
