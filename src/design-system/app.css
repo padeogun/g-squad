@@ -185,3 +185,11 @@
 
 /* Visually hidden but read by screen readers (e.g. a fieldset legend). */
 .app-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ---------- Care and growth (slice 5) ---------- */
+/* Values in Action counts: the value's letter, its name and the count (by value, never per person). */
+.app-values-count { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--space-2); }
+.app-values-count li { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-md); }
+.app-values-count li > span:nth-child(2) { flex: 1; min-width: 0; }
+.app-value-letter { width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex: none;
+  font: 700 13px var(--font-display); background: var(--lime); color: var(--on-lime); }

@@ -26,6 +26,9 @@ import { ImportMembers } from '../pages/people/ImportMembers';
 import { Projects } from '../pages/projects/Projects';
 import { NewProject } from '../pages/projects/NewProject';
 import { Project } from '../pages/projects/Project';
+import { OneToOnes } from '../pages/care/OneToOnes';
+import { OneToOneForm } from '../pages/care/OneToOneForm';
+import { LeadershipQuestions } from '../pages/care/LeadershipQuestions';
 
 export const router = createBrowserRouter([
   { path: '/sign-in', element: <SignIn /> },
@@ -52,6 +55,10 @@ export const router = createBrowserRouter([
           { path: '/projects', element: <Projects /> },
           { path: '/projects/new', element: <NewProject /> },
           { path: '/projects/:id', element: <Project /> },
+          { path: '/one-to-ones', element: <OneToOnes /> },
+          { path: '/one-to-ones/new', element: <OneToOneForm /> },
+          { path: '/one-to-ones/questions', element: <LeadershipQuestions /> },
+          { path: '/one-to-ones/:id', element: <OneToOneForm /> },
           { path: '/admin/forms/:formId', element: <ReferenceForm /> },
           ...PLACEHOLDER_ITEMS.map((i) => ({
             path: i.path,

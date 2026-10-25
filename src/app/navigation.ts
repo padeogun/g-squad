@@ -49,7 +49,14 @@ export const NAV: NavGroup[] = [
         built: true,
         roles: ['teci_coordinator', 'gsquad_coordinator', 'resident_pastor', 'operations_lead'],
       },
-      { label: 'One-to-ones', path: '/one-to-ones', slice: 5 },
+      // Team Leads hold them; the Purpose Head, Coordinator and Resident Pastor read them.
+      {
+        label: 'One-to-ones',
+        path: '/one-to-ones',
+        slice: 5,
+        built: true,
+        roles: ['unit_lead', 'purpose_head', 'gsquad_coordinator', 'resident_pastor'],
+      },
     ],
   },
   {
