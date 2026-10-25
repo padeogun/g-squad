@@ -22,7 +22,7 @@ export type Faith = Database['public']['Functions']['get_person_faith']['Returns
 const PERSON_COLUMNS =
   'id, first_name, other_names, surname, date_joined, date_left, status, birth_day, birth_month, email, area, ' +
   'marital_status, anniversary_day, anniversary_month, teci_stage_id, greatness_community_id, ' +
-  'newsletter_subscribed, celebration_opt_in, anonymised_at';
+  'newsletter_subscribed, celebration_opt_in, anonymised_at, phones, other_emails';
 
 export const usePeople = () =>
   useQuery({

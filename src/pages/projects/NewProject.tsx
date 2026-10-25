@@ -2,7 +2,8 @@
 // New project: name, type, whole church or one unit, where and when, and (for an event) its
 // size and complexity, which start the High-level Event Planning form. The creator becomes
 // the owner. Every project starts as a draft (project_guard). Who may create which:
-//   * church projects: Operations Lead, G-Squad Coordinator, Resident Pastor, Purpose Heads;
+//   * church projects: Operations Lead, G-Squad Coordinator, Purpose Heads (the Resident Pastor
+//     does not own projects: decision of 25 Oct 2026);
 //   * unit projects: the unit's Team Lead or Purpose Head, the Coordinator or Ops Lead.
 // Times are London wall-clock times (see londonToIso).
 // -------------------------------------------------------------------------------------
@@ -29,7 +30,7 @@ export function NewProject() {
   const [today] = useState(todayIso);
 
   const wide = hasRole(me.data, 'operations_lead', 'gsquad_coordinator');
-  const canChurch = wide || hasRole(me.data, 'resident_pastor', 'purpose_head');
+  const canChurch = wide || hasRole(me.data, 'purpose_head');
   const myPurposes = (me.data?.roles ?? []).filter((r) => r.role === 'purpose_head').map((r) => r.purpose_id);
   const led = ledUnitIds(me.data);
   // Units this leader may start a project for.
@@ -108,7 +109,7 @@ export function NewProject() {
     return (
       <>
         <SectionHeading eyebrow="Projects and events" title="New project" rule />
-        <Notice tone="info">Projects are started by Team Leads, Purpose Heads, the G-Squad Coordinator, the Operations Lead and the Resident Pastor.</Notice>
+        <Notice tone="info">Projects are started by Team Leads, Purpose Heads, the G-Squad Coordinator and the Operations Lead. The Resident Pastor does not own projects.</Notice>
       </>
     );
 

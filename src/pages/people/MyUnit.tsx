@@ -20,6 +20,7 @@ import { ledUnitIds, viewedUnitIds, useMe } from '../../auth/useMe';
 import { useUnitDashboard } from '../../data/dashboards';
 import { shortDate } from '../../data/sundays';
 import { EngagementBar } from '../dashboard/EngagementBar';
+import { ShortfallsCard } from '../dashboard/Shortfalls';
 
 const { SectionHeading, Card, SelectField, Notice, DataTable, StatTile, Chip } = TEC;
 
@@ -142,6 +143,8 @@ function Team({ unitId, target, canEdit }: { unitId: string; target: number | nu
             )}
             <StatTile label="Check-ins raised" value={dash.data.checkins_open} note="open, needing a conversation" />
           </div>
+          {/* Coming projects short of volunteers from this team (decision of 25 Oct 2026). */}
+          <ShortfallsCard unitId={unitId} />
           <div className="app-card-grid">
             <Card title="Engagement mix">
               <EngagementBar mix={dash.data.engagement} />

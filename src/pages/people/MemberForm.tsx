@@ -42,6 +42,12 @@ interface Values {
   other_names: string;
   surname: string;
   email: string;
+  // Migration 25: up to 3 phone numbers and 2 more email addresses (3 in all).
+  email2: string;
+  email3: string;
+  phone1: string;
+  phone2: string;
+  phone3: string;
   area: string;
   birth_day: string;
   birth_month: string;
@@ -62,6 +68,11 @@ const EMPTY: Values = {
   other_names: '',
   surname: '',
   email: '',
+  email2: '',
+  email3: '',
+  phone1: '',
+  phone2: '',
+  phone3: '',
   area: '',
   birth_day: '',
   birth_month: '',
@@ -85,6 +96,11 @@ function fromPerson(p: Person): Values {
     other_names: s(p.other_names),
     surname: p.surname,
     email: s(p.email),
+    email2: s(p.other_emails?.[0]),
+    email3: s(p.other_emails?.[1]),
+    phone1: s(p.phones?.[0]),
+    phone2: s(p.phones?.[1]),
+    phone3: s(p.phones?.[2]),
     area: s(p.area),
     birth_day: s(p.birth_day),
     birth_month: s(p.birth_month),
@@ -111,6 +127,9 @@ function toPersonRow(v: Values, includeTeci: boolean) {
     other_names: t(v.other_names),
     surname: v.surname.trim(),
     email: t(v.email)?.toLowerCase() ?? null,
+    // Empty boxes are left out, so the lists hold only what was entered.
+    other_emails: [v.email2, v.email3].map((x) => x.trim().toLowerCase()).filter(Boolean),
+    phones: [v.phone1, v.phone2, v.phone3].map((x) => x.trim()).filter(Boolean),
     area: t(v.area),
     birth_day: n(v.birth_day),
     birth_month: n(v.birth_month),
@@ -135,6 +154,12 @@ function checkPerson(v: Values): Record<string, string> {
   if (!v.first_name.trim()) e.first_name = 'First name is required';
   if (!v.surname.trim()) e.surname = 'Surname is required';
   if (v.email.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v.email.trim())) e.email = 'Enter a valid email address';
+  for (const k of ['email2', 'email3'] as const)
+    if (v[k].trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v[k].trim())) e[k] = 'Enter a valid email address';
+  if ((v.email2.trim() || v.email3.trim()) && !v.email.trim()) e.email = 'Give the main email first';
+  // Same rule as the database: digits with optional +, spaces, brackets and dashes, 7 to 20 characters.
+  for (const k of ['phone1', 'phone2', 'phone3'] as const)
+    if (v[k].trim() && !/^\+?[0-9][0-9 ()-]{5,18}[0-9]$/.test(v[k].trim())) e[k] = 'Use digits, spaces and an optional +, e.g. 07700 900123';
   if (!!v.birth_day !== !!v.birth_month) e.birth_day = 'Give both day and month, or neither';
   else if (v.birth_day && !realDay(+v.birth_day, +v.birth_month)) e.birth_day = 'That day is not in that month';
   if (v.marital_status === 'married') {
@@ -331,7 +356,12 @@ function MemberFormInner({ person }: { person?: Person }) {
             <TextField id="m-first" label="First name" hint={hint('first_name')} required maxLength={100} value={v.first_name} onChange={(e) => set('first_name', e.target.value)} />
             <TextField id="m-other" label="Other names" hint="(optional)" maxLength={200} value={v.other_names} onChange={(e) => set('other_names', e.target.value)} />
             <TextField id="m-surname" label="Surname" hint={hint('surname')} required maxLength={100} value={v.surname} onChange={(e) => set('surname', e.target.value)} />
-            <TextField id="m-email" label="Email address" hint={hint('email', '(optional)')} type="email" maxLength={254} value={v.email} onChange={(e) => set('email', e.target.value)} />
+            <TextField id="m-email" label="Main email" hint={hint('email', '(optional; used for the newsletter)')} type="email" maxLength={254} value={v.email} onChange={(e) => set('email', e.target.value)} />
+            <TextField id="m-email2" label="Email 2" hint={hint('email2', '(optional)')} type="email" maxLength={254} value={v.email2} onChange={(e) => set('email2', e.target.value)} />
+            <TextField id="m-email3" label="Email 3" hint={hint('email3', '(optional)')} type="email" maxLength={254} value={v.email3} onChange={(e) => set('email3', e.target.value)} />
+            <TextField id="m-phone1" label="Phone 1" hint={hint('phone1', '(optional)')} type="tel" autoComplete="off" maxLength={20} value={v.phone1} onChange={(e) => set('phone1', e.target.value)} />
+            <TextField id="m-phone2" label="Phone 2" hint={hint('phone2', '(optional)')} type="tel" autoComplete="off" maxLength={20} value={v.phone2} onChange={(e) => set('phone2', e.target.value)} />
+            <TextField id="m-phone3" label="Phone 3" hint={hint('phone3', '(optional)')} type="tel" autoComplete="off" maxLength={20} value={v.phone3} onChange={(e) => set('phone3', e.target.value)} />
             <TextField id="m-area" label="Area" hint="Town or postcode district only, e.g. M6" maxLength={100} value={v.area} onChange={(e) => set('area', e.target.value)} />
             <SelectField id="m-bday" label="Birthday: day" hint={hint('birth_day', '(no year)')} options={dayOptions} value={v.birth_day} onChange={(e) => set('birth_day', e.target.value)} />
             <SelectField id="m-bmonth" label="Birthday: month" options={monthOptions} value={v.birth_month} onChange={(e) => set('birth_month', e.target.value)} />

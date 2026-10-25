@@ -94,6 +94,8 @@ export function Members() {
               { key: 'name', label: 'Name' },
               { key: 'units', label: 'Units and roles' },
               { key: 'area', label: 'Area' },
+              // The first phone number, for a quick call (up to 3 are on the member's page).
+              { key: 'phone', label: 'Phone' },
               { key: 'status', label: 'Status' },
               { key: 'open', label: '' },
             ]}
@@ -102,6 +104,7 @@ export function Members() {
               name: fullName(p),
               units: (unitsByPerson.get(p.id) ?? []).join(', ') || <span className="type-caption">No unit</span>,
               area: p.area ?? '',
+              phone: p.phones?.[0] ? <a href={`tel:${p.phones[0].replace(/[^+0-9]/g, '')}`}>{p.phones[0]}</a> : '',
               status: STATUS_CHIP[p.status],
               open: <Link to={`/members/${p.id}`}>Open</Link>,
             }))}

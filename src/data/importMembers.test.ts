@@ -117,6 +117,27 @@ describe('buildImport', () => {
   });
 });
 
+describe('phones and extra emails (migration 25)', () => {
+  const h = ['First name', 'Surname', 'Email', 'Email 2', 'Mobile', 'Phone 2', 'Unit'];
+  it('reads up to 3 phones and 2 more emails', () => {
+    const res = buildImport([h, ['Ada', 'Obi', 'ada@example.org', 'ADA.work@example.org', '07700 900123', '+44 161 496 0000', 'Production']], refs, coordinator);
+    expect(res.problems).toEqual([]);
+    expect(res.rows[0].person).toMatchObject({ other_emails: ['ada.work@example.org'], phones: ['07700 900123', '+44 161 496 0000'] });
+  });
+  it('refuses a bad phone number, and an extra email without the main one', () => {
+    const res = buildImport([h, ['Ada', 'Obi', '', 'ada@example.org', 'call me', '', 'Production']], refs, coordinator);
+    expect(res.problems[0].messages.join(' ')).toMatch(/main email.*|"call me" is not a phone number/);
+    expect(res.problems[0].messages).toHaveLength(2);
+  });
+});
+
+describe('phone numbers stored as numbers by Excel', () => {
+  it('asks for the column to be formatted as text', () => {
+    const res = buildImport([['First name', 'Surname', 'Phone 1', 'Unit'], ['Ada', 'Obi', 7700900123, 'Production']], refs, coordinator);
+    expect(res.problems[0].messages[0]).toMatch(/lost its leading 0/);
+  });
+});
+
 describe('serverProblems', () => {
   it('reads the database row list and softens permission messages', () => {
     expect(serverProblems('[{"row":4,"message":"new row violates row-level security policy for table \\"people\\""}]')).toEqual([

@@ -13,6 +13,7 @@ import { longDate, shortDate } from '../../data/sundays';
 import { hasRole, useMe } from '../../auth/useMe';
 import { GridStatus } from '../sunday/GridStatus';
 import { EngagementBar } from './EngagementBar';
+import { ShortfallsCard } from './Shortfalls';
 
 const { SectionHeading, Card, Notice, StatTile, DataTable, Chip } = TEC;
 
@@ -57,6 +58,9 @@ export function ChurchDashboard() {
       <Card title="Engagement mix">
         <EngagementBar mix={d.engagement} />
       </Card>
+
+      {/* Decision of 25 Oct 2026: volunteer shortfalls are always shown on the dashboard. */}
+      <ShortfallsCard />
 
       {d.next_sunday && (
         <Card title={`Next Sunday · ${shortDate(d.next_sunday.service_date)}`}>

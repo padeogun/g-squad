@@ -355,7 +355,7 @@ update public.projects set status = 'submitted' where name = 'Harvest outreach';
 select test.throws($q$update public.event_plans set budget_status = 'approved' where project_id = (select id from public.projects where name = 'Harvest outreach')$q$,
                    'R16: the event owner cannot approve their own budget');
 reset role;
-select test.login('rp'); set role authenticated;
+select test.login('ops'); set role authenticated;   -- migration 25: church projects are approved by the Operations Lead
 select test.throws($q$update public.projects set status = 'approved' where name = 'Harvest outreach'$q$,
                    'R16: approval waits for the budget');
 reset role;
@@ -370,15 +370,15 @@ reset role;
 select test.login('ops'); set role authenticated;
 update public.projects set starts_at = now() + interval '20 days', ends_at = now() + interval '20 days 4 hours' where name = 'Harvest outreach';
 reset role;
-select test.login('rp'); set role authenticated;
+select test.login('ops'); set role authenticated;   -- migration 25: church projects are approved by the Operations Lead
 select test.throws($q$update public.projects set status = 'approved' where name = 'Harvest outreach'$q$,
                    'R14: a Large event needs 8 weeks lead time');
 reset role;
 select test.login('ops'); set role authenticated;
 update public.projects set starts_at = now() + interval '70 days', ends_at = now() + interval '70 days 4 hours' where name = 'Harvest outreach';
 reset role;
-select test.login('rp'); set role authenticated;
-select test.lives($q$update public.projects set status = 'approved' where name = 'Harvest outreach'$q$, 'Resident Pastor approves the rescheduled event');
+select test.login('ops'); set role authenticated;   -- migration 25: church projects are approved by the Operations Lead
+select test.lives($q$update public.projects set status = 'approved' where name = 'Harvest outreach'$q$, 'The Operations Lead approves the rescheduled church event (their own: allowed, flagged)');
 reset role;
 
 -- R9 inputs and the review.
@@ -2507,6 +2507,105 @@ select test.throws($q$update public.projects set starts_at = starts_at + interva
                       where name = 'M24 sound workshop'$q$,
                    'U08: the dates cannot move away from the days volunteers are needed');
 reset role;
+
+-- ---------- Migration 25: approvals, safeguarding notes, shortfalls, phones and emails ----------
+-- 1. Approvals: the Operations Lead approves church projects; the Resident Pastor owns none.
+select test.login('rp'); set role authenticated;
+select test.throws($q$insert into public.projects (level, name, starts_at, ends_at) values ('church', 'RP project', now() + interval '90 days', now() + interval '90 days 2 hours')$q$,
+                   'M25: the Resident Pastor does not own projects');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.throws(format('update public.projects set owner_user_id = %L where name = %L', test.id('rp'), 'Harvest outreach'),
+                   'M25: a project cannot be handed to the Resident Pastor');
+insert into public.projects (level, name, starts_at, ends_at)
+values ('church', 'M25 carol service', now() + interval '100 days', now() + interval '100 days 2 hours');
+update public.projects set status = 'submitted' where name = 'M25 carol service';
+select test.ok((public.project_readiness((select id from public.projects where name = 'M25 carol service')) ->> 'self_approval')::boolean,
+               'M25: readiness flags that the Operations Lead would approve their own project');
+reset role;
+select test.login('ph'); set role authenticated;
+update public.projects set status = 'approved' where name = 'M25 carol service';   -- finds no row it may change
+reset role;
+select test.ok((select status from public.projects where name = 'M25 carol service') = 'submitted',
+               'M25: a Purpose Head does not approve church projects');
+select test.login('ops'); set role authenticated;
+select test.lives($q$update public.projects set status = 'approved' where name = 'M25 carol service'$q$,
+                  'M25: the Operations Lead approves a church project, their own included');
+select test.ok((select approved_by = owner_user_id from public.projects where name = 'M25 carol service'),
+               'M25: ... recorded as self-approved (approver = owner)');
+reset role;
+
+-- 2. Safeguarding notes: restricted and logged.
+select test.login('ops'); set role authenticated;
+select test.lives(format('select public.set_event_safeguarding(%L, %L)', (select id from public.projects where name = 'Harvest outreach'), 'Two DBS-checked leaders at the children''s area'),
+                  'M25: the event owner records safeguarding notes');
+select test.throws('select * from public.event_safeguarding', 'M25: no one reads the safeguarding table directly');
+select test.throws('select safeguarding_notes from public.event_plans', 'M25: the old open column is gone');
+reset role;
+select test.login('pastoral'); set role authenticated;
+select test.ok(public.get_event_safeguarding((select id from public.projects where name = 'Harvest outreach')) like 'Two DBS%',
+               'M25: the Pastoral Lead reads them');
+reset role;
+select test.login('rp'); set role authenticated;
+select test.lives(format('select public.get_event_safeguarding(%L)', (select id from public.projects where name = 'Harvest outreach')),
+                  'M25: ... and the Resident Pastor');
+select test.throws(format('select public.set_event_safeguarding(%L, %L)', (select id from public.projects where name = 'Harvest outreach'), 'x'),
+                   'M25: ... but neither writes them');
+reset role;
+select test.login('ul_b'); set role authenticated;
+select test.throws(format('select public.get_event_safeguarding(%L)', (select id from public.projects where name = 'Harvest outreach')),
+                   'M25: a leader outside the event cannot read them');
+reset role;
+select test.login('nobody');
+select test.ok((select count(*) from public.audit_log where action = 'view_safeguarding') >= 2,
+               'M25: every view of safeguarding notes is logged');
+
+-- 3. Volunteer shortfalls on the dashboards.
+select test.login('ops'); set role authenticated;
+insert into public.team_demand (project_id, unit_id, on_date, slots_needed)
+select id, test.id('A1'), (starts_at at time zone 'Europe/London')::date, 400 from public.projects where name = 'M25 carol service';
+reset role;
+select test.login('coord'); set role authenticated;
+select test.ok(exists (select 1 from public.volunteer_shortfalls() where project_name = 'M25 carol service' and unit_id = test.id('A1')),
+               'M25: the Church Dashboard lists a coming project that is short of volunteers');
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.ok(exists (select 1 from public.volunteer_shortfalls(test.id('A1')) where project_name = 'M25 carol service'),
+               'M25: ... and My Unit shows it to the Team Lead of the short unit');
+select test.throws(format('select * from public.volunteer_shortfalls(%L)', test.id('A2')),
+                   'M25: ... but not another unit''s shortfalls');
+reset role;
+select test.login('editor'); set role authenticated;
+select test.throws('select * from public.volunteer_shortfalls()', 'M25: roles outside the dashboard audience cannot list shortfalls');
+reset role;
+
+-- 4. Phones and emails.
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$update public.people set phones = '{"07700 900123","+44 161 496 0000"}', other_emails = '{"ada.work@example.org"}' where id = %L$q$, test.id('s3_member')),
+                  'M25: a member has more phone numbers and email addresses');
+select test.throws(format($q$update public.people set phones = '{"1111111","2222222","3333333","4444444"}' where id = %L$q$, test.id('s3_member')),
+                   'M25: at most 3 phone numbers');
+select test.throws(format($q$update public.people set phones = '{"call me"}' where id = %L$q$, test.id('s3_member')),
+                   'M25: a phone number is digits (with +, spaces, brackets, dashes)');
+select test.throws(format($q$update public.people set other_emails = '{"a@example.org","b@example.org","c@example.org"}' where id = %L$q$, test.id('s3_member')),
+                   'M25: at most 3 email addresses in all');
+select test.throws(format($q$update public.people set other_emails = '{"not-an-email"}' where id = %L$q$, test.id('s3_member')),
+                   'M25: extra emails are checked like the main one');
+select test.lives(format($q$select public.create_member('{"first_name":"Phone","surname":"Member","phones":[" 07700 900456 ",""],"other_emails":["Phone.Member@Example.org"]}', %L)$q$, test.id('A1')),
+                  'M25: adding a member takes phones and extra emails');
+select test.ok((select phones = '{"07700 900456"}' and other_emails = '{"phone.member@example.org"}' from public.people where surname = 'Member' and first_name = 'Phone'),
+               'M25: ... trimmed, empty entries dropped, emails in lower case');
+reset role;
+select test.login('teci'); set role authenticated;
+select test.throws(format($q$select public.create_member('{"first_name":"T","surname":"Phones","teci_stage_id":"%s","phones":["07700 900789"]}', null)$q$,
+                          (select id from public.teci_stages where church_id = test.id('churchA') and stage_no = 1)),
+                   'M25: the TECi route records no phone numbers (name, email and stage only)');
+reset role;
+select test.login('nobody');
+select app.anonymise((select id from public.people where first_name = 'Phone' and surname = 'Member'));
+select test.ok((select cardinality(phones) = 0 and cardinality(other_emails) = 0 from public.people where first_name = 'Former' and anonymised_at is not null
+                and id = (select person_id from public.unit_memberships where person_id in (select id from public.people where anonymised_at is not null) order by joined_on desc limit 1)),
+               'M25: anonymising wipes phone numbers and extra emails');
 
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail

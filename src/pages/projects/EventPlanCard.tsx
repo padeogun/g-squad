@@ -32,11 +32,13 @@ export function EventPlanCard({
   plan,
   projectId,
   canManage,
+  canApprove,
   status,
 }: {
   plan: EventPlan;
   projectId: string;
   canManage: boolean;
+  canApprove: boolean;
   status: ProjectStatus;
 }) {
   const actions = useActions(projectId);
@@ -75,6 +77,7 @@ export function EventPlanCard({
                 <div id={`plan-sec-${s.no}`} className="app-plan-body">
                   <SectionForm key={plan.updated_at} section={s} plan={plan} projectId={projectId} canManage={canManage} />
                   {s.no === 5 && <BudgetDecision plan={plan} projectId={projectId} canManage={canManage} />}
+                  {s.no === 8 && <SafeguardingPanel projectId={projectId} canManage={canManage} canApprove={canApprove} />}
                   <ActionPoints section={s.no} projectId={projectId} canManage={canManage} items={(actions.data ?? []).filter((a) => a.section_no === s.no)} />
                 </div>
               )}
@@ -196,6 +199,74 @@ function SectionForm({ section, plan, projectId, canManage }: { section: PlanSec
         </p>
       )}
       {review.isError && <Notice tone="danger">{friendlyError(review.error)}</Notice>}
+    </div>
+  );
+}
+
+// ---------- Safeguarding notes: restricted and logged (migration 25) ----------
+// Read through get_event_safeguarding (the project's owner, the Operations Lead, its approver,
+// the Resident Pastor and the Pastoral Lead; every view is logged) only when asked, like the
+// faith fields; written through set_event_safeguarding by the owner or the Operations Lead.
+function SafeguardingPanel({ projectId, canManage, canApprove }: { projectId: string; canManage: boolean; canApprove: boolean }) {
+  const me = useMe();
+  const [shown, setShown] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const mayRead = canManage || canApprove || hasRole(me.data, 'resident_pastor', 'pastoral_lead');
+  const read = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await supabase.rpc('get_event_safeguarding', { p_project: projectId });
+      if (error) throw error;
+      return (data as string | null) ?? '';
+    },
+    onSuccess: (text) => {
+      setShown(text);
+      setDraft(text);
+    },
+  });
+  const save = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase.rpc('set_event_safeguarding', { p_project: projectId, p_notes: draft });
+      if (error) throw error;
+    },
+    onSuccess: () => setShown(draft.trim()),
+  });
+  if (!mayRead) return null;
+  return (
+    <div className="app-form">
+      <h4 className="app-subhead">Safeguarding notes</h4>
+      <p className="type-caption" style={{ margin: 0 }}>
+        Seen only by the event owner, the Operations Lead, the approver, the Resident Pastor and the Pastoral Lead. Every view is
+        recorded.
+      </p>
+      {shown === null ? (
+        <div>
+          <Button size="sm" variant="secondary" icon="lock" disabled={read.isPending} onClick={() => read.mutate()}>
+            {read.isPending ? 'Opening…' : 'Show safeguarding notes'}
+          </Button>
+        </div>
+      ) : canManage ? (
+        <>
+          <label className="tec-field" htmlFor={`sg-${projectId}`}>
+            <span>
+              Notes <span className="tec-hint">Arrangements and who is responsible; empty removes them</span>
+            </span>
+            <textarea id={`sg-${projectId}`} className="tec-input app-textarea" rows={3} maxLength={2000} value={draft} onChange={(e) => setDraft(e.target.value)} />
+          </label>
+          <div className="tec-row" style={{ padding: 0 }}>
+            <Button size="sm" variant="primary" disabled={save.isPending || draft.trim() === shown} onClick={() => save.mutate()}>
+              Save safeguarding notes
+            </Button>
+            {save.isSuccess && draft.trim() === shown && (
+              <span className="type-caption" role="status">
+                Saved.
+              </span>
+            )}
+          </div>
+        </>
+      ) : (
+        <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{shown || 'None recorded.'}</p>
+      )}
+      {(read.error || save.error) && <Notice tone="danger">{friendlyError(read.error ?? save.error)}</Notice>}
     </div>
   );
 }

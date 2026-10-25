@@ -78,6 +78,8 @@ function ProjectPage({ p }: { p: ProjectRow }) {
       </p>
 
       <StatusFlow p={p} />
+      {/* Self-approval is allowed for church projects (decision of 25 Oct 2026) and always shown. */}
+      {p.approved_by && p.approved_by === p.owner_user_id && <Notice tone="info">Self-approved: the project's owner approved it.</Notice>}
       {/* The database keeps a note on a draft only when the approver sent it back (U05). */}
       {p.decision_note && (
         <Notice tone={p.status === 'draft' ? 'warn' : 'info'} title={p.status === 'draft' ? 'Sent back for changes' : 'Note from the approver'}>
@@ -100,7 +102,7 @@ function ProjectPage({ p }: { p: ProjectRow }) {
         <div className="app-project-main">
           {plan.isPending && <p>Loading the event plan…</p>}
           {plan.error && <Notice tone="danger">{friendlyError(plan.error)}</Notice>}
-          {plan.data && <EventPlanCard plan={plan.data} projectId={p.id} canManage={canManage} status={p.status} />}
+          {plan.data && <EventPlanCard plan={plan.data} projectId={p.id} canManage={canManage} canApprove={canApprove} status={p.status} />}
           {plan.data === null && <StartPlan projectId={p.id} status={p.status} canManage={canManage} onDone={refresh} />}
         </div>
         <aside className="app-project-side" aria-label="Approval, volunteers and inputs">
@@ -126,7 +128,7 @@ function StatusFlow({ p }: { p: ProjectRow }) {
   const steps: { key: ProjectRow['status']; label: string }[] = [
     { key: 'draft', label: 'Draft' },
     { key: 'submitted', label: 'Submitted' },
-    { key: 'approved', label: p.level === 'church' ? 'Approved by the Resident Pastor' : 'Approved by the Purpose Head' },
+    { key: 'approved', label: p.level === 'church' ? 'Approved by the Operations Lead' : 'Approved by the Purpose Head' },
     { key: 'in_progress', label: 'In progress' },
     { key: 'done', label: 'Done' },
   ];
@@ -255,7 +257,7 @@ function StatusActions({
     <Card title="What happens next">
       {p.status === 'draft' && canManage && (
         <p style={{ margin: 0 }}>
-          When the plan is ready, submit it. {p.level === 'church' ? 'The Resident Pastor' : 'The Purpose Head'} approves it
+          When the plan is ready, submit it. {p.level === 'church' ? 'The Operations Lead, for the leadership team,' : 'The Purpose Head'} approves it
           {isEvent ? ' once the checks under Before approval pass' : ''}.
         </p>
       )}
@@ -271,10 +273,10 @@ function StatusActions({
 
       {panel === 'approve' && (
         <div className="app-form">
-          {/* Self-approval is allowed by the rules as they stand (see SECURITY_LOG review 15); say so plainly. */}
+          {/* Self-approval is allowed for the Operations Lead (decision of 25 Oct 2026) and flagged. */}
           {p.owner_user_id === me.data?.id && (
             <Notice tone="info" title="This is your own project">
-              You are approving a project you own. Consider asking another leader to review it first.
+              You are approving a project you own. It will be shown as self-approved.
             </Notice>
           )}
           {needsAction && (

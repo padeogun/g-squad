@@ -16,7 +16,12 @@ export const COLUMNS = [
   { key: 'first_name', header: 'First name', required: true },
   { key: 'other_names', header: 'Other names' },
   { key: 'surname', header: 'Surname', required: true },
-  { key: 'email', header: 'Email', aliases: ['email address'] },
+  { key: 'email', header: 'Email', aliases: ['email address', 'main email', 'email 1'] },
+  { key: 'email_2', header: 'Email 2' },
+  { key: 'email_3', header: 'Email 3' },
+  { key: 'phone_1', header: 'Phone 1', aliases: ['phone', 'mobile', 'telephone', 'phone number'] },
+  { key: 'phone_2', header: 'Phone 2' },
+  { key: 'phone_3', header: 'Phone 3' },
   { key: 'area', header: 'Area', aliases: ['postcode district', 'town'] },
   { key: 'birthday', header: 'Birthday', aliases: ['birthday (day and month)', 'date of birth'] },
   { key: 'date_joined', header: 'Date joined', aliases: ['joined'] },
@@ -166,6 +171,8 @@ export interface Problem {
 }
 
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+// The database's phone rule (migration 25): digits with optional +, spaces, brackets, dashes.
+const PHONE = /^\+?[0-9][0-9 ()-]{5,18}[0-9]$/;
 const byName = <T extends { name: string }>(list: T[], name: string) => list.find((x) => norm(x.name) === norm(name));
 
 // rows[0] is the heading row; spreadsheet row numbers start at 1 (so data starts at row 2).
@@ -207,6 +214,32 @@ export function buildImport(rows: Cell[][], refs: Refs, ctx: Context) {
       else seenEmails.set(email, row);
       person.email = email;
     }
+    // Up to 2 more emails and 3 phone numbers (migration 25). Excel stores 07700 900123 typed
+    // into a number cell as 7700900123 (the 0 is lost), so a phone that arrives as a number is
+    // refused with a clear fix rather than saved wrong.
+    const others: string[] = [];
+    for (const k of ['email_2', 'email_3'] as const) {
+      const e = text(get(k)).toLowerCase();
+      if (!e) continue;
+      if (e.length > 254 || !EMAIL.test(e)) msgs.push(`"${e}" is not an email address`);
+      else others.push(e);
+    }
+    if (others.length && !email) msgs.push('Put the main email in the Email column first');
+    if (others.length) person.other_emails = others;
+    const phones: string[] = [];
+    for (const k of ['phone_1', 'phone_2', 'phone_3'] as const) {
+      const raw = get(k);
+      const ph = text(raw);
+      if (!ph) continue;
+      if (typeof raw === 'number') {
+        msgs.push(`Phone ${ph} lost its leading 0 in Excel: format the phone columns as Text and type it again`);
+        continue;
+      }
+      if (!PHONE.test(ph)) msgs.push(`"${ph}" is not a phone number (digits, spaces and an optional +)`);
+      else phones.push(ph);
+    }
+    if (phones.length) person.phones = phones;
+
     const area = text(get('area'));
     if (area.length > 100) msgs.push('Area is longer than 100 characters (town or postcode district only)');
     if (area) person.area = area;
