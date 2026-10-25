@@ -198,6 +198,41 @@ export function isoToLondon(iso: string): { date: string; time: string } {
   return { date: `${p.y}-${two(p.m)}-${two(p.d)}`, time: `${two(p.h)}:${two(p.min)}` };
 }
 
+// SECURITY REVIEW 15 (U09): "past" by the London date of the project's end. Comparing the UTC
+// date (ends_at.slice(0, 10)) moved projects ending between midnight and 01:00 in summer into
+// the previous day.
+export function isPastProject(p: Pick<Project, 'status' | 'ends_at'>, todayLondon: string): boolean {
+  return p.status === 'done' || p.status === 'cancelled' || isoToLondon(p.ends_at).date < todayLondon;
+}
+
+// SECURITY REVIEW 15 (U09): a link is only made from an https address with no spaces (the same
+// rule as the link_url check constraint), so a value that reached the table some other way can
+// never become a javascript: or data: link. Anything else is shown as plain text, or not at all.
+export function safeHttpsUrl(url: string | null | undefined): string | null {
+  if (!url || !/^https:\/\/\S+$/.test(url)) return null;
+  try {
+    return new URL(url).protocol === 'https:' ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+// SECURITY REVIEW 15 (U09): the budget buttons each role may use, as event_plan_guard allows
+// them. "No budget needed" with an estimate above zero is a budget decision (F11), so the owner
+// is not offered it then.
+export function budgetButtons(
+  plan: Pick<EventPlan, 'budget_status' | 'budget_estimate_gbp'>,
+  who: { decider: boolean; canManage: boolean },
+): ('approve' | 'reject' | 'not_needed' | 'needed')[] {
+  const out: ('approve' | 'reject' | 'not_needed' | 'needed')[] = [];
+  if (who.decider && plan.budget_status !== 'approved') out.push('approve');
+  if (who.decider && plan.budget_status !== 'rejected') out.push('reject');
+  const hasEstimate = (plan.budget_estimate_gbp ?? 0) > 0;
+  if ((who.canManage || who.decider) && plan.budget_status === 'pending' && (who.decider || !hasEstimate)) out.push('not_needed');
+  if (who.canManage && plan.budget_status === 'not_needed') out.push('needed');
+  return out;
+}
+
 // "Saturday 9 January 2027, 11:00 – 15:00" (or across days: "… 11:00 – Sunday 10 January 2027, 13:00").
 export function formatWhen(startIso: string, endIso: string): string {
   const day = (iso: string) =>
@@ -342,7 +377,8 @@ export const PLAN_SECTIONS: PlanSection[] = [
       area('Logistics plan', 'logistics_plan'),
       yesNo('Childcare needed', 'childcare_needed'),
       yesNo('Risk assessment needed', 'risk_assessment_needed'),
-      area('Safeguarding notes', 'safeguarding_notes', 2000, 'Visible to every leader: no names or personal details'),
+      // Event plans are readable by every leader in the church (open item since review 1).
+      area('Safeguarding notes', 'safeguarding_notes', 2000, 'Every leader in the church can read this: arrangements only, never names, ages, needs or concerns about anyone'),
     ],
   },
   {

@@ -14,6 +14,7 @@ import { byId, useLeaders } from '../../data/reference';
 import { usePeopleNames } from '../../data/people';
 import { shortDate, todayIso } from '../../data/sundays';
 import {
+  budgetButtons,
   PLAN_SECTIONS,
   sectionStatus,
   useActions,
@@ -21,12 +22,23 @@ import {
   type EventPlan,
   type PlanAction,
   type PlanSection,
+  type ProjectStatus,
 } from '../../data/projects';
 import { hasRole, useMe } from '../../auth/useMe';
 
 const { Card, Notice, Button, Chip, TextField, SelectField, Checkbox } = TEC;
 
-export function EventPlanCard({ plan, projectId, canManage }: { plan: EventPlan; projectId: string; canManage: boolean }) {
+export function EventPlanCard({
+  plan,
+  projectId,
+  canManage,
+  status,
+}: {
+  plan: EventPlan;
+  projectId: string;
+  canManage: boolean;
+  status: ProjectStatus;
+}) {
   const actions = useActions(projectId);
   const [openNo, setOpenNo] = useState<number | null>(null);
   const openCount = (no: number) => (actions.data ?? []).filter((a) => a.section_no === no && a.status === 'open').length;
@@ -34,6 +46,12 @@ export function EventPlanCard({ plan, projectId, canManage }: { plan: EventPlan;
 
   return (
     <Card title="High-level Event Planning" action={<span className="type-caption">{complete} of 12 sections complete</span>}>
+      {/* U02: the database sends an approved event back for approval when these change. */}
+      {(status === 'approved' || status === 'in_progress') && (
+        <p className="type-caption" style={{ margin: 0 }}>
+          Changing the size, the complexity, the planning committee or the budget sends the project back for approval.
+        </p>
+      )}
       <ol className="app-plan">
         {PLAN_SECTIONS.map((s) => {
           const st = sectionStatus(s.no, plan, openCount(s.no));
@@ -202,6 +220,7 @@ function BudgetDecision({ plan, projectId, canManage }: { plan: EventPlan; proje
     },
     onSuccess: refresh,
   });
+  const shown = budgetButtons(plan, { decider, canManage });
   const label = { pending: 'Waiting for a decision', approved: 'Approved', rejected: 'Rejected', not_needed: 'No budget needed' }[plan.budget_status];
   return (
     <div className="app-form">
@@ -211,23 +230,23 @@ function BudgetDecision({ plan, projectId, canManage }: { plan: EventPlan; proje
         Pastor approve or reject a budget; a changed estimate needs a fresh decision.
       </p>
       <div className="tec-row" style={{ padding: 0 }}>
-        {decider && plan.budget_status !== 'approved' && (
+        {shown.includes('approve') && (
           <Button size="sm" variant="primary" disabled={decide.isPending} onClick={() => decide.mutate('approved')}>
             Approve budget
           </Button>
         )}
-        {decider && plan.budget_status !== 'rejected' && (
+        {shown.includes('reject') && (
           <Button size="sm" variant="secondary" disabled={decide.isPending} onClick={() => decide.mutate('rejected')}>
             Reject budget
           </Button>
         )}
-        {/* "No budget needed" (with no estimate) is the owner's call; with an estimate, the database asks Finance. */}
-        {canManage && plan.budget_status === 'pending' && (
+        {/* "No budget needed" with no estimate is the owner's call; with an estimate it is Finance's (F11, U09). */}
+        {shown.includes('not_needed') && (
           <Button size="sm" variant="quiet" disabled={decide.isPending} onClick={() => decide.mutate('not_needed')}>
             No budget needed
           </Button>
         )}
-        {canManage && plan.budget_status === 'not_needed' && (
+        {shown.includes('needed') && (
           <Button size="sm" variant="quiet" disabled={decide.isPending} onClick={() => decide.mutate('pending')}>
             A budget is needed
           </Button>

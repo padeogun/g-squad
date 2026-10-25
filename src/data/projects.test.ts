@@ -1,7 +1,7 @@
 // Tests for project helpers: London time either side of the clock changes, the date line,
 // and the event plan section status.
 import { describe, expect, it } from 'vitest';
-import { formatWhen, isoToLondon, londonToIso, sectionStatus, type EventPlan } from './projects';
+import { budgetButtons, formatWhen, isoToLondon, isPastProject, londonToIso, safeHttpsUrl, sectionStatus, type EventPlan } from './projects';
 
 describe('London time', () => {
   it('converts winter (GMT) and summer (BST) wall-clock times', () => {
@@ -33,5 +33,47 @@ describe('sectionStatus', () => {
   });
   it('a complete section with open action points is not shown as complete', () => {
     expect(sectionStatus(1, plan, 2)).toEqual({ label: '2 actions open', tone: 'warn' });
+  });
+});
+
+// Security review 15 (U09).
+describe('isPastProject', () => {
+  it('uses the London date of the end, not the UTC date', () => {
+    // 00:30 BST on 11 July 2027 is 23:30 UTC on 10 July: the project ends on 11 July in London.
+    expect(isPastProject({ status: 'approved', ends_at: '2027-07-10T23:30:00Z' }, '2027-07-11')).toBe(false);
+    expect(isPastProject({ status: 'approved', ends_at: '2027-07-10T22:30:00Z' }, '2027-07-11')).toBe(true);
+  });
+  it('treats done and cancelled projects as past', () => {
+    expect(isPastProject({ status: 'cancelled', ends_at: '2099-01-01T00:00:00Z' }, '2027-01-01')).toBe(true);
+  });
+});
+
+describe('safeHttpsUrl', () => {
+  it('keeps https links', () => {
+    expect(safeHttpsUrl('https://example.org/budget.xlsx')).toBe('https://example.org/budget.xlsx');
+  });
+  it('refuses anything else', () => {
+    for (const bad of ['javascript:alert(1)', 'http://example.org', 'data:text/html,x', 'https://exa mple.org', ' https://x.org', '', null, undefined])
+      expect(safeHttpsUrl(bad)).toBeNull();
+  });
+});
+
+describe('budgetButtons', () => {
+  it('does not offer the owner "No budget needed" once there is an estimate (F11)', () => {
+    expect(budgetButtons({ budget_status: 'pending', budget_estimate_gbp: 250 }, { decider: false, canManage: true })).toEqual([]);
+    expect(budgetButtons({ budget_status: 'pending', budget_estimate_gbp: null }, { decider: false, canManage: true })).toEqual(['not_needed']);
+  });
+  it('offers Finance the decision', () => {
+    expect(budgetButtons({ budget_status: 'pending', budget_estimate_gbp: 250 }, { decider: true, canManage: false })).toEqual([
+      'approve',
+      'reject',
+      'not_needed',
+    ]);
+  });
+});
+
+describe('londonToIso on a missing hour', () => {
+  it('moves 01:30 on the spring-forward day to the next valid time (02:30 BST)', () => {
+    expect(londonToIso('2027-03-28', '01:30')).toBe('2027-03-28T01:30:00.000Z');
   });
 });

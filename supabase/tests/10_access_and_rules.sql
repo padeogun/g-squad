@@ -2401,6 +2401,113 @@ set role anon;
 select test.throws($q$select public.project_readiness(gen_random_uuid())$q$, 'M24: signed-out visitors cannot call readiness');
 reset role;
 
+-- ---------- Security review 15: projects and events ----------
+-- 'M24 sound workshop' is approved by the Purpose Head ('ph'), owned by its Team Lead ('ul_a'),
+-- with one volunteer slot on its first day.
+select test.login('ul_a'); set role authenticated;
+update public.projects set status = 'in_progress', ends_at = ends_at + interval '1 day' where name = 'M24 sound workshop';
+select test.ok((select status = 'submitted' and approved_by is null from public.projects where name = 'M24 sound workshop'),
+               'U01: changing the dates while moving an approved project on sends it back for approval');
+select test.ok((select decision_note is null from public.projects where name = 'M24 sound workshop'),
+               'U05: ... and the last approval note is not carried into the new submission');
+reset role;
+select test.login('rp'); set role authenticated;   -- not the approver of a unit project
+select test.throws($q$update public.projects set shortfall_action = 'borrow' where name = 'M24 sound workshop'$q$,
+                   'U06: the Resident Pastor cannot record the shortfall action on a unit project they do not approve');
+reset role;
+select test.login('ph'); set role authenticated;
+select test.lives($q$update public.projects set status = 'approved' where name = 'M24 sound workshop'$q$,
+                  'U01: ... and the Purpose Head approves the new dates');
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.throws($q$update public.projects set ends_at = ends_at + interval '1 hour', decision_note = 'Approved by the Purpose Head'
+                      where name = 'M24 sound workshop'$q$,
+                   'U05: the owner cannot write the decision note alongside a date change');
+reset role;
+select test.login('ph'); set role authenticated;
+select test.throws($q$update public.projects set decision_note = 'Rewritten later' where name = 'M24 sound workshop'$q$,
+                   'U05: the approver cannot rewrite the note after approving');
+select test.throws($q$update public.projects set shortfall_action = 'move' where name = 'M24 sound workshop'$q$,
+                   'U06: the shortfall action cannot be changed after approval');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.throws($q$update public.projects set status = 'submitted' where name = 'Harvest outreach'$q$,
+                   'U03: a finished project cannot be reopened by submitting it again');
+reset role;
+
+-- U02: the event plan after approval.
+select test.login('ul_a'); set role authenticated;
+insert into public.event_plans (project_id, size, complexity)
+select id, 'small', 'low' from public.projects where name = 'M24 sound workshop';
+select test.ok((select status = 'submitted' and approved_by is null from public.projects where name = 'M24 sound workshop'),
+               'U02: adding the event plan to an approved project sends it back for approval');
+update public.event_plans set budget_status = 'not_needed', complexity = 'high'
+where project_id = (select id from public.projects where name = 'M24 sound workshop');
+reset role;
+select test.login('ph'); set role authenticated;
+select test.throws($q$update public.projects set status = 'approved' where name = 'M24 sound workshop'$q$,
+                   'U02: R15 is checked again at approval (High complexity, no committee)');
+reset role;
+select test.login('ul_a'); set role authenticated;
+update public.event_plans set has_planning_committee = true
+where project_id = (select id from public.projects where name = 'M24 sound workshop');
+reset role;
+select test.login('ph'); set role authenticated;
+select test.lives($q$update public.projects set status = 'approved' where name = 'M24 sound workshop'$q$,
+                  'U02: ... and approves once the committee is in place');
+reset role;
+select test.login('finance'); set role authenticated;
+update public.event_plans set budget_status = 'rejected'
+where project_id = (select id from public.projects where name = 'M24 sound workshop');
+select test.ok((select status = 'submitted' from public.projects where name = 'M24 sound workshop'),
+               'U02: Finance rejecting the budget of an approved event sends it back for approval');
+update public.event_plans set budget_status = 'approved'
+where project_id = (select id from public.projects where name = 'M24 sound workshop');
+reset role;
+select test.login('ph'); set role authenticated;
+update public.projects set status = 'approved' where name = 'M24 sound workshop';
+reset role;
+select test.login('ul_a'); set role authenticated;
+update public.event_plans set main_attraction = 'Live mixing demo'
+where project_id = (select id from public.projects where name = 'M24 sound workshop');
+select test.ok((select status = 'approved' from public.projects where name = 'M24 sound workshop'),
+               'U02: other plan changes keep the approval');
+reset role;
+
+-- U04: action points.
+select test.login('ul_a'); set role authenticated;
+insert into public.event_plan_actions (project_id, section_no, description, owner_user_id)
+select id, 6, 'Hire the mixing desk', test.id('ul_b') from public.projects where name = 'M24 sound workshop';
+reset role;
+select test.login('ul_b'); set role authenticated;
+select test.throws($q$update public.event_plan_actions set description = 'Nothing to do' where description = 'Hire the mixing desk'$q$,
+                   'U04: the person given an action point cannot rewrite it');
+select test.throws($q$update public.event_plan_actions set project_id = (select id from public.projects where name = 'Harvest outreach')
+                      where description = 'Hire the mixing desk'$q$,
+                   'U04: ... or move it to another project');
+select test.lives($q$update public.event_plan_actions set status = 'done' where description = 'Hire the mixing desk'$q$,
+                  'U04: ... but can mark it done');
+reset role;
+
+-- U07: an input's receipt time follows its status.
+select test.login('ul_a'); set role authenticated;
+insert into public.project_inputs (project_id, title, requested_from_user_id, due_on)
+select id, 'Equipment list', test.id('ul_b'), current_date + 7 from public.projects where name = 'M24 sound workshop';
+reset role;
+select test.login('ul_b'); set role authenticated;
+update public.project_inputs set body = 'Desk, two monitors', status = 'received' where title = 'Equipment list';
+update public.project_inputs set received_at = '2000-01-01' where title = 'Equipment list';
+select test.ok((select received_at > now() - interval '1 minute' from public.project_inputs where title = 'Equipment list'),
+               'U07: a received input cannot be back-dated');
+reset role;
+
+-- U08: volunteers needed stay within the project's dates.
+select test.login('ul_a'); set role authenticated;
+select test.throws($q$update public.projects set starts_at = starts_at + interval '30 days', ends_at = ends_at + interval '30 days'
+                      where name = 'M24 sound workshop'$q$,
+                   'U08: the dates cannot move away from the days volunteers are needed');
+reset role;
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;

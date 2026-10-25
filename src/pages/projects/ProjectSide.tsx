@@ -13,7 +13,7 @@ import { supabase } from '../../lib/supabase';
 import { friendlyError } from '../../data/errors';
 import { byId, useChurchRoles, useLeaders, useUnits } from '../../data/reference';
 import { useDemand, shortDate, todayIso } from '../../data/sundays';
-import { isoToLondon, SHORTFALL_ACTIONS, useInputs, useRefreshProject, type Input, type Project, type Readiness } from '../../data/projects';
+import { isoToLondon, safeHttpsUrl, SHORTFALL_ACTIONS, useInputs, useRefreshProject, type Input, type Project, type Readiness } from '../../data/projects';
 
 const { Card, Notice, Button, Chip, TextField, SelectField, Checkbox } = TEC;
 
@@ -305,6 +305,9 @@ function InputRow({
   const [link, setLink] = useState(i.link_url ?? '');
   const linkOk = !link.trim() || /^https:\/\/\S+$/.test(link.trim());
   const received = i.status === 'received';
+  // U09: only an https address becomes a link (the database checks this too).
+  const href = safeHttpsUrl(i.link_url);
+  const formId = `input-form-${i.id}`;
   return (
     <li>
       <div className="app-input-head">
@@ -321,11 +324,11 @@ function InputRow({
       {(i.body || i.link_url) && !open && (
         <p className="app-input-body">
           {i.body}
-          {i.link_url && (
+          {href && (
             <>
               {i.body ? ' ' : ''}
-              <a href={i.link_url} target="_blank" rel="noopener noreferrer">
-                Open the link
+              <a href={href} target="_blank" rel="noopener noreferrer">
+                Open the link<span className="app-visually-hidden"> (opens in a new tab)</span>
               </a>
             </>
           )}
@@ -333,7 +336,7 @@ function InputRow({
       )}
       <div className="app-inline-row">
         {mine && !received && (
-          <Button size="sm" variant="secondary" onClick={() => setOpen(!open)} aria-expanded={open}>
+          <Button size="sm" variant="secondary" onClick={() => setOpen(!open)} aria-expanded={open} aria-controls={formId}>
             {open ? 'Close' : 'Give your input'}
           </Button>
         )}
@@ -362,7 +365,7 @@ function InputRow({
         )}
       </div>
       {open && (
-        <div className="app-form">
+        <div className="app-form" id={formId}>
           <label className="tec-field" htmlFor={`ib-${i.id}`}>
             <span>Your input</span>
             <textarea id={`ib-${i.id}`} className="tec-input app-textarea" rows={3} maxLength={4000} value={body} onChange={(e) => setBody(e.target.value)} />

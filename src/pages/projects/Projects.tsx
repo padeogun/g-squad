@@ -10,8 +10,8 @@ import { Link } from 'react-router-dom';
 import { TEC } from '../../design-system';
 import { friendlyError } from '../../data/errors';
 import { byId, useLeaders, useUnits } from '../../data/reference';
-import { formatWhen, PROJECT_CREATORS, STATUS_LABEL, STATUS_TONE, useMyInputs, useProjects, useProjectTypes, type Project } from '../../data/projects';
-import { shortDate, todayIso } from '../../data/sundays';
+import { formatWhen, isoToLondon, isPastProject, PROJECT_CREATORS, STATUS_LABEL, STATUS_TONE, useMyInputs, useProjects, useProjectTypes, type Project } from '../../data/projects';
+import { shortDate } from '../../data/sundays';
 import { hasRole, useMe } from '../../auth/useMe';
 
 const { SectionHeading, Card, Notice, DataTable, Chip, SelectField } = TEC;
@@ -24,7 +24,8 @@ export function Projects() {
   const leaders = useLeaders();
   const mine = useMyInputs(me.data?.id);
   const [show, setShow] = useState('coming');
-  const [today] = useState(todayIso);
+  // Today in London, whatever the device's time zone (project dates are London dates).
+  const [today] = useState(() => isoToLondon(new Date().toISOString()).date);
 
   const unitMap = byId(units.data);
   const typeMap = byId(types.data);
@@ -41,7 +42,7 @@ export function Projects() {
       ((p.level === 'church' && isRp) || (p.level === 'unit' && myPurposes.includes(unitMap.get(p.unit_id ?? '')?.purpose_id ?? null))),
   );
 
-  const isPast = (p: Project) => p.status === 'done' || p.status === 'cancelled' || p.ends_at.slice(0, 10) < today;
+  const isPast = (p: Project) => isPastProject(p, today);
   const list = (projects.data ?? []).filter((p) =>
     show === 'coming' ? !isPast(p)
     : show === 'mine' ? p.owner_user_id === me.data?.id

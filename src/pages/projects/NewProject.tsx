@@ -178,9 +178,9 @@ export function NewProject() {
         <Card title="When">
           <div className="tec-fields">
             <TextField id="np-sd" label="Starts on" type="date" min={today} hint={hint('start_date')} value={v.start_date} onChange={(e) => set('start_date', e.target.value)} aria-invalid={!!errors.start_date || undefined} />
-            <TextField id="np-st" label="at" type="time" value={v.start_time} onChange={(e) => set('start_time', e.target.value)} />
+            <TextField id="np-st" label="Start time" type="time" value={v.start_time} onChange={(e) => set('start_time', e.target.value)} />
             <TextField id="np-ed" label="Ends on" type="date" min={v.start_date || today} hint={hint('end_date', '(if a different day)')} value={v.end_date} onChange={(e) => set('end_date', e.target.value)} aria-invalid={!!errors.end_date || undefined} />
-            <TextField id="np-et" label="at" type="time" hint={hint('end_time')} value={v.end_time} onChange={(e) => set('end_time', e.target.value)} aria-invalid={!!errors.end_time || undefined} />
+            <TextField id="np-et" label="End time" type="time" hint={hint('end_time')} value={v.end_time} onChange={(e) => set('end_time', e.target.value)} aria-invalid={!!errors.end_time || undefined} />
           </div>
           <p className="type-caption" style={{ margin: 0 }}>
             UK time.

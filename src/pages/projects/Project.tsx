@@ -78,9 +78,17 @@ function ProjectPage({ p }: { p: ProjectRow }) {
       </p>
 
       <StatusFlow p={p} />
+      {/* The database keeps a note on a draft only when the approver sent it back (U05). */}
       {p.decision_note && (
         <Notice tone={p.status === 'draft' ? 'warn' : 'info'} title={p.status === 'draft' ? 'Sent back for changes' : 'Note from the approver'}>
-          {p.decision_note}
+          <span style={{ whiteSpace: 'pre-wrap' }}>{p.decision_note}</span>
+        </Notice>
+      )}
+      {/* U09: a failed readiness call is not the same as "nothing for you to do". Roles outside
+          planning are refused (42501) and simply see no actions; anything else is said. */}
+      {ready.error && (ready.error as { code?: string }).code !== '42501' && (
+        <Notice tone="danger" title="The approval checks could not be loaded">
+          {friendlyError(ready.error)} Actions for this project are hidden until they load.
         </Notice>
       )}
       {p.description && <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{p.description}</p>}
@@ -92,8 +100,8 @@ function ProjectPage({ p }: { p: ProjectRow }) {
         <div className="app-project-main">
           {plan.isPending && <p>Loading the event plan…</p>}
           {plan.error && <Notice tone="danger">{friendlyError(plan.error)}</Notice>}
-          {plan.data && <EventPlanCard plan={plan.data} projectId={p.id} canManage={canManage} />}
-          {plan.data === null && <StartPlan projectId={p.id} canManage={canManage} onDone={refresh} />}
+          {plan.data && <EventPlanCard plan={plan.data} projectId={p.id} canManage={canManage} status={p.status} />}
+          {plan.data === null && <StartPlan projectId={p.id} status={p.status} canManage={canManage} onDone={refresh} />}
         </div>
         <aside className="app-project-side" aria-label="Approval, volunteers and inputs">
           {r && <ReadinessCard r={r} />}
@@ -129,6 +137,7 @@ function StatusFlow({ p }: { p: ProjectRow }) {
         <li key={s.key} className={i < at ? 'is-done' : i === at ? 'is-current' : ''} aria-current={i === at ? 'step' : undefined}>
           <span className="app-step-dot" aria-hidden="true" />
           {s.label}
+          {i < at && <span className="app-visually-hidden"> (done)</span>}
         </li>
       ))}
     </ol>
@@ -262,6 +271,12 @@ function StatusActions({
 
       {panel === 'approve' && (
         <div className="app-form">
+          {/* Self-approval is allowed by the rules as they stand (see SECURITY_LOG review 15); say so plainly. */}
+          {p.owner_user_id === me.data?.id && (
+            <Notice tone="info" title="This is your own project">
+              You are approving a project you own. Consider asking another leader to review it first.
+            </Notice>
+          )}
           {needsAction && (
             <>
               <Notice tone="warn" title="Volunteer shortfall">
@@ -352,9 +367,9 @@ function EditDetails({ p, onSaved }: { p: ProjectRow; onSaved: () => void }) {
       <div className="tec-fields">
         <TextField id="ed-name" label="Name" maxLength={200} value={v.name} onChange={(ev) => setV({ ...v, name: ev.target.value })} />
         <TextField id="ed-sd" label="Starts on" type="date" value={v.sd} onChange={(ev) => setV({ ...v, sd: ev.target.value })} />
-        <TextField id="ed-st" label="at" type="time" value={v.st} onChange={(ev) => setV({ ...v, st: ev.target.value })} />
+        <TextField id="ed-st" label="Start time" type="time" value={v.st} onChange={(ev) => setV({ ...v, st: ev.target.value })} />
         <TextField id="ed-ed" label="Ends on" type="date" value={v.ed} onChange={(ev) => setV({ ...v, ed: ev.target.value })} />
-        <TextField id="ed-et" label="at" type="time" value={v.et} onChange={(ev) => setV({ ...v, et: ev.target.value })} />
+        <TextField id="ed-et" label="End time" type="time" value={v.et} onChange={(ev) => setV({ ...v, et: ev.target.value })} />
         <label className="tec-field app-field-wide" htmlFor="ed-desc">
           <span>
             Description <span className="tec-hint">(optional)</span>
@@ -380,7 +395,17 @@ function EditDetails({ p, onSaved }: { p: ProjectRow; onSaved: () => void }) {
 }
 
 // ---------- A project without the event form can start it ----------
-function StartPlan({ projectId, canManage, onDone }: { projectId: string; canManage: boolean; onDone: () => void }) {
+function StartPlan({
+  projectId,
+  status,
+  canManage,
+  onDone,
+}: {
+  projectId: string;
+  status: ProjectRow['status'];
+  canManage: boolean;
+  onDone: () => void;
+}) {
   const start = useMutation({
     mutationFn: async () => {
       const { error } = await supabase.from('event_plans').insert({ project_id: projectId, size: 'small', complexity: 'low' });
@@ -391,12 +416,19 @@ function StartPlan({ projectId, canManage, onDone }: { projectId: string; canMan
   return (
     <Card title="Event planning">
       <p style={{ margin: 0 }}>This project doesn't use the High-level Event Planning form.</p>
-      {canManage && (
-        <div>
-          <Button variant="secondary" disabled={start.isPending} onClick={() => start.mutate()}>
-            Use the event planning form
-          </Button>
-        </div>
+      {canManage && status !== 'done' && status !== 'cancelled' && (
+        <>
+          {(status === 'approved' || status === 'in_progress') && (
+            <p className="type-caption" style={{ margin: 0 }}>
+              Starting the form sends this project back for approval (the event checks apply).
+            </p>
+          )}
+          <div>
+            <Button variant="secondary" disabled={start.isPending} onClick={() => start.mutate()}>
+              Use the event planning form
+            </Button>
+          </div>
+        </>
       )}
       {start.isError && <Notice tone="danger">{friendlyError(start.error)}</Notice>}
     </Card>

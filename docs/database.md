@@ -44,8 +44,8 @@ Units, purposes and people come from importing the G-Squad 2027 Volunteer Model 
 | 13–20 | Leaders, member rights, Coordinator access, Sunday operations, dashboards | See each file's header and `SECURITY_LOG.md` |
 | 21 | Deputy role | Adds the `deputy_unit_lead` access role (on its own, because Postgres can't use a new enum value in the migration that adds it) |
 | 22 | Team roles and TECi | Four default team roles per church (Team Lead, Deputy Team Lead, Welfare and Pastoral Coordinator, Member) that can't be renamed, switched off or deleted; `church_roles.permanence` (operational or project); one Team Lead per team; Deputy Team Lead view-only access without one-to-ones; G-Squad Coordinator and Operations Lead only for a Purpose Head or the Resident Pastor; TECi verification (`people.teci_verified_at/by`) and adding TECi graduates with no team |
-| 24 | Projects and events | The approver may send a submitted project back with a `decision_note`; the event review is time-stamped by the database; volunteers needed must fall within the project's dates; `project_readiness(project)` reports the approval checks |
 | 23 | Bulk member upload | `import_members(rows, skip_existing)`: many members in one all-or-nothing call, each through `create_member`; the G-Squad Coordinator may now add members |
+| 24 | Projects and events | The approver may send a submitted project back with a `decision_note`; the event review is time-stamped by the database; volunteers needed must fall within the project's dates; `project_readiness(project)` reports the approval checks; after security review 15, plan changes after approval send an event back for approval, action points and inputs have column guards, and the shortfall action and decision note are fixed once decided |
 
 ## Design choices worth knowing
 
