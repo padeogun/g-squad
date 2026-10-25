@@ -209,6 +209,14 @@ begin
     if old.status <> 'submitted' then
       raise exception 'Only a submitted project can be approved' using errcode = '23514';
     end if;
+    -- SECURITY REVIEW 16 (V02): the approver was worked out from the NEW level and unit, so a
+    -- manager could change them in the approving request: the Operations Lead turning a
+    -- submitted unit project into a church project and approving it at once, or an owner who
+    -- heads another unit's purpose moving it there. The approval is now for the project as it
+    -- was submitted: level and unit cannot change in the same request.
+    if new.level <> old.level or new.unit_id is distinct from old.unit_id then
+      raise exception 'Change the level or unit on its own first; the new approver then decides' using errcode = '42501';
+    end if;
     if not app.is_project_approver(new.level, new.unit_id) then
       raise exception 'You cannot approve this project' using errcode = '42501';
     end if;
@@ -286,6 +294,39 @@ begin
 
   return new;
 end $$;
+
+-- SECURITY REVIEW 16 (V01): self-approval is recorded when it happens. The page worked it out as
+-- "approved_by = owner_user_id" today, so handing an approved project to someone else hid a
+-- self-approval, and handing it to its approver showed one that never happened. The flag is set
+-- by the database at approval (the approver owned it before or after that request), kept while
+-- the approval stands, cleared with it, and never written by hand.
+alter table public.projects add column self_approved boolean not null default false;
+-- Existing approvals: the best record there is (the owner today). Before the trigger exists.
+update public.projects set self_approved = true where approved_by is not null and approved_by = owner_user_id;
+
+create or replace function app.project_self_approval() returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+begin
+  -- Runs after app.project_guard (triggers fire in name order), so approved_by is final here.
+  if tg_op = 'UPDATE' and not app.is_system() and new.self_approved is distinct from old.self_approved then
+    raise exception 'Self-approval is recorded automatically' using errcode = '42501';
+  end if;
+  if new.approved_by is null then
+    new.self_approved := false;
+  elsif tg_op = 'INSERT' then
+    new.self_approved := new.approved_by = new.owner_user_id;   -- system inserts only (guard clears others)
+  elsif new.approved_by is distinct from old.approved_by or new.approved_at is distinct from old.approved_at then
+    new.self_approved := new.approved_by in (old.owner_user_id, new.owner_user_id);
+  else
+    new.self_approved := old.self_approved;
+  end if;
+  return new;
+end $$;
+revoke all on function app.project_self_approval() from public, anon, authenticated;
+grant execute on function app.project_self_approval() to service_role;
+create trigger projects_self_approval before insert or update on public.projects
+  for each row execute function app.project_self_approval();
 
 -- project_readiness, re-created whole from migration 24 with the approver helper and a
 -- self_approval flag (the caller approves a project they own).
@@ -366,9 +407,24 @@ alter table public.event_safeguarding enable row level security;
 revoke all on public.event_safeguarding from public, anon, authenticated;
 create trigger event_safeguarding_touch before update on public.event_safeguarding
   for each row execute function app.touch_updated_at();
--- Every write is audited (column names only, never the text).
+-- Every write is audited, never with the text.
+-- SECURITY REVIEW 16 (V03): app.audit_row_change keys its row by an "id" column, falling back
+-- to church_id; this table has neither "id" nor one row per church, so every write was logged
+-- against the church, and no one could tell whose event's notes were changed or removed. Its
+-- own trigger logs the event (project_id), the action and the actor, and nothing else.
+create or replace function app.safeguarding_audit() returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+begin
+  insert into public.audit_log (church_id, actor_id, action, table_name, record_id, detail)
+  values (coalesce(new.church_id, old.church_id), (select auth.uid()), lower(tg_op), 'event_safeguarding',
+          coalesce(new.project_id, old.project_id), '{}'::jsonb);
+  return null;
+end $$;
+revoke all on function app.safeguarding_audit() from public, anon, authenticated;
+grant execute on function app.safeguarding_audit() to service_role;
 create trigger event_safeguarding_audit after insert or update or delete on public.event_safeguarding
-  for each row execute function app.audit_row_change();
+  for each row execute function app.safeguarding_audit();
 
 -- Existing notes move across, then the open column goes.
 insert into public.event_safeguarding (project_id, church_id, notes, updated_by)
@@ -451,6 +507,9 @@ begin
                                      and app.can_view_unit(p_unit))) then
     raise exception 'Not allowed' using errcode = '42501';
   end if;
+  -- SECURITY REVIEW 16 (V06): app.unit_capacity (every active member's limit, memberships and
+  -- holidays) ran twice for each project-unit-month, once to filter and once to show. It now
+  -- runs once (a materialised step), which halves the cost of a dashboard load.
   return query
     with need as (
       select td.project_id, td.unit_id, date_trunc('month', td.on_date)::date as m, sum(td.slots_needed)::int as n
@@ -461,15 +520,20 @@ begin
         and td.on_date >= (now() at time zone 'Europe/London')::date
         and (p_unit is null or td.unit_id = p_unit)
       group by 1, 2, 3
+    ),
+    cap as materialized (
+      select n.project_id as c_project, n.unit_id as c_unit, n.m as c_month, n.n as c_need,
+             app.unit_capacity(n.unit_id, n.m, n.project_id) as c_spare
+      from need n
     )
     select p.id, p.name, p.is_sunday_service,
            (select g.id from public.service_grids g where g.project_id = p.id limit 1),
-           p.status, u.id, u.name, n.m, n.n, round(app.unit_capacity(n.unit_id, n.m, n.project_id), 1)
-    from need n
-    join public.projects p on p.id = n.project_id
-    join public.units u on u.id = n.unit_id
-    where app.unit_capacity(n.unit_id, n.m, n.project_id) < n.n
-    order by n.m, p.starts_at, u.name
+           p.status, u.id, u.name, c.c_month, c.c_need, round(c.c_spare, 1)
+    from cap c
+    join public.projects p on p.id = c.c_project
+    join public.units u on u.id = c.c_unit
+    where c.c_spare < c.c_need
+    order by c.c_month, p.starts_at, u.name
     limit 200;
 end $$;
 revoke all on function public.volunteer_shortfalls(uuid) from public, anon;
@@ -479,30 +543,46 @@ grant execute on function public.volunteer_shortfalls(uuid) to authenticated, se
 -- 4. Phones and emails.
 -- -------------------------------------------------------------------------------------
 -- Trims a list, drops empty entries and (for emails) lower-cases them.
+-- SECURITY REVIEW 16 (V05): and keeps each entry once (the first time it appears), so a
+-- repeated phone or email is not stored twice.
 create or replace function app.clean_list(p text[], p_lower boolean) returns text[]
 language sql immutable set search_path = ''
 as $$
-  select coalesce(array_agg(case when p_lower then lower(btrim(x)) else btrim(x) end order by o), '{}')
-  from unnest(coalesce(p, '{}')) with ordinality as t(x, o)
-  where nullif(btrim(x), '') is not null
+  select coalesce(array_agg(v order by o), '{}')
+  from (
+    select distinct on (v) v, o
+    from (select case when p_lower then lower(btrim(x)) else btrim(x) end as v, o
+          from unnest(coalesce(p, '{}')) with ordinality as t(x, o)
+          where nullif(btrim(x), '') is not null) a
+    order by v, o
+  ) b
 $$;
 -- A phone number: digits with optional +, spaces, brackets and dashes, 7 to 20 characters.
+-- [0-9] is the ASCII digits only (no other scripts' digits), so tel: links stay plain.
+-- SECURITY REVIEW 16 (V04): bool_and() skips nulls, so '{NULL}' (or a null beside a valid
+-- entry) passed both checks; a null entry is now invalid.
 create or replace function app.valid_phones(p text[]) returns boolean
 language sql immutable set search_path = ''
-as $$ select coalesce(bool_and(x ~ '^\+?[0-9][0-9 ()-]{5,18}[0-9]$'), true) from unnest(p) x $$;
+as $$ select coalesce(bool_and(x is not null and x ~ '^\+?[0-9][0-9 ()-]{5,18}[0-9]$'), true) from unnest(p) x $$;
 -- The same email rule as people.email (RFC 5321 length, lower case as stored).
 create or replace function app.valid_emails(p text[]) returns boolean
 language sql immutable set search_path = ''
-as $$ select coalesce(bool_and(length(x) <= 254 and x ~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' and x = lower(x)), true) from unnest(p) x $$;
-revoke all on function app.clean_list(text[], boolean), app.valid_phones(text[]), app.valid_emails(text[]) from public, anon;
-grant execute on function app.clean_list(text[], boolean), app.valid_phones(text[]), app.valid_emails(text[]) to authenticated, service_role;
+as $$ select coalesce(bool_and(x is not null and length(x) <= 254 and x ~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' and x = lower(x)), true) from unnest(p) x $$;
+-- SECURITY REVIEW 16 (V05): no entry twice in a list (nulls count as repeats, and are refused above).
+create or replace function app.no_repeats(p text[]) returns boolean
+language sql immutable set search_path = ''
+as $$ select count(*) = count(distinct x) from unnest(p) x $$;
+revoke all on function app.clean_list(text[], boolean), app.valid_phones(text[]), app.valid_emails(text[]), app.no_repeats(text[]) from public, anon;
+grant execute on function app.clean_list(text[], boolean), app.valid_phones(text[]), app.valid_emails(text[]), app.no_repeats(text[]) to authenticated, service_role;
 
 alter table public.people
   add column phones text[] not null default '{}'
-    check (cardinality(phones) <= 3 and app.valid_phones(phones)),
+    check (cardinality(phones) <= 3 and app.valid_phones(phones) and app.no_repeats(phones)),
   -- Up to 2 more, after the main email (3 in all).
   add column other_emails text[] not null default '{}'
-    check (cardinality(other_emails) <= 2 and app.valid_emails(other_emails));
+    check (cardinality(other_emails) <= 2 and app.valid_emails(other_emails) and app.no_repeats(other_emails)),
+  -- V05: the main email is not repeated among the others (they are stored in lower case).
+  add constraint people_other_emails_not_main check (email is null or not (lower(email) = any (other_emails)));
 
 -- people_guard, re-created whole from migration 23: the TECi route records no phones or extra
 -- emails (name, email and stage only, S04), and anonymising must clear them.
@@ -651,7 +731,9 @@ begin
         coalesce(r.newsletter_subscribed, true), coalesce(r.celebration_opt_in, false),
         -- Migration 25: up to 3 phone numbers and 2 more email addresses, trimmed (emails in
         -- lower case); empty entries dropped. The table's checks decide what is valid.
-        app.clean_list(r.phones, false), app.clean_list(r.other_emails, true));
+        -- SECURITY REVIEW 16 (V05): repeats dropped, and the main email left out of the others.
+        app.clean_list(r.phones, false),
+        array_remove(app.clean_list(r.other_emails, true), nullif(lower(btrim(r.email)), '')));
   exception when unique_violation then
     raise exception 'A member with that email address is already recorded' using errcode = 'P0001';
   end;

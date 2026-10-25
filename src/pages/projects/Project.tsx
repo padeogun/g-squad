@@ -78,8 +78,10 @@ function ProjectPage({ p }: { p: ProjectRow }) {
       </p>
 
       <StatusFlow p={p} />
-      {/* Self-approval is allowed for church projects (decision of 25 Oct 2026) and always shown. */}
-      {p.approved_by && p.approved_by === p.owner_user_id && <Notice tone="info">Self-approved: the project's owner approved it.</Notice>}
+      {/* Self-approval is allowed (decision of 25 Oct 2026) and always shown. SECURITY REVIEW 16
+          (V01): from the flag the database records at approval, not from today's owner, which
+          changes when a project is handed on. */}
+      {p.approved_by && p.self_approved && <Notice tone="info">Self-approved: its owner at the time approved it.</Notice>}
       {/* The database keeps a note on a draft only when the approver sent it back (U05). */}
       {p.decision_note && (
         <Notice tone={p.status === 'draft' ? 'warn' : 'info'} title={p.status === 'draft' ? 'Sent back for changes' : 'Note from the approver'}>

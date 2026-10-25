@@ -2607,6 +2607,80 @@ select test.ok((select cardinality(phones) = 0 and cardinality(other_emails) = 0
                 and id = (select person_id from public.unit_memberships where person_id in (select id from public.people where anonymised_at is not null) order by joined_on desc limit 1)),
                'M25: anonymising wipes phone numbers and extra emails');
 
+-- ---------- Security review 16 ----------
+-- V01: the self-approval flag is recorded at approval, not worked out from today's owner.
+-- (Read through to_jsonb so the checks report FAIL rather than stop if the column is missing.)
+select test.login('ops'); set role authenticated;
+update public.projects set owner_user_id = test.id('ph') where name = 'M25 carol service';
+update public.projects set owner_user_id = test.id('ph') where name = 'M24 sound workshop';
+reset role;
+select test.ok(coalesce((select (to_jsonb(p) ->> 'self_approved')::boolean from public.projects p where name = 'M25 carol service'), false),
+               'V01: a self-approved project stays flagged after its owner changes');
+select test.ok(coalesce((select not (to_jsonb(p) ->> 'self_approved')::boolean and approved_by = owner_user_id
+                         from public.projects p where name = 'M24 sound workshop'), false),
+               'V01: ... and a project handed to its approver is not shown as self-approved');
+select test.login('ph'); set role authenticated;
+select test.throws($q$update public.projects set self_approved = false where name = 'M25 carol service'$q$,
+                   'V01: the flag cannot be cleared by hand');
+reset role;
+select test.ok(coalesce((select (to_jsonb(p) ->> 'self_approved')::boolean from public.projects p where name = 'M25 carol service'), false),
+               'V01: ... and is still set');
+
+-- V02: no approval in the same request as a change of level or unit (the new level's approver
+-- would decide a project the old level's approver never saw).
+select test.login('ops'); set role authenticated;
+insert into public.projects (level, unit_id, name, starts_at, ends_at)
+values ('unit', test.id('A1'), 'V02 unit social', now() + interval '120 days', now() + interval '120 days 2 hours');
+update public.projects set status = 'submitted' where name = 'V02 unit social';
+select test.throws($q$update public.projects set level = 'church', unit_id = null, status = 'approved' where name = 'V02 unit social'$q$,
+                   'V02: the Operations Lead cannot turn a submitted unit project into a church project and approve it in one step');
+reset role;
+select test.ok((select status = 'submitted' and approved_by is null from public.projects where name = 'V02 unit social'),
+               'V02: ... it stays waiting for the Purpose Head');
+
+-- V03: writes to safeguarding notes are audited against the event, never with the text.
+select test.ok(exists (select 1 from public.audit_log a
+                       where a.table_name = 'event_safeguarding' and a.action in ('insert', 'update', 'delete')
+                         and a.record_id = (select id from public.projects where name = 'Harvest outreach')),
+               'V03: a safeguarding write is audited against its event');
+select test.ok(not exists (select 1 from public.audit_log a where a.table_name = 'event_safeguarding' and a.detail::text like '%DBS%'),
+               'V03: ... without the text of the notes');
+-- Sound: no direct writes, no other church, the system copy kept.
+select test.login('ops'); set role authenticated;
+select test.throws(format($q$insert into public.event_safeguarding (project_id, church_id, notes) values (%L, %L, 'x')$q$,
+                          (select id from public.projects where name = 'M25 carol service'), test.id('churchA')),
+                   'V03: no one writes the safeguarding table directly');
+reset role;
+select test.login('b_ops'); set role authenticated;
+select test.throws(format('select public.get_event_safeguarding(%L)', (select id from public.projects where name = 'Harvest outreach')),
+                   'V03: another church''s Operations Lead cannot read the notes');
+select test.throws(format('select public.set_event_safeguarding(%L, %L)', (select id from public.projects where name = 'Harvest outreach'), 'x'),
+                   'V03: ... or write them');
+select test.ok(not exists (select 1 from public.volunteer_shortfalls() s
+                           join public.projects p on p.id = s.project_id where p.church_id = test.id('churchA')),
+               'V03: shortfalls never list another church''s projects');
+reset role;
+select test.login('rp'); set role authenticated;
+select test.throws(format('select public.create_sunday_service(%L)', current_setting('test.sun6')::date + 14),
+                   'V03: the Resident Pastor cannot set up a Sunday (it would make them its owner)');
+reset role;
+
+-- V04 and V05: list entries are never empty or repeated.
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$update public.people set phones = '{NULL}' where id = %L$q$, test.id('s3_member')),
+                   'V04: a phone list cannot hold an empty (null) entry');
+select test.throws(format($q$update public.people set other_emails = array[null, 'x@example.org'] where id = %L$q$, test.id('s3_member')),
+                   'V04: ... nor an email list');
+select test.throws(format($q$update public.people set phones = '{"07700 900123","07700 900123"}' where id = %L$q$, test.id('s3_member')),
+                   'V05: the same phone number is not kept twice');
+select test.throws(format($q$update public.people set email = 'dup.v05@example.org', other_emails = '{"dup.v05@example.org"}' where id = %L$q$, test.id('s3_member')),
+                   'V05: an extra email cannot repeat the main email');
+select test.lives(format($q$select public.create_member('{"first_name":"Dup","surname":"Lists","email":"Dup.Lists@example.org","phones":["07700 900111","07700 900111"],"other_emails":["dup.lists@example.org","Other.Dup@example.org","other.dup@example.org"]}', %L)$q$, test.id('A1')),
+                  'V05: adding a member with repeated entries works');
+select test.ok((select phones = '{"07700 900111"}' and other_emails = '{"other.dup@example.org"}' from public.people where first_name = 'Dup' and surname = 'Lists'),
+               'V05: ... and keeps each phone and email once, the main email only as the main one');
+reset role;
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;

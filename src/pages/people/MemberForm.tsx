@@ -20,6 +20,7 @@ import {
   cleanFaith,
   fetchFaith,
   fullName,
+  repeatedAt,
   saveFaith,
   useMemberships,
   usePerson,
@@ -157,6 +158,11 @@ function checkPerson(v: Values): Record<string, string> {
   for (const k of ['email2', 'email3'] as const)
     if (v[k].trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v[k].trim())) e[k] = 'Enter a valid email address';
   if ((v.email2.trim() || v.email3.trim()) && !v.email.trim()) e.email = 'Give the main email first';
+  // SECURITY REVIEW 16 (V05): the database keeps each phone and email once.
+  const emailKeys = ['email', 'email2', 'email3'] as const;
+  for (const i of repeatedAt(emailKeys.map((k) => v[k]), true)) e[emailKeys[i]] ??= 'Already given above';
+  const phoneKeys = ['phone1', 'phone2', 'phone3'] as const;
+  for (const i of repeatedAt(phoneKeys.map((k) => v[k]))) e[phoneKeys[i]] ??= 'Already given above';
   // Same rule as the database: digits with optional +, spaces, brackets and dashes, 7 to 20 characters.
   for (const k of ['phone1', 'phone2', 'phone3'] as const)
     if (v[k].trim() && !/^\+?[0-9][0-9 ()-]{5,18}[0-9]$/.test(v[k].trim())) e[k] = 'Use digits, spaces and an optional +, e.g. 07700 900123';

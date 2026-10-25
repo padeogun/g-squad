@@ -248,7 +248,13 @@ function SafeguardingPanel({ projectId, canManage, canApprove }: { projectId: st
         <>
           <label className="tec-field" htmlFor={`sg-${projectId}`}>
             <span>
-              Notes <span className="tec-hint">Arrangements and who is responsible; empty removes them</span>
+              {/* SECURITY REVIEW 16 (V08): the notes sit outside a person's export and anonymising, so they stay
+                  about arrangements; concerns about a person go to the Safeguarding Lead, not here. */}
+              Notes{' '}
+              <span className="tec-hint">
+                Arrangements and the leaders responsible only: never names or details of children or anyone at risk, and no
+                concerns about a person. Empty removes them.
+              </span>
             </span>
             <textarea id={`sg-${projectId}`} className="tec-input app-textarea" rows={3} maxLength={2000} value={draft} onChange={(e) => setDraft(e.target.value)} />
           </label>
