@@ -65,6 +65,9 @@ export interface UnitDashboard {
     engagement: keyof EngagementMix | 'left';
     slots_this_month: number;
     slot_limit: number;
+    // Migration 28: the limit in hours across all serving.
+    hours_this_month: number;
+    hours_limit: number;
     holiday_from: string | null;
     holiday_to: string | null;
     last_one_to_one: string | null;
@@ -163,4 +166,94 @@ export function shortfalls(rows: { unit_name: string; month: string; spare: numb
     out.set(r.unit_name, [...(out.get(r.unit_name) ?? []), m]);
   }
   return out;
+}
+
+// ---------- Fair share, rest and leaders' load (migration 30) ----------
+export interface FairShare {
+  month: string;
+  members: number;
+  bands: { none: number; up_to_3: number; three_to_6: number; six_to_9: number; over_9: number };
+  // Percentage of all hours; null when nobody served or there are fewer than 10 members
+  // (SECURITY REVIEW 20, F01: the busiest fifth is then always at least two people).
+  busiest_fifth_share: number | null;
+  not_asked_3_months: number;
+  leaders_over: number;
+}
+
+// Counts only, for the Church Dashboard audience (public.fair_share).
+export const useFairShare = (month: string, enabled: boolean) =>
+  useQuery({
+    queryKey: ['dashboard', 'fair_share', month],
+    enabled,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('fair_share', { p_month: month });
+      if (error) throw error;
+      return data as unknown as FairShare;
+    },
+  });
+
+// By name, for the G-Squad Coordinator, Resident Pastor, Operations Lead and Pastoral Lead.
+export const LEADER_CARE_ROLES = ['gsquad_coordinator', 'resident_pastor', 'operations_lead', 'pastoral_lead'] as const;
+export const useLeadersCarryingTooMuch = (enabled: boolean) =>
+  useQuery({
+    queryKey: ['dashboard', 'leaders_load'],
+    enabled,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('leaders_carrying_too_much');
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+
+// The bands in reading order, with their labels.
+export const HOUR_BANDS: { key: keyof FairShare['bands']; label: string }[] = [
+  { key: 'none', label: 'Not serving' },
+  { key: 'up_to_3', label: 'Up to 3 h' },
+  { key: 'three_to_6', label: '3 to 6 h' },
+  { key: 'six_to_9', label: '6 to 9 h' },
+  { key: 'over_9', label: 'Over 9 h' },
+];
+
+// Width of a band's bar as a percentage of the largest band (0 when there are no members).
+export function bandWidth(count: number, bands: FairShare['bands']): number {
+  const max = Math.max(...Object.values(bands));
+  return max > 0 ? Math.round((count / max) * 100) : 0;
+}
+
+// ---------- Serving rules (SECURITY REVIEW 20, F03) ----------
+// The four church-wide serving rules on the Dashboard's Serving rules card, checked before
+// saving. Before, a cleared box was sent as 0: for "Sundays off a month" that switched the
+// rest rule off for everyone without a word, and every save sent all four values, so a page
+// left open overwrote a change someone else had made since. The database still decides (its
+// checks and church_settings_guard); this only stops slips and sends just what changed.
+export interface ServingRules {
+  serving_limit_per_month: number;
+  hours_per_slot: number;
+  sundays_off_per_month: number;
+  leader_roles_max: number;
+}
+export const SERVING_RULES: { key: keyof ServingRules; label: string; min: number; max: number; step: number }[] = [
+  { key: 'serving_limit_per_month', label: 'Usual slots a month', min: 1, max: 31, step: 1 },
+  { key: 'hours_per_slot', label: 'Hours in a usual slot', min: 0.5, max: 16, step: 0.5 },
+  { key: 'sundays_off_per_month', label: 'Sundays off a month', min: 0, max: 3, step: 1 },
+  { key: 'leader_roles_max', label: 'Leadership roles at once', min: 1, max: 10, step: 1 },
+];
+
+export function servingRulesPatch(
+  edits: Partial<Record<keyof ServingRules, string>>,
+  current: ServingRules,
+): { patch: Partial<ServingRules>; error?: string } {
+  const patch: Partial<ServingRules> = {};
+  for (const r of SERVING_RULES) {
+    const raw = edits[r.key];
+    if (raw === undefined) continue;
+    const text = raw.trim();
+    const n = Number(text);
+    if (text === '' || !Number.isFinite(n) || n < r.min || n > r.max || Math.round(n / r.step) * r.step !== n) {
+      const steps = r.step === 1 ? 'a whole number' : 'in half-hours';
+      return { patch: {}, error: `${r.label}: ${steps} from ${r.min} to ${r.max}.` };
+    }
+    if (n !== Number(current[r.key])) patch[r.key] = n;
+  }
+  return { patch };
 }

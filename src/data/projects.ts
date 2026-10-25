@@ -505,3 +505,19 @@ export function sectionStatus(no: number, p: EventPlan, openActions = 0): { labe
   if (openActions > 0 && s.tone === 'ok') return { label: `${openActions} action${openActions > 1 ? 's' : ''} open`, tone: 'warn' };
   return s;
 }
+
+// ---------- Weekly repeats (migration 28) ----------
+// The same weekday each week from `start` to `until` (both "YYYY-MM-DD"), never past `last`
+// (the project's last day), at most 60 dates. A team activity such as a weekly rehearsal.
+export function weeklyDates(start: string, until: string, last: string): string[] {
+  const out: string[] = [];
+  const end = until < last ? until : last;
+  let t = Date.parse(`${start}T12:00:00Z`);
+  while (out.length < 60) {
+    const d = new Date(t).toISOString().slice(0, 10);
+    if (d > end) break;
+    out.push(d);
+    t += 7 * 86_400_000;
+  }
+  return out.length ? out : [start];
+}

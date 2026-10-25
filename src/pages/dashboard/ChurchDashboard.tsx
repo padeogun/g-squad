@@ -14,6 +14,7 @@ import { hasRole, useMe } from '../../auth/useMe';
 import { GridStatus } from '../sunday/GridStatus';
 import { EngagementBar } from './EngagementBar';
 import { ShortfallsCard } from './Shortfalls';
+import { FairShareCard, ServingRulesCard } from './FairShare';
 
 const { SectionHeading, Card, Notice, StatTile, DataTable, Chip } = TEC;
 
@@ -45,7 +46,7 @@ export function ChurchDashboard() {
         <StatTile label="Team places" value={d.team_places} note={`${d.multi_unit} serve in 2+ units`} />
         <StatTile label="Units" value={d.units} note={`across ${d.purposes} purposes`} />
         <StatTile label="Active members" value={d.engagement.active} note="served 2+ times in 8 weeks" />
-        <StatTile label="Over limit" value={d.over_limit} note="more slots than their limit this month" tone={d.over_limit ? 'danger' : 'default'} />
+        <StatTile label="Over limit" value={d.over_limit} note="more hours than their monthly limit, across all serving" tone={d.over_limit ? 'danger' : 'default'} />
         <StatTile label="Check-ins open" value={d.checkins_open} note="flags only, no reasons" />
         <StatTile
           label="Inputs overdue"
@@ -58,6 +59,9 @@ export function ChurchDashboard() {
       <Card title="Engagement mix">
         <EngagementBar mix={d.engagement} />
       </Card>
+
+      {/* Steps 3 to 5 (migration 30): fair share, rest and leaders' load. */}
+      <FairShareCard month={d.as_of.slice(0, 7) + '-01'} />
 
       {/* Decision of 25 Oct 2026: volunteer shortfalls are always shown on the dashboard. */}
       <ShortfallsCard />
@@ -146,6 +150,7 @@ export function ChurchDashboard() {
           </Card>
         )}
       </div>
+      <ServingRulesCard />
     </>
   );
 }

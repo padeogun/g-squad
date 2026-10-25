@@ -5,7 +5,7 @@
 // 23 Oct 2026; the database enforces both). Someone with several teams picks one at the top.
 // The "team leader" flag now follows the Team Lead role label (migration 22: no co-leads).
 // Slice 3 adds the unit dashboard (public.unit_dashboard): headline tiles, the engagement mix,
-// the leadership pipeline and, per member, slots this month, engagement, holiday and last
+// the leadership pipeline and, per member, hours this month (all serving), engagement, holiday and last
 // one-to-one. Those figures are checked in the database to be this unit's lead (or seniors).
 // -------------------------------------------------------------------------------------
 import { useState } from 'react';
@@ -190,7 +190,7 @@ function Team({ unitId, target, canEdit }: { unitId: string; target: number | nu
               { key: 'name', label: 'Name' },
               { key: 'role', label: 'Team role' },
               { key: 'stage', label: 'Leadership stage' },
-              { key: 'slots', label: 'Slots this month', align: 'right' },
+              { key: 'slots', label: 'Hours this month', align: 'right' },
               { key: 'engagement', label: 'Engagement' },
               { key: 'holiday', label: 'Holiday' },
               // The Deputy never sees one-to-ones, so the column is left out for them.
@@ -237,10 +237,10 @@ function Team({ unitId, target, canEdit }: { unitId: string; target: number | nu
                 ),
                 // Over the member's own limit shows as a warning: R-limits protect volunteers.
                 slots: f ? (
-                  f.slots_this_month > f.slot_limit ? (
-                    <Chip tone="danger">{`${f.slots_this_month} / ${f.slot_limit}`}</Chip>
+                  f.hours_this_month > f.hours_limit ? (
+                    <Chip tone="danger">{`${f.hours_this_month} / ${f.hours_limit} h`}</Chip>
                   ) : (
-                    `${f.slots_this_month} / ${f.slot_limit}`
+                    `${f.hours_this_month} / ${f.hours_limit} h`
                   )
                 ) : (
                   '–'

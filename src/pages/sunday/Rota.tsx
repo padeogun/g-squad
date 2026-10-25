@@ -1,12 +1,14 @@
 // -------------------------------------------------------------------------------------
-// Sunday Rota: one unit, one month. Rows are the roles each Sunday's grid needs from the unit
-// (team demand); columns are the month's Sundays. A Unit Lead fills a slot from "who can
-// serve": the unit's active members, fewest slots this month first, with people on holiday
-// or at their limit shown but not offered.
+// Rota: one unit, one month. Rows are the roles each Sunday's grid needs from the unit
+// (team demand); columns are the month's Sundays. Below (migration 28): the places the unit
+// is asked to fill at events, outreach and team activities that month. A Team Lead fills a
+// place from "who can serve": the unit's active members, fewest hours this month first, with
+// people on holiday or without enough hours left shown but not offered. Every place counts
+// its hours towards one monthly limit across all serving (decision of 25 Oct 2026).
 // The database checks every slot (migration 8): membership, holidays (R10) and one monthly
 // limit across all units (R1/R2), which only the Operations Lead may go over, with a reason.
 // -------------------------------------------------------------------------------------
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { TEC } from '../../design-system';
@@ -15,7 +17,8 @@ import { friendlyError } from '../../data/errors';
 import { byId, useChurchRoles, useUnits } from '../../data/reference';
 import { fullName, usePersonNames } from '../../data/people';
 import { shortDate, todayIso } from '../../data/sundays';
-import { buildRota, monthBounds, useCandidates, useMonthSundays, useUnitAssignments, useUnitDemand, type RotaSlot } from '../../data/rota';
+import { needsSundayOff, buildEvents, buildRota, fitsLimit, monthBounds, placeHours, useCandidates, useMonthSundays, useUnitAssignments, useUnitDemand, useUnitEventDemand, type RotaSlot } from '../../data/rota';
+import { useSettings } from '../../data/newsletter';
 import { hasRole, ledUnitIds, viewedUnitIds, useMe } from '../../auth/useMe';
 
 const { SectionHeading, Card, Button, TextField, SelectField, Notice, Chip } = TEC;
@@ -47,8 +50,9 @@ export function Rota() {
   if (me.isPending || units.isPending) return <p>Loading…</p>;
   return (
     <>
-      <SectionHeading eyebrow="Sundays and events" title="Sunday Rota" rule>
-        Roles come from each Sunday's service grid. People on holiday or at their monthly limit aren't offered.
+      <SectionHeading eyebrow="Sundays and events" title="Rota" rule>
+        Sundays, events, outreach and team activities. Every place counts its hours towards one monthly limit across all
+        teams, so nobody is asked to carry too much.
       </SectionHeading>
       {choices.length === 0 ? (
         <Notice tone="info" title="For Team Leads">
@@ -100,13 +104,20 @@ function MonthRota({ unitId, month, isOps, canEdit }: { unitId: string; month: s
   const roles = useChurchRoles();
   // SECURITY REVIEW FIX Q10: names of the people on this rota only (not everyone's records).
   const people = usePersonNames((assignments.data ?? []).map((a) => a.person_id));
+  // SECURITY REVIEW 19 (Z06): bookings outside this month's Sunday services, shown under events
+  // even when their place has gone (they still count towards the limit).
+  const eventBookings = (assignments.data ?? []).filter((a) => !projectIds.includes(a.project_id));
+  const events = useUnitEventDemand(unitId, from, to, [...new Set(eventBookings.map((a) => a.project_id))]);
+  const settings = useSettings();
   const roleMap = byId(roles.data);
   const personMap = byId(people.data);
   // The slot whose picker is open.
-  const [picking, setPicking] = useState<RotaSlot | null>(null);
+  const [picking, setPicking] = useState<(RotaSlot & { hours?: number | null }) | null>(null);
 
   const rows = useMemo(
-    () => buildRota(sundays.data ?? [], demand.data ?? [], assignments.data ?? []),
+    // Only Sunday places here: an event on a Sunday has its own list below.
+    () => buildRota(sundays.data ?? [], demand.data ?? [], (assignments.data ?? []).filter((a) => projectIds.includes(a.project_id))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- projectIds is derived from sundays.data
     [sundays.data, demand.data, assignments.data],
   );
 
@@ -122,21 +133,20 @@ function MonthRota({ unitId, month, isOps, canEdit }: { unitId: string; month: s
   if (sundays.isPending) return <p>Loading…</p>;
   // SECURITY REVIEW FIX Q12: a failed load is shown as a failure. Before, it looked like
   // "no Sundays" or like open slots, inviting a leader to book people who were already booked.
-  const loadError = sundays.error ?? demand.error ?? assignments.error;
+  const loadError = sundays.error ?? demand.error ?? assignments.error ?? events.error;
   if (loadError) return <Notice tone="danger" title="The rota could not be loaded">{friendlyError(loadError)}</Notice>;
-  if ((sundays.data ?? []).length === 0)
-    return (
-      <Notice tone="info" title="No Sundays set up this month">
-        The Operations Lead sets up each Sunday under <Link to="/sundays">Sunday Operations</Link>.
-      </Notice>
-    );
-
+  const noSundays = (sundays.data ?? []).length === 0;
   const open = rows.reduce((n, r) => n + [...r.cells.values()].filter((c) => !c.assignment).length, 0);
+  const defaultHours = Number(settings.data?.hours_per_slot ?? 3);
 
   return (
     <>
-      <Card title={open ? `Rota · ${open} open slot${open === 1 ? '' : 's'}` : 'Rota · all slots filled'}>
-        {rows.length === 0 ? (
+      <Card title={noSundays ? 'Sundays' : open ? `Sundays · ${open} open slot${open === 1 ? '' : 's'}` : 'Sundays · all slots filled'}>
+        {noSundays ? (
+          <Notice tone="info" title="No Sundays set up this month">
+            The Operations Lead sets up each Sunday under <Link to="/sundays">Sunday Operations</Link>.
+          </Notice>
+        ) : rows.length === 0 ? (
           <p>The service grids don't ask this unit for anyone this month yet.</p>
         ) : (
           <div className="tec-table-wrap">
@@ -188,7 +198,13 @@ function MonthRota({ unitId, month, isOps, canEdit }: { unitId: string; month: s
                               type="button"
                               className="app-link-button"
                               aria-label={`Assign ${r.roleId ? roleMap.get(r.roleId)?.name ?? 'role' : 'any role'}${r.slotNo > 1 ? ` (${r.slotNo})` : ''} on ${shortDate(s.service_date)}`}
-                              onClick={() => setPicking(cell)}
+                              onClick={() =>
+                                setPicking({
+                                  ...cell,
+                                  // SECURITY REVIEW 19 (Z07): counted as the database counts it.
+                                  hours: placeHours(demand.data ?? [], cell.projectId, cell.roleId, cell.date, defaultHours),
+                                })
+                              }
                             >
                               + Assign
                             </button>
@@ -206,10 +222,27 @@ function MonthRota({ unitId, month, isOps, canEdit }: { unitId: string; month: s
         )}
         {cancel.isError && <Notice tone="danger">{friendlyError(cancel.error)}</Notice>}
       </Card>
+      <EventsCard
+        groups={buildEvents(events.data?.demand ?? [], events.data?.projects ?? [], eventBookings, defaultHours)}
+        loading={events.isPending}
+        roleName={(id) => (id ? roleMap.get(id)?.name ?? 'Role' : 'Any role')}
+        personName={(id) => {
+          const p = personMap.get(id);
+          return p ? fullName(p) : 'Member';
+        }}
+        canEdit={canEdit}
+        onPick={(slot, hours) => setPicking({ ...slot, hours })}
+        onCancel={(id) => cancel.mutate(id)}
+        cancelling={cancel.isPending}
+      />
       {picking && (
         <AssignPanel
           unitId={unitId}
           slot={picking}
+          hours={picking.hours ?? defaultHours}
+          // Migration 30: the rest rule (at least one Sunday off) applies to Sunday places.
+          isSunday={projectIds.includes(picking.projectId)}
+          sundaysOff={Number(settings.data?.sundays_off_per_month ?? 1)}
           roleName={picking.roleId ? roleMap.get(picking.roleId)?.name ?? 'Role' : 'Any role'}
           isOps={isOps}
           onClose={() => setPicking(null)}
@@ -223,12 +256,18 @@ function MonthRota({ unitId, month, isOps, canEdit }: { unitId: string; month: s
 function AssignPanel({
   unitId,
   slot,
+  hours,
+  isSunday,
+  sundaysOff,
   roleName,
   isOps,
   onClose,
 }: {
   unitId: string;
   slot: RotaSlot;
+  hours: number;
+  isSunday: boolean;
+  sundaysOff: number;
   roleName: string;
   isOps: boolean;
   onClose: () => void;
@@ -258,25 +297,41 @@ function AssignPanel({
   });
 
   const list = candidates.data ?? [];
+  // The panel opens below the lists: bring it into view so the leader sees who can serve.
+  // SECURITY REVIEW 19 (Z07): and move focus to it, so keyboard and screen reader users land on
+  // the list rather than staying on the "+ Assign" button far above.
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    box.current?.focus?.({ preventScroll: true });
+    box.current?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+  }, [slot]);
   return (
-    <Card title={`Assign ${roleName} · ${shortDate(slot.date)}`} tone="tint" action={<Button size="sm" variant="quiet" onClick={onClose}>Close</Button>}>
+    <div ref={box} tabIndex={-1} className="app-assign-panel" role="region" aria-label={`Assign ${roleName} on ${shortDate(slot.date)}`}>
+    <Card title={`Assign ${roleName} · ${shortDate(slot.date)} · ${hours} h`} tone="tint" action={<Button size="sm" variant="quiet" onClick={onClose}>Close</Button>}>
       <p className="type-caption" style={{ margin: 0 }}>
-        Fewest slots this month first. One limit counts across all units.
+        Fewest hours this month first. One limit counts across all teams, Sundays, events and team activities
+        {/* SECURITY REVIEW 20 (F10): the church's own number of Sundays off (0 to 3), not always one. */}
+        {isSunday && sundaysOff > 0 ? `, and everyone keeps at least ${sundaysOff} Sunday${sundaysOff === 1 ? '' : 's'} off a month` : ''}.
       </p>
       {candidates.isPending && <p>Loading…</p>}
       {candidates.error && <Notice tone="danger">{friendlyError(candidates.error)}</Notice>}
       {candidates.data && list.length === 0 && <p>No active members in this unit.</p>}
       <ul className="app-candidates">
         {list.map((c) => {
-          const atLimit = c.slots_used >= c.slot_limit;
+          // Migration 30: a Sunday place also needs a Sunday left this month (at least one off).
+          const noSunday = needsSundayOff(c, isSunday);
+          const atLimit = !fitsLimit(c, hours) || noSunday;
+          const left = Math.max(0, Number(c.hours_limit) - Number(c.hours_used));
           const blocked = c.on_holiday || c.serving_that_day;
           const status = c.on_holiday
             ? 'On holiday'
             : c.serving_that_day
               ? 'Already serving that day'
-              : atLimit
-                ? `At limit (${c.slot_limit})`
-                : `${c.slot_limit - c.slots_used} left`;
+              : noSunday
+                ? 'Needs a Sunday off'
+                : atLimit
+                ? left > 0 ? `Only ${left} h left` : 'No hours left'
+                : `${left} h left`;
           return (
             <li key={c.person_id}>
               <span>
@@ -285,7 +340,9 @@ function AssignPanel({
                 </strong>
                 <span className="type-caption">
                   {' '}
-                  {c.slots_used} of {c.slot_limit} this month
+                  {Number(c.hours_used)} of {Number(c.hours_limit)} hours this month
+                  {/* SECURITY REVIEW 20 (F10): on Sunday places, the Sundays already served too. */}
+                  {isSunday ? `, ${c.sundays_served} of ${c.sundays_allowed} Sundays` : ''}
                 </span>
               </span>
               <Chip tone={blocked ? 'neutral' : atLimit ? 'warn' : 'ok'}>{status}</Chip>
@@ -307,7 +364,7 @@ function AssignPanel({
         <div className="app-form">
           <TextField
             id="override-reason"
-            label="Reason for going over the limit"
+            label={isSunday ? 'Reason for going over the limit or the Sundays off' : 'Reason for going over the limit'}
             hint="(logged; at least a few words)"
             maxLength={500}
             value={reason}
@@ -329,6 +386,96 @@ function AssignPanel({
           {friendlyError(assign.error)}
         </Notice>
       )}
+    </Card>
+    </div>
+  );
+}
+
+// ---------- Events, outreach and team activities (migration 28) ----------
+// SECURITY REVIEW 19 (Z06/Z07): hours are shown per place when a day's places differ, and
+// bookings whose place has gone (or whose project is no longer approved) are listed, marked,
+// with Remove but no new places.
+function EventsCard({
+  groups,
+  loading,
+  roleName,
+  personName,
+  canEdit,
+  onPick,
+  onCancel,
+  cancelling,
+}: {
+  groups: ReturnType<typeof buildEvents>;
+  loading: boolean;
+  roleName: (id: string | null) => string;
+  personName: (id: string) => string;
+  canEdit: boolean;
+  onPick: (slot: RotaSlot, hours: number) => void;
+  onCancel: (assignmentId: string) => void;
+  cancelling: boolean;
+}) {
+  const open = groups.reduce((n, g) => n + g.slots.filter((s) => !s.assignment).length, 0);
+  return (
+    <Card title={groups.length === 0 ? 'Events and team activities' : open ? `Events and team activities · ${open} open` : 'Events and team activities · all filled'}>
+      {loading && <p>Loading…</p>}
+      {!loading && groups.length === 0 && (
+        <p style={{ margin: 0 }}>
+          No approved events or team activities ask this team for people this month. Places are requested under Volunteers needed
+          on each <Link to="/projects">project</Link>.
+        </p>
+      )}
+      {groups.map((g) => (
+        <section key={`${g.projectId}-${g.date}`} className="app-event-group" aria-label={`${g.name}, ${shortDate(g.date)}`}>
+          <div className="app-event-head">
+            <Link to={`/projects/${g.projectId}`}>
+              <strong>{g.name}</strong>
+            </Link>
+            <span className="type-caption">
+              {shortDate(g.date)}
+              {g.hours !== null ? ` · ${g.hours} h each` : ''}
+            </span>
+            {!g.open && <Chip tone="warn">No longer asking for people</Chip>}
+          </div>
+          <ul className="app-candidates">
+            {g.slots.map((s, i) => {
+              const a = s.assignment;
+              return (
+                <li key={a?.id ?? `${s.roleId}-${i}`}>
+                  <span>
+                    {roleName(s.roleId)}
+                    {g.hours === null && <span className="type-caption">{` · ${s.hours} h`}</span>}
+                    {a && <strong> · {personName(a.person_id)}</strong>}
+                  </span>
+                  {a?.status === 'served' && <Chip tone="ok">Served</Chip>}
+                  {a?.status === 'no_show' && <Chip tone="danger">No-show</Chip>}
+                  {!a && !canEdit && <span className="type-caption">Open</span>}
+                  {!a && canEdit && (
+                    <button
+                      type="button"
+                      className="app-link-button"
+                      aria-label={`Assign ${roleName(s.roleId)} for ${g.name} on ${shortDate(g.date)}, ${s.hours} hours`}
+                      onClick={() => onPick(s, s.hours)}
+                    >
+                      + Assign
+                    </button>
+                  )}
+                  {a?.status === 'planned' && canEdit && (
+                    <button
+                      type="button"
+                      className="app-link-button"
+                      aria-label={`Take ${personName(a.person_id)} off ${g.name} on ${shortDate(g.date)}`}
+                      disabled={cancelling}
+                      onClick={() => onCancel(a.id)}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ))}
     </Card>
   );
 }
