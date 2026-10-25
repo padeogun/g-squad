@@ -41,7 +41,13 @@ alter table public.newsletter_issues
   add column send_attempts   smallint not null default 0 check (send_attempts between 0 and 100),
   add column send_error      text check (length(send_error) <= 500),
   -- True when the issue went to the test list only (before the DPIA, see section 5).
-  add column sent_as_test    boolean not null default false;
+  add column sent_as_test    boolean not null default false,
+  -- SECURITY REVIEW 18 (Y02): members (true) or the test list (false), fixed by the first
+  -- claim so one issue never goes partly to each, and null again when it leaves approval.
+  add column send_live       boolean,
+  -- SECURITY REVIEW 18 (Y01): the version of the content (app.newsletter_content_version)
+  -- the G-Squad Coordinator approved; the Resident Pastor must approve that same version.
+  add column approved_version text check (length(approved_version) <= 64);
 
 alter table public.church_settings
   -- Real sending, off until the DPIA is signed. Only the Resident Pastor switches it on.
@@ -71,6 +77,11 @@ alter table public.newsletter_snapshots enable row level security;
 revoke all on public.newsletter_snapshots from public, anon, authenticated;
 
 -- One row per email sent: a member (live) or a test address. A retry skips anyone listed here.
+-- SECURITY REVIEW 18 (Y03): a row is written (provider_id null) when the recipient is handed to
+-- the Edge Function, before the email service is asked, and confirmed with the service's id
+-- afterwards. A run that dies in between therefore never lists that person again in the same
+-- run; the next claim releases unconfirmed rows and the same batch goes again under the same
+-- idempotency key, which the email service refuses (409) if it had already sent it.
 create table public.newsletter_deliveries (
   id            bigint generated always as identity primary key,
   church_id     uuid not null,
@@ -151,6 +162,48 @@ begin
 end $$;
 revoke all on function public.start_newsletter_issue(date) from public, anon;
 grant execute on function public.start_newsletter_issue(date) to authenticated, service_role;
+
+-- SECURITY REVIEW 18 (Y06): issues_insert (migration 7) let an editor insert an issue directly,
+-- pointing at ANY church project of the church: that event then vanished from the gatherings,
+-- its received inputs (written for leaders) were printed as "team updates" to every member,
+-- and with Y05 below it would have been frozen. Issues are now started only through
+-- start_newsletter_issue, which makes their own project.
+drop policy issues_insert on public.newsletter_issues;
+
+-- SECURITY REVIEW 18 (Y05): an issue's project exists only to collect team updates, but owning
+-- it gave the editor everything a project owner has: asking units for volunteers (and then
+-- reading the records of volunteers assigned to it), event plans and budgets, safeguarding
+-- notes, Sunday grids, and submitting it for approval onto the calendar. Signed-in users may
+-- now add none of those to an issue's project, nor change its status, level, unit, dates or
+-- kind; its name, description and owner (handover) may still change.
+create or replace function app.issue_project_only_inputs() returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+begin
+  if app.is_system() then return new; end if;
+  if tg_table_name = 'projects' then
+    if exists (select 1 from public.newsletter_issues i where i.project_id = old.id)
+       and (new.status, new.level, new.unit_id, new.starts_at, new.ends_at, new.is_sunday_service, new.type_id, new.site_id)
+           is distinct from (old.status, old.level, old.unit_id, old.starts_at, old.ends_at, old.is_sunday_service, old.type_id, old.site_id) then
+      raise exception 'A newsletter issue''s project only collects team updates' using errcode = '42501';
+    end if;
+  elsif exists (select 1 from public.newsletter_issues i where i.project_id = new.project_id) then
+    raise exception 'A newsletter issue''s project only collects team updates' using errcode = '42501';
+  end if;
+  return new;
+end $$;
+revoke all on function app.issue_project_only_inputs() from public, anon, authenticated;
+grant execute on function app.issue_project_only_inputs() to service_role;
+create trigger issue_project_only_inputs before update on public.projects
+  for each row execute function app.issue_project_only_inputs();
+do $$
+declare t text;
+begin
+  foreach t in array array['team_demand','assignments','event_plans','event_plan_actions','service_grids','event_safeguarding'] loop
+    execute format('create trigger issue_project_only_inputs before insert or update of project_id on public.%I
+                    for each row execute function app.issue_project_only_inputs()', t);
+  end loop;
+end $$;
 
 -- -------------------------------------------------------------------------------------
 -- 4. The issue's content
@@ -262,6 +315,16 @@ end $$;
 revoke all on function app.newsletter_content(uuid, text) from public, anon, authenticated;
 grant execute on function app.newsletter_content(uuid, text) to service_role;
 
+-- SECURITY REVIEW 18 (Y01): a fingerprint of everything the approvers see. Team updates,
+-- recognitions, celebrations and gatherings change without anyone editing the issue (a Team
+-- Lead can rewrite their update at any time), so an approval names the version it approves.
+-- Times are written in UTC here so the fingerprint never depends on the session's time zone.
+create or replace function app.newsletter_content_version(p_issue uuid) returns text
+language sql stable security definer set search_path = '' set timezone = 'UTC'
+as $$ select md5(app.newsletter_content(p_issue, 'editor')::text) $$;
+revoke all on function app.newsletter_content_version(uuid) from public, anon, authenticated;
+grant execute on function app.newsletter_content_version(uuid) to service_role;
+
 -- For the app's editor and preview: the same readers as the issue itself (migration 7).
 create or replace function public.newsletter_issue_content(p_issue uuid) returns jsonb
 language plpgsql stable security definer set search_path = ''
@@ -271,7 +334,8 @@ begin
      or not exists (select 1 from public.newsletter_issues i where i.id = p_issue and i.church_id = app.current_church_id()) then
     raise exception 'Not allowed' using errcode = '42501';
   end if;
-  return app.newsletter_content(p_issue, 'editor');
+  -- SECURITY REVIEW 18 (Y01): with the version the approve buttons send back.
+  return app.newsletter_content(p_issue, 'editor') || jsonb_build_object('version', app.newsletter_content_version(p_issue));
 end $$;
 revoke all on function public.newsletter_issue_content(uuid) from public, anon;
 grant execute on function public.newsletter_issue_content(uuid) to authenticated, service_role;
@@ -287,6 +351,8 @@ as $$
 declare
   v_content_changed boolean;
   v_editor boolean;
+  v_in_progress boolean;
+  v_version text;
 begin
   if tg_op = 'INSERT' then
     if not app.is_system() then
@@ -295,6 +361,7 @@ begin
       new.pastor_approved_by := null; new.pastor_approved_at := null; new.sent_at := null;
       new.send_now_at := null; new.send_started_at := null; new.send_attempts := 0;
       new.send_error := null; new.sent_as_test := false;
+      new.send_live := null; new.approved_version := null;   -- SECURITY REVIEW 18 (Y01, Y02)
     end if;
     return new;
   end if;
@@ -323,29 +390,40 @@ begin
     raise exception 'Issues are sent by the email job' using errcode = '42501';
   end if;
 
-  -- Migration 27: once sending has begun, or anyone has received the issue, it is fixed.
-  if exists (select 1 from public.newsletter_deliveries d where d.issue_id = old.id and d.person_id is not null)
-     or (old.send_started_at is not null and old.send_started_at > now() - interval '15 minutes') then
-    raise exception 'This issue is being sent and cannot be changed' using errcode = '23514';
-  end if;
-  -- The sending job's own columns.
-  if (new.send_started_at, new.send_attempts, new.send_error, new.sent_as_test, new.sent_at)
-     is distinct from (old.send_started_at, old.send_attempts, old.send_error, old.sent_as_test, old.sent_at) then
-    raise exception 'Sending is recorded automatically' using errcode = '42501';
-  end if;
+  v_in_progress := old.send_started_at is not null and old.send_started_at > now() - interval '15 minutes';
+
   -- "Send now": the Coordinator or Resident Pastor, on an approved issue, changing nothing else.
+  -- SECURITY REVIEW 18 (Y08): also "Try again" once sending has given up (5 attempts), even
+  -- part-sent: nobody could restart such an issue, and it stayed approved and unsent for good.
+  -- Checked before the "already received" lock below, which would refuse it.
   if new.send_now_at is distinct from old.send_now_at then
-    if new.send_now_at is null or old.send_now_at is not null or old.status <> 'approved' or new.status <> 'approved'
+    if v_in_progress then
+      raise exception 'This issue is being sent and cannot be changed' using errcode = '23514';
+    end if;
+    if new.send_now_at is null or old.status <> 'approved' or new.status <> 'approved'
+       or (old.send_now_at is not null and old.send_attempts < 5)
        or not app.has_any_role(array['gsquad_coordinator','resident_pastor']::public.app_role[])
        or (to_jsonb(new) - array['send_now_at','updated_at']) <> (to_jsonb(old) - array['send_now_at','updated_at']) then
       raise exception 'Only the G-Squad Coordinator or Resident Pastor can send an approved issue now' using errcode = '42501';
     end if;
     new.send_now_at := now();
+    new.send_attempts := 0;
     return new;
   end if;
 
-  if (new.coordinator_approved_by, new.coordinator_approved_at, new.pastor_approved_by, new.pastor_approved_at)
-     is distinct from (old.coordinator_approved_by, old.coordinator_approved_at, old.pastor_approved_by, old.pastor_approved_at)
+  -- Migration 27: once sending has begun, or anyone has received the issue, it is fixed.
+  if exists (select 1 from public.newsletter_deliveries d where d.issue_id = old.id and d.person_id is not null)
+     or v_in_progress then
+    raise exception 'This issue is being sent and cannot be changed' using errcode = '23514';
+  end if;
+  -- The sending job's own columns.
+  if (new.send_started_at, new.send_attempts, new.send_error, new.sent_as_test, new.sent_at, new.send_live)
+     is distinct from (old.send_started_at, old.send_attempts, old.send_error, old.sent_as_test, old.sent_at, old.send_live) then
+    raise exception 'Sending is recorded automatically' using errcode = '42501';
+  end if;
+
+  if (new.coordinator_approved_by, new.coordinator_approved_at, new.pastor_approved_by, new.pastor_approved_at, new.approved_version)
+     is distinct from (old.coordinator_approved_by, old.coordinator_approved_at, old.pastor_approved_by, old.pastor_approved_at, old.approved_version)
      and new.status = old.status then
     raise exception 'Approvals are recorded automatically' using errcode = '42501';
   end if;
@@ -366,7 +444,8 @@ begin
     new.status := 'awaiting_coordinator';
     new.coordinator_approved_by := null; new.coordinator_approved_at := null;
     new.pastor_approved_by := null; new.pastor_approved_at := null;
-    new.send_now_at := null;
+    new.send_now_at := null; new.approved_version := null;
+    new.send_attempts := 0; new.send_error := null; new.send_started_at := null; new.send_live := null;
     return new;
   end if;
 
@@ -388,15 +467,33 @@ begin
     end if;
     new.coordinator_approved_by := null; new.coordinator_approved_at := null;
     new.pastor_approved_by := null; new.pastor_approved_at := null;
+    new.approved_version := null;
   elsif new.status = 'awaiting_pastor' then
     if old.status <> 'awaiting_coordinator' or not app.has_role('gsquad_coordinator') then
       raise exception 'The G-Squad Coordinator approves first' using errcode = '42501';
+    end if;
+    -- SECURITY REVIEW 18 (Y01): the Coordinator approves the version they were shown.
+    v_version := app.newsletter_content_version(new.id);
+    if new.approved_version is distinct from v_version then
+      raise exception 'The issue has changed since you opened it. Look at it again, then approve' using errcode = '40001';
     end if;
     new.coordinator_approved_by := (select auth.uid()); new.coordinator_approved_at := now();
     new.pastor_approved_by := null; new.pastor_approved_at := null;   -- F10: cannot be pre-filled
   elsif new.status = 'approved' then
     if old.status <> 'awaiting_pastor' or not app.has_role('resident_pastor') then
       raise exception 'The Resident Pastor approves after the Coordinator' using errcode = '42501';
+    end if;
+    -- SECURITY REVIEW 18 (Y01, R17): the Resident Pastor approves the version they were shown,
+    -- and it must be the one the Coordinator approved. A team update, recognition or gathering
+    -- that arrived or changed in between would otherwise go out without the Coordinator's
+    -- approval (and, if it changed after the page was opened, without the Pastor's either).
+    v_version := app.newsletter_content_version(new.id);
+    if new.approved_version is distinct from v_version then
+      raise exception 'The issue has changed since you opened it. Look at it again, then approve' using errcode = '40001';
+    end if;
+    if old.approved_version is distinct from v_version then
+      raise exception 'The issue has changed since the G-Squad Coordinator approved it. Return it to the editors so it is approved again'
+        using errcode = '23514';
     end if;
     new.pastor_approved_by := (select auth.uid()); new.pastor_approved_at := now();
     -- F10: the Coordinator's approval record cannot be rewritten by the second approver.
@@ -407,9 +504,10 @@ begin
     end if;
     new.coordinator_approved_by := null; new.coordinator_approved_at := null;
     new.pastor_approved_by := null; new.pastor_approved_at := null;
+    new.approved_version := null;
   end if;
-  -- A fresh approval round starts with a clean sending record.
-  new.send_attempts := 0; new.send_error := null; new.send_started_at := null;
+  -- A fresh approval round starts with a clean sending record (and no fixed mode, Y02).
+  new.send_attempts := 0; new.send_error := null; new.send_started_at := null; new.send_live := null;
   return new;
 end $$;
 revoke all on function app.issue_guard() from public, anon, authenticated;
@@ -457,8 +555,16 @@ begin
     insert into public.newsletter_snapshots (issue_id, church_id, content, taken_by)
     values (new.id, new.church_id, app.newsletter_content(new.id, 'snapshot'), (select auth.uid()))
     on conflict (issue_id) do update set content = excluded.content, taken_at = now(), taken_by = excluded.taken_by;
-  elsif new.status not in ('approved', 'sent') then
+  elsif new.status = 'sent' then
+    -- SECURITY REVIEW 18 (Y09): once sent the snapshot has no use, but it held person ids,
+    -- names and birthdays with no end date, outside the subject access export and anonymising.
     delete from public.newsletter_snapshots where issue_id = new.id;
+  else
+    delete from public.newsletter_snapshots where issue_id = new.id;
+    -- SECURITY REVIEW 18 (Y02): leaving approval is only possible before any member has it
+    -- (issue_guard), so only test-list sends can exist: forget them, so the test list gets the
+    -- issue again once it is re-approved instead of being skipped as "already received".
+    delete from public.newsletter_deliveries where issue_id = new.id and test_address is not null;
   end if;
   return null;
 end $$;
@@ -474,6 +580,31 @@ create trigger issue_snapshot after update on public.newsletter_issues
 -- Resident Pastor, Coordinator or Operations Lead. The test list follows the "other
 -- settings" rule (Operations Lead or Coordinator).
 -- -------------------------------------------------------------------------------------
+-- SECURITY REVIEW 18 (Y04): is this the sign-in address of an active leader account of the
+-- church? The test list is for leaders' own inboxes; it was any address at all, so the
+-- Coordinator or Operations Lead could have members' names, birthdays and recognitions sent
+-- (marked TEST) to anyone, ten times a day per issue, with only the count logged.
+create or replace function app.is_leader_email(p_church uuid, p_email text) returns boolean
+language sql stable security definer set search_path = ''
+as $$
+  select exists (select 1 from public.app_users u join auth.users au on au.id = u.id
+                 where u.church_id = p_church and u.is_active and lower(au.email) = lower(p_email))
+$$;
+revoke all on function app.is_leader_email(uuid, text) from public, anon, authenticated;
+grant execute on function app.is_leader_email(uuid, text) to service_role;
+
+-- The test list as it may be used now: only addresses that are still leaders' sign-in
+-- addresses (an account switched off, or an address changed, drops out).
+create or replace function app.newsletter_test_list(p_church uuid) returns text[]
+language sql stable security definer set search_path = ''
+as $$
+  select coalesce(array_agg(t.addr order by t.addr), '{}')
+  from public.church_settings s, unnest(s.newsletter_test_recipients) t(addr)
+  where s.church_id = p_church and app.is_leader_email(p_church, t.addr)
+$$;
+revoke all on function app.newsletter_test_list(uuid) from public, anon, authenticated;
+grant execute on function app.newsletter_test_list(uuid) to service_role;
+
 create or replace function app.church_settings_guard() returns trigger
 language plpgsql security definer set search_path = ''
 as $$
@@ -499,6 +630,11 @@ begin
          <> (to_jsonb(old) - array['purpose_heads_read_pastoral','newsletter_live','updated_at']) then
     raise exception 'Only the Operations Lead or G-Squad Coordinator changes the other settings' using errcode = '42501';
   end if;
+  -- SECURITY REVIEW 18 (Y04): leaders' own sign-in addresses only.
+  if new.newsletter_test_recipients is distinct from old.newsletter_test_recipients
+     and exists (select 1 from unnest(new.newsletter_test_recipients) t(addr) where not app.is_leader_email(new.church_id, t.addr)) then
+    raise exception 'Test addresses must be the sign-in addresses of leaders in the app' using errcode = '23514';
+  end if;
   return new;
 end $$;
 revoke all on function app.church_settings_guard() from public, anon, authenticated;
@@ -511,6 +647,12 @@ grant execute on function app.church_settings_guard() to service_role;
 -- Due issues, claimed for 15 minutes so overlapping runs never send the same issue. Due:
 -- approved, and either "Send now" was pressed or it is past the send hour (London) on its
 -- send date. Gives up after 5 attempts (the app shows the last error).
+-- SECURITY REVIEW 18 (Y02): the first claim fixes the issue's mode (members or test list)
+-- from the live switch, and returns that mode, not the switch: the email's TEST marking, the
+-- recipients and the "sent" record all follow one mode for the whole issue. An issue already
+-- going to members is not claimed while the switch is off ("Stop sending to members" stops it).
+-- SECURITY REVIEW 18 (Y03): recipients handed to an earlier run that never confirmed them are
+-- released, so this run sends them again (under the same idempotency key, see the table).
 create or replace function public.newsletter_claim_due()
 returns table (issue_id uuid, church_id uuid, live boolean)
 language plpgsql security definer set search_path = ''
@@ -529,13 +671,21 @@ begin
                  and now() >= ((i.send_on::timestamp + make_interval(hours => s.newsletter_send_hour)) at time zone 'Europe/London')))
         and (i.send_started_at is null or i.send_started_at < now() - interval '15 minutes')
         and i.send_attempts < 5
+        and not (coalesce(i.send_live, false) and not s.newsletter_live)
       for update of i skip locked
+    ), claimed as (
+      update public.newsletter_issues i
+         set send_started_at = now(), send_attempts = i.send_attempts + 1,
+             send_live = coalesce(i.send_live, s.newsletter_live)
+        from due, public.church_settings s
+       where i.id = due.id and s.church_id = i.church_id
+      returning i.id, i.church_id, i.send_live
+    ), released as (
+      delete from public.newsletter_deliveries d using claimed c
+       where d.issue_id = c.id and d.provider_id is null
+      returning d.id
     )
-    update public.newsletter_issues i
-       set send_started_at = now(), send_attempts = i.send_attempts + 1
-      from due, public.church_settings s
-     where i.id = due.id and s.church_id = i.church_id
-    returning i.id, i.church_id, s.newsletter_live;
+    select c.id, c.church_id, c.send_live from claimed c;
 end $$;
 revoke all on function public.newsletter_claim_due() from public, anon, authenticated;
 grant execute on function public.newsletter_claim_due() to service_role;
@@ -594,14 +744,17 @@ grant execute on function public.newsletter_send_content(uuid) to service_role;
 -- links (live) or none (test list). Only a SHA-256 hash of each link is stored (migration 5);
 -- the raw tokens go only to the Edge Function, which puts them in that person's email.
 -- Links last 60 days. The main email address is used (decision of 25 Oct 2026).
+-- SECURITY REVIEW 18 (Y02): the issue's own mode decides, not the switch as it is now; a
+-- members' send stops here if the switch has been turned off. (Y03): each recipient returned
+-- is recorded at once as handed over (unconfirmed). (Y04): test addresses that are no longer
+-- leaders' sign-in addresses are skipped.
 create or replace function public.newsletter_next_recipients(p_issue uuid, p_limit integer default 50)
 returns table (person_id uuid, email text, first_name text, links jsonb)
 language plpgsql security definer set search_path = ''
 as $$
 declare
   i public.newsletter_issues;
-  v_live boolean;
-  v_tests text[];
+  v_live_now boolean;
   v_gatherings uuid[];
   r record;
   v_links jsonb;
@@ -614,19 +767,27 @@ begin
     raise exception 'Not allowed' using errcode = '42501';
   end if;
   select * into i from public.newsletter_issues where id = p_issue;
-  if not found or i.status <> 'approved' or i.send_started_at is null then
+  if not found or i.status <> 'approved' or i.send_started_at is null or i.send_live is null then
     raise exception 'This issue is not being sent' using errcode = '23514';
   end if;
-  select s.newsletter_live, s.newsletter_test_recipients into v_live, v_tests
-  from public.church_settings s where s.church_id = i.church_id;
+  select s.newsletter_live into v_live_now from public.church_settings s where s.church_id = i.church_id;
 
-  if not coalesce(v_live, false) then
-    return query
-      select null::uuid, t.addr, null::text, null::jsonb
-      from unnest(v_tests) as t(addr)
+  if not i.send_live then
+    for r in
+      select t.addr from unnest(app.newsletter_test_list(i.church_id)) as t(addr)
       where not exists (select 1 from public.newsletter_deliveries d where d.issue_id = p_issue and d.test_address = t.addr)
-      limit v_limit;
+      order by t.addr
+      limit v_limit
+    loop
+      insert into public.newsletter_deliveries (church_id, issue_id, test_address) values (i.church_id, i.id, r.addr);
+      person_id := null; email := r.addr; first_name := null; links := null;
+      return next;
+    end loop;
     return;
+  end if;
+
+  if not coalesce(v_live_now, false) then
+    raise exception 'Sending to members was switched off' using errcode = '23514';
   end if;
 
   select coalesce(array_agg((g2 ->> 'id')::uuid), '{}') into v_gatherings
@@ -640,6 +801,7 @@ begin
     order by p.id
     limit v_limit
   loop
+    insert into public.newsletter_deliveries (church_id, issue_id, person_id) values (i.church_id, i.id, r.id);
     v_links := '{}'::jsonb;
     -- 64 hex characters from two random UUIDs (244 random bits): matches redeem_email_link's pattern.
     v_tok := replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '');
@@ -665,7 +827,9 @@ end $$;
 revoke all on function public.newsletter_next_recipients(uuid, integer) from public, anon, authenticated;
 grant execute on function public.newsletter_next_recipients(uuid, integer) to service_role;
 
--- Record the emails the service accepted: [{ "person_id": … | "test_address": …, "provider_id": … }].
+-- Confirm the emails the service accepted: [{ "person_id": … | "test_address": …, "provider_id": … }].
+-- SECURITY REVIEW 18 (Y03): confirms rows handed over by newsletter_next_recipients only, so a
+-- confirmation can never add someone who was not handed over.
 create or replace function public.newsletter_record_deliveries(p_issue uuid, p_rows jsonb) returns integer
 language plpgsql security definer set search_path = ''
 as $$
@@ -683,58 +847,157 @@ begin
   if jsonb_typeof(p_rows) <> 'array' or jsonb_array_length(p_rows) > 100 then
     raise exception 'Give up to 100 deliveries' using errcode = '22023';
   end if;
-  insert into public.newsletter_deliveries (church_id, issue_id, person_id, test_address, provider_id)
-  select i.church_id, i.id, (x ->> 'person_id')::uuid, nullif(x ->> 'test_address', ''), left(x ->> 'provider_id', 200)
-  from jsonb_array_elements(p_rows) x
-  on conflict do nothing;
+  update public.newsletter_deliveries d
+     set provider_id = coalesce(nullif(left(x ->> 'provider_id', 200), ''), 'accepted'), sent_at = now()
+    from jsonb_array_elements(p_rows) x
+   where d.issue_id = i.id and d.provider_id is null
+     and ((x ->> 'person_id') is not null and d.person_id = (x ->> 'person_id')::uuid
+          or (x ->> 'test_address') is not null and d.test_address = x ->> 'test_address');
   get diagnostics v_count = row_count;
   return v_count;
 end $$;
 revoke all on function public.newsletter_record_deliveries(uuid, jsonb) from public, anon, authenticated;
 grant execute on function public.newsletter_record_deliveries(uuid, jsonb) to service_role;
 
+-- SECURITY REVIEW 18 (Y03): the email service refused a batch outright, so it was not sent:
+-- hand those recipients back so a later run sends them. Unconfirmed rows only.
+create or replace function public.newsletter_release_deliveries(p_issue uuid, p_rows jsonb) returns integer
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  v_count int;
+begin
+  if not app.is_system() then
+    raise exception 'Not allowed' using errcode = '42501';
+  end if;
+  if jsonb_typeof(p_rows) <> 'array' or jsonb_array_length(p_rows) > 100 then
+    raise exception 'Give up to 100 deliveries' using errcode = '22023';
+  end if;
+  delete from public.newsletter_deliveries d
+   using jsonb_array_elements(p_rows) x
+   where d.issue_id = p_issue and d.provider_id is null
+     and ((x ->> 'person_id') is not null and d.person_id = (x ->> 'person_id')::uuid
+          or (x ->> 'test_address') is not null and d.test_address = x ->> 'test_address');
+  get diagnostics v_count = row_count;
+  return v_count;
+end $$;
+revoke all on function public.newsletter_release_deliveries(uuid, jsonb) from public, anon, authenticated;
+grant execute on function public.newsletter_release_deliveries(uuid, jsonb) to service_role;
+
 -- Finish a run: with no error and nobody left, the issue is sent; otherwise the error is kept
 -- and the claim released, so the next run (15 minutes later) carries on where this one stopped.
+-- SECURITY REVIEW 18 (Y02): "nobody left" is worked out in the issue's own mode. (Y07): an
+-- issue nobody received (an empty test list, or no subscribed members) is not marked sent,
+-- because a sent issue is final and could never go out afterwards.
 create or replace function public.newsletter_finish(p_issue uuid, p_error text default null) returns text
 language plpgsql security definer set search_path = ''
 as $$
 declare
   i public.newsletter_issues;
   v_live boolean;
+  v_live_now boolean;
   v_left int;
+  v_done int;
+  v_error text := p_error;
 begin
   if not app.is_system() then
     raise exception 'Not allowed' using errcode = '42501';
   end if;
   select * into i from public.newsletter_issues where id = p_issue;
   if not found or i.status <> 'approved' then return 'not_approved'; end if;
-  select s.newsletter_live into v_live from public.church_settings s where s.church_id = i.church_id;
+  v_live := coalesce(i.send_live, false);
+  select s.newsletter_live into v_live_now from public.church_settings s where s.church_id = i.church_id;
 
-  if coalesce(v_live, false) then
+  if v_live then
     select count(*) into v_left from public.people p
     where p.church_id = i.church_id and p.status = 'active' and p.newsletter_subscribed
       and p.email is not null and p.anonymised_at is null
-      and not exists (select 1 from public.newsletter_deliveries d where d.issue_id = p_issue and d.person_id = p.id);
+      and not exists (select 1 from public.newsletter_deliveries d
+                      where d.issue_id = p_issue and d.person_id = p.id and d.provider_id is not null);
   else
     select count(*) into v_left
-    from unnest((select s.newsletter_test_recipients from public.church_settings s where s.church_id = i.church_id)) t(addr)
-    where not exists (select 1 from public.newsletter_deliveries d where d.issue_id = p_issue and d.test_address = t.addr);
+    from unnest(app.newsletter_test_list(i.church_id)) t(addr)
+    where not exists (select 1 from public.newsletter_deliveries d
+                      where d.issue_id = p_issue and d.test_address = t.addr and d.provider_id is not null);
+  end if;
+  select count(*) into v_done from public.newsletter_deliveries d where d.issue_id = p_issue and d.provider_id is not null;
+
+  if v_live and not coalesce(v_live_now, false) then
+    v_error := 'Sending to members was switched off';
+  elsif v_error is null and v_left = 0 and v_done = 0 then
+    v_error := case when v_live then 'No members are subscribed with an email address'
+                    else 'There are no test addresses that belong to leaders' end;
   end if;
 
-  if p_error is null and v_left = 0 then
+  if v_error is null and v_left = 0 then
     update public.newsletter_issues
-       set status = 'sent', sent_as_test = not coalesce(v_live, false), send_started_at = null, send_error = null
+       set status = 'sent', sent_as_test = not v_live, send_started_at = null, send_error = null
      where id = p_issue;
     return 'sent';
   end if;
   update public.newsletter_issues
      set send_started_at = null,
-         send_error = left(coalesce(p_error, v_left || ' still to send'), 500)
+         send_error = left(coalesce(v_error, v_left || ' still to send'), 500)
    where id = p_issue;
   return 'retry';
 end $$;
 revoke all on function public.newsletter_finish(uuid, text) from public, anon, authenticated;
 grant execute on function public.newsletter_finish(uuid, text) to service_role;
+
+-- SECURITY REVIEW 18 (Y12): links stayed usable for 60 days whatever happened meanwhile, so an
+-- RSVP or reaction was recorded for someone who had left the church (status no longer active),
+-- and an RSVP for a gathering that had been cancelled or postponed. Unsubscribing always works.
+create or replace function app.email_link_usable(t public.email_link_tokens) returns boolean
+language sql stable security definer set search_path = ''
+as $$
+  select t.purpose = 'unsubscribe'
+      or (exists (select 1 from public.people p
+                  where p.id = t.person_id and p.status = 'active' and p.anonymised_at is null)
+          and (t.purpose <> 'rsvp'
+               or exists (select 1 from public.projects pr
+                          where pr.id = t.target_project and pr.status in ('approved', 'in_progress'))))
+$$;
+revoke all on function app.email_link_usable(public.email_link_tokens) from public, anon, authenticated;
+grant execute on function app.email_link_usable(public.email_link_tokens) to service_role;
+
+-- redeem_email_link re-created whole from migration 6 with the check above (Y12).
+create or replace function public.redeem_email_link(p_token text)
+returns text
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  t public.email_link_tokens%rowtype;
+begin
+  -- SECURITY REVIEW FIX F13: defence in depth on top of the EXECUTE grant: refuse any caller
+  -- with a signed-in or anonymous API identity, so only the service role / jobs can redeem.
+  if not app.is_system() then
+    raise exception 'Not allowed' using errcode = '42501';
+  end if;
+  -- Tokens are URL-safe random strings; reject anything else before hashing.
+  if p_token is null or length(p_token) < 32 or length(p_token) > 256 or p_token !~ '^[A-Za-z0-9_-]+$' then
+    return 'invalid';
+  end if;
+  select * into t from public.email_link_tokens
+  where token_hash = pg_catalog.sha256(pg_catalog.convert_to(p_token, 'UTF8'));   -- core SHA-256, no extension needed
+  if not found or t.expires_at < now() or not app.email_link_usable(t) then   -- SECURITY REVIEW 18 (Y12)
+    return 'invalid';
+  end if;
+  if t.purpose = 'rsvp' then
+    insert into public.newsletter_rsvps (church_id, project_id, person_id, issue_id)
+    values (t.church_id, t.target_project, t.person_id, t.issue_id)
+    on conflict do nothing;
+  elsif t.purpose = 'react' then
+    insert into public.newsletter_reactions (church_id, issue_id, person_id, reaction)
+    values (t.church_id, t.issue_id, t.person_id, t.reaction)
+    on conflict do nothing;
+  else
+    update public.people set newsletter_subscribed = false where id = t.person_id;
+  end if;
+  update public.email_link_tokens set used_at = coalesce(used_at, now()) where token_hash = t.token_hash;
+  return t.purpose::text;
+end $$;
+revoke all on function public.redeem_email_link(text) from public, anon, authenticated;
+grant execute on function public.redeem_email_link(text) to service_role;
 
 -- What an email link is for, without using it: the app's confirmation page shows this before
 -- the member presses Confirm (so a mail scanner that opens links changes nothing).
@@ -752,7 +1015,7 @@ begin
   end if;
   select * into t from public.email_link_tokens
   where token_hash = pg_catalog.sha256(pg_catalog.convert_to(p_token, 'UTF8'));
-  if not found or t.expires_at < now() then
+  if not found or t.expires_at < now() or not app.email_link_usable(t) then
     return jsonb_build_object('purpose', 'invalid');
   end if;
   return jsonb_build_object(
@@ -784,9 +1047,10 @@ begin
       where a.action = 'newsletter_test_send' and a.record_id = p_issue and a.at > now() - interval '1 day') >= 10 then
     raise exception 'Ten test emails have been sent for this issue today. Try again tomorrow' using errcode = '54000';
   end if;
-  select s.newsletter_test_recipients into v_list from public.church_settings s where s.church_id = app.current_church_id();
+  -- SECURITY REVIEW 18 (Y04): leaders' sign-in addresses only, checked again at sending time.
+  v_list := app.newsletter_test_list(app.current_church_id());
   if coalesce(cardinality(v_list), 0) = 0 then
-    raise exception 'Add test addresses in the newsletter settings first' using errcode = '23514';
+    raise exception 'Add test addresses (leaders'' own sign-in addresses) in the newsletter settings first' using errcode = '23514';
   end if;
   perform app.audit('newsletter_test_send', 'newsletter_issues', p_issue, jsonb_build_object('recipients', cardinality(v_list)));
   return v_list;
@@ -809,6 +1073,7 @@ begin
   return query
     select 'delivered'::text, 'Received'::text, count(*)::int
     from public.newsletter_deliveries d where d.issue_id = p_issue
+      and d.provider_id is not null   -- SECURITY REVIEW 18 (Y03): accepted by the email service
     union all
     select 'rsvp'::text, pr.name, count(r.person_id)::int
     from public.newsletter_rsvps r join public.projects pr on pr.id = r.project_id
@@ -864,7 +1129,7 @@ begin
     -- Migration 27: which issues were emailed to them, and when.
     'newsletter_deliveries', (select coalesce(jsonb_agg(jsonb_build_object('issue_month', i.issue_month, 'sent_at', d.sent_at)), '[]')
                               from public.newsletter_deliveries d join public.newsletter_issues i on i.id = d.issue_id
-                              where d.person_id = p_person),
+                              where d.person_id = p_person and d.provider_id is not null),   -- Y03: confirmed only
     'checkin_flags',    (select coalesce(jsonb_agg(to_jsonb(cf)), '[]') from public.checkin_flags cf where cf.person_id = p_person),
     'community_roles',  (select coalesce(jsonb_agg(to_jsonb(c)), '[]') from public.community_support_roles c where c.person_id = p_person)
   ) into v;

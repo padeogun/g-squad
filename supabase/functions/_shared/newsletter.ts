@@ -52,6 +52,8 @@ export interface Item {
 }
 export interface IssueContent {
   issue_id?: string;
+  // SECURITY REVIEW 18 (Y01): the content's fingerprint (app view only); approvals send it back.
+  version?: string;
   issue_month: string; // "2026-11-01"
   headline: string | null;
   standfirst: string | null;
@@ -154,7 +156,11 @@ export function subjectFor(c: IssueContent, test = false): string {
   const base = `The Greatness Brief · ${monthLabel(c.issue_month)}`;
   const s = c.headline ? `${base}: ${c.headline}` : base;
   // Subjects are a single line: no line breaks from the headline.
-  return (test ? '[TEST] ' : '') + s.replace(/[\r\n]+/g, ' ').slice(0, 200);
+  // SECURITY REVIEW 18 (Y11): every control character (C0 and C1, including NEL), and the
+  // Unicode line and paragraph separators, not just CR and LF: some mail software treats
+  // those as line ends too, which would let a headline start a new header line.
+  // oxlint-disable-next-line no-control-regex -- matching control characters is the point here.
+  return (test ? '[TEST] ' : '') + s.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').trim().slice(0, 200);
 }
 
 // ---------- HTML ----------
@@ -362,8 +368,44 @@ export const BATCH_MAX = 100;
 
 // A key that is the same if the same batch is sent again (after a failure part-way), so the
 // email service sends it only once. Recipients come back in a stable order (by person id).
-export function batchKey(issueId: string, recipientIds: string[]): string {
-  return `gsquad-${issueId}-${recipientIds[0] ?? 'none'}-${recipientIds.length}`.slice(0, 250);
+// SECURITY REVIEW 18 (Y03): the key was the first recipient and the batch size only, so two
+// different batches (someone subscribing or leaving in between) shared a key; the email service
+// then refused the second one as a repeat (409) and those members never got the issue. The key
+// is now a SHA-256 of every recipient in the batch, in any order.
+export async function batchKey(issueId: string, recipientIds: string[]): Promise<string> {
+  const data = new TextEncoder().encode([...recipientIds].sort().join('\n'));
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+  const hex = Array.from(hash, (b) => b.toString(16).padStart(2, '0')).join('');
+  return `gsquad-${issueId}-${hex}`;
+}
+
+// SECURITY REVIEW 18 (Y10): reads a request body up to `max` bytes and gives up beyond that,
+// instead of reading the whole body into memory first (both functions are open to anyone).
+// Returns null when the body is too large.
+export async function readLimited(req: Request, max: number): Promise<string | null> {
+  const declared = Number(req.headers.get('Content-Length') ?? '0');
+  if (Number.isFinite(declared) && declared > max) return null;
+  if (!req.body) return '';
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  const all = new Uint8Array(size);
+  let at = 0;
+  for (const c of chunks) {
+    all.set(c, at);
+    at += c.byteLength;
+  }
+  return new TextDecoder().decode(all);
 }
 
 // The one-click unsubscribe headers (RFC 8058) for a member's email.

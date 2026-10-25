@@ -4,7 +4,7 @@
 // using it, and acts only when the member presses Confirm, so a mail scanner that opens links
 // changes nothing. "test" is the link in test emails and previews.
 // -------------------------------------------------------------------------------------
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { TEC, tecMark } from '../design-system';
 import { supabase } from '../lib/supabase';
@@ -22,6 +22,11 @@ export function EmailLink() {
   const { token = '' } = useParams();
   const [peek, setPeek] = useState<Peek | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'done' | 'error'>(token === 'test' ? 'ready' : 'loading');
+  // SECURITY REVIEW 18 (Y13): the button disappears when pressed, so focus moves to the answer.
+  const answer = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (state === 'done' || state === 'error') answer.current?.focus();
+  }, [state]);
 
   useEffect(() => {
     if (token === 'test') return;
@@ -53,7 +58,11 @@ export function EmailLink() {
     <main className="app-link-page">
       <div>
         <img src={tecMark} alt="The Elevation Church" width={48} height={48} />
-        <Card title="The Greatness Brief">
+        {/* SECURITY REVIEW 18 (Y13): the page had no main heading, and its changes (loading, the
+            answer) were not announced: the card body is now a polite live region. */}
+        <h1 className="app-link-title">The Greatness Brief</h1>
+        <Card title="Your link">
+          <div ref={answer} tabIndex={-1} aria-live="polite" className="app-link-body">
           {token === 'test' && <Notice tone="info">This link came from a test email or a preview, so it does nothing.</Notice>}
           {state === 'loading' && <p style={{ margin: 0 }}>One moment…</p>}
           {state === 'error' && <Notice tone="danger">Something went wrong. Please try the link again later.</Notice>}
@@ -70,6 +79,7 @@ export function EmailLink() {
             </>
           )}
           {state === 'done' && words && <Notice tone="ok">{words.done}</Notice>}
+          </div>
         </Card>
       </div>
     </main>

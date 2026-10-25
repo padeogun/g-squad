@@ -159,7 +159,7 @@ export function approvalSteps(status: IssueStatus): { label: string; note: strin
 }
 
 // What this leader may do with the issue now. A courtesy only: the database refuses the rest.
-export function issueActions(issue: Pick<Issue, 'status' | 'send_started_at'>, roles: AppRole[], sendingNow: boolean) {
+export function issueActions(issue: Pick<Issue, 'status' | 'send_started_at' | 'send_now_at' | 'send_attempts'>, roles: AppRole[], sendingNow: boolean) {
   const has = (...r: AppRole[]) => r.some((x) => roles.includes(x));
   const open = issue.status !== 'sent' && !sendingNow;
   return {
@@ -168,7 +168,10 @@ export function issueActions(issue: Pick<Issue, 'status' | 'send_started_at'>, r
     coordinatorApprove: open && issue.status === 'awaiting_coordinator' && has('gsquad_coordinator'),
     pastorApprove: open && issue.status === 'awaiting_pastor' && has('resident_pastor'),
     sendBack: open && ['awaiting_coordinator', 'awaiting_pastor', 'approved'].includes(issue.status) && has('gsquad_coordinator', 'resident_pastor', ...EDITOR_ROLES),
-    sendNow: open && issue.status === 'approved' && has('gsquad_coordinator', 'resident_pastor'),
+    sendNow: open && issue.status === 'approved' && !issue.send_now_at && has('gsquad_coordinator', 'resident_pastor'),
+    // SECURITY REVIEW 18 (Y08): after 5 failed attempts the Coordinator or Resident Pastor may
+    // try again (the database allows it then, and only then).
+    retry: open && issue.status === 'approved' && issue.send_attempts >= 5 && has('gsquad_coordinator', 'resident_pastor'),
     test: issue.status !== 'sent' && has(...READER_ROLES),
   };
 }

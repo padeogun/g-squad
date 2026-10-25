@@ -18,7 +18,7 @@
 // -------------------------------------------------------------------------------------
 import { createClient } from 'npm:@supabase/supabase-js@2.118.0';
 import { corsHeaders, defaultOrigins, parseOrigins } from '../invite-leader/logic.ts';
-import { isToken } from '../_shared/newsletter.ts';
+import { isToken, readLimited } from '../_shared/newsletter.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -38,8 +38,9 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
   if (req.method !== 'POST') return json(405, { error: 'Method not allowed' }, cors);
 
-  const raw = await req.text();
-  if (raw.length > 1000) return json(413, { error: 'Request too large' }, cors);
+  // SECURITY REVIEW 18 (Y10): stop reading at the limit rather than after reading it all.
+  const raw = await readLimited(req, 1000);
+  if (raw === null) return json(413, { error: 'Request too large' }, cors);
 
   // One-click unsubscribe from an email program (no Origin header, form body).
   const url = new URL(req.url);

@@ -502,14 +502,14 @@ isOneToOne: false
                   ]
                 },"newsletter_issues": {
                   Row: {
-                    "church_id": string,"coordinator_approved_at": string | null,"coordinator_approved_by": string | null,"excluded": (string)[],"headline": string | null,"id": string,"issue_month": string,"pastor_approved_at": string | null,"pastor_approved_by": string | null,"pastor_name": string | null,"pastor_word": string | null,"project_id": string,"send_attempts": number,"send_error": string | null,"send_now_at": string | null,"send_on": string | null,"send_started_at": string | null,"sent_as_test": boolean,"sent_at": string | null,"standfirst": string | null,"status": Database["public"]['Enums']["issue_status"],"updated_at": string
+                    "approved_version": string | null,"church_id": string,"coordinator_approved_at": string | null,"coordinator_approved_by": string | null,"excluded": (string)[],"headline": string | null,"id": string,"issue_month": string,"pastor_approved_at": string | null,"pastor_approved_by": string | null,"pastor_name": string | null,"pastor_word": string | null,"project_id": string,"send_attempts": number,"send_error": string | null,"send_live": boolean | null,"send_now_at": string | null,"send_on": string | null,"send_started_at": string | null,"sent_as_test": boolean,"sent_at": string | null,"standfirst": string | null,"status": Database["public"]['Enums']["issue_status"],"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "church_id"?: string,"coordinator_approved_at"?: string | null,"coordinator_approved_by"?: string | null,"excluded"?: (string)[],"headline"?: string | null,"id"?: string,"issue_month": string,"pastor_approved_at"?: string | null,"pastor_approved_by"?: string | null,"pastor_name"?: string | null,"pastor_word"?: string | null,"project_id": string,"send_attempts"?: number,"send_error"?: string | null,"send_now_at"?: string | null,"send_on"?: string | null,"send_started_at"?: string | null,"sent_as_test"?: boolean,"sent_at"?: string | null,"standfirst"?: string | null,"status"?: Database["public"]['Enums']["issue_status"],"updated_at"?: string
+                    "approved_version"?: string | null,"church_id"?: string,"coordinator_approved_at"?: string | null,"coordinator_approved_by"?: string | null,"excluded"?: (string)[],"headline"?: string | null,"id"?: string,"issue_month": string,"pastor_approved_at"?: string | null,"pastor_approved_by"?: string | null,"pastor_name"?: string | null,"pastor_word"?: string | null,"project_id": string,"send_attempts"?: number,"send_error"?: string | null,"send_live"?: boolean | null,"send_now_at"?: string | null,"send_on"?: string | null,"send_started_at"?: string | null,"sent_as_test"?: boolean,"sent_at"?: string | null,"standfirst"?: string | null,"status"?: Database["public"]['Enums']["issue_status"],"updated_at"?: string
                   }
                   Update: {
-                    "church_id"?: string,"coordinator_approved_at"?: string | null,"coordinator_approved_by"?: string | null,"excluded"?: (string)[],"headline"?: string | null,"id"?: string,"issue_month"?: string,"pastor_approved_at"?: string | null,"pastor_approved_by"?: string | null,"pastor_name"?: string | null,"pastor_word"?: string | null,"project_id"?: string,"send_attempts"?: number,"send_error"?: string | null,"send_now_at"?: string | null,"send_on"?: string | null,"send_started_at"?: string | null,"sent_as_test"?: boolean,"sent_at"?: string | null,"standfirst"?: string | null,"status"?: Database["public"]['Enums']["issue_status"],"updated_at"?: string
+                    "approved_version"?: string | null,"church_id"?: string,"coordinator_approved_at"?: string | null,"coordinator_approved_by"?: string | null,"excluded"?: (string)[],"headline"?: string | null,"id"?: string,"issue_month"?: string,"pastor_approved_at"?: string | null,"pastor_approved_by"?: string | null,"pastor_name"?: string | null,"pastor_word"?: string | null,"project_id"?: string,"send_attempts"?: number,"send_error"?: string | null,"send_live"?: boolean | null,"send_now_at"?: string | null,"send_on"?: string | null,"send_started_at"?: string | null,"sent_as_test"?: boolean,"sent_at"?: string | null,"standfirst"?: string | null,"status"?: Database["public"]['Enums']["issue_status"],"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -1483,6 +1483,9 @@ isOneToOne: false
             }[]
                            },
 "newsletter_record_deliveries":
+{ Args: { "p_issue": string,"p_rows": Json }; Returns: number
+                           },
+"newsletter_release_deliveries":
 { Args: { "p_issue": string,"p_rows": Json }; Returns: number
                            },
 "newsletter_send_content":

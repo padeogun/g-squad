@@ -23,7 +23,7 @@ describe('approvalSteps', () => {
 });
 
 describe('issueActions', () => {
-  const draft = { status: 'draft' as const, send_started_at: null };
+  const draft = { status: 'draft' as const, send_started_at: null, send_now_at: null, send_attempts: 0 };
   it('lets editors write and submit, not approve', () => {
     const a = issueActions(draft, ['newsletter_editor'], false);
     expect(a.edit && a.submit).toBe(true);
@@ -35,6 +35,13 @@ describe('issueActions', () => {
     expect(issueActions({ ...draft, status: 'awaiting_pastor' }, ['resident_pastor'], false).pastorApprove).toBe(true);
     expect(issueActions({ ...draft, status: 'approved' }, ['gsquad_coordinator'], false).sendNow).toBe(true);
     expect(issueActions({ ...draft, status: 'approved' }, ['newsletter_editor'], false).sendNow).toBe(false);
+  });
+  // SECURITY REVIEW 18 (Y08): "Try sending again" once sending has given up, for the two roles.
+  it('offers Try again only after 5 failed attempts, to the Coordinator and Resident Pastor', () => {
+    const pressed = { ...draft, status: 'approved' as const, send_now_at: '2026-11-01T09:00:00Z' };
+    expect(issueActions({ ...pressed, send_attempts: 2 }, ['gsquad_coordinator'], false)).toMatchObject({ sendNow: false, retry: false });
+    expect(issueActions({ ...pressed, send_attempts: 5 }, ['resident_pastor'], false).retry).toBe(true);
+    expect(issueActions({ ...pressed, send_attempts: 5 }, ['newsletter_editor'], false).retry).toBe(false);
   });
   it('offers nothing to change while sending or once sent', () => {
     const a = issueActions({ ...draft, status: 'approved' }, ['newsletter_editor', 'gsquad_coordinator'], true);

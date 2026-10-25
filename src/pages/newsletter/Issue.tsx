@@ -66,6 +66,8 @@ export function Issue() {
       }
     },
     onSuccess: () => refresh(id),
+    // The content may have changed under the approver (Y01): show them the current version.
+    onError: () => refresh(id),
   });
   const test = useMutation({
     mutationFn: () => callSender({ action: 'test', issue_id: id! }),
@@ -77,7 +79,9 @@ export function Issue() {
   if (!i || !can) return <NotFound />;
 
   const live = settings.data?.newsletter_live ?? false;
-  const audience = live
+  // SECURITY REVIEW 18 (Y02): once sending has started the issue keeps its own mode.
+  const mode = i.send_live ?? live;
+  const audience = mode
     ? `Goes to ${recipients.data ?? '…'} G-Squad members`
     : `Test list only (${settings.data?.newsletter_test_recipients.length ?? 0} addresses) until the DPIA is signed`;
 
@@ -114,26 +118,36 @@ export function Issue() {
             Send to G-Squad Coordinator
           </Button>
         )}
+        {/* SECURITY REVIEW 18 (Y01): an approval names the version of the content on this page;
+            the database refuses it if the content has changed since (the page then reloads it). */}
         {can.coordinatorApprove && (
-          <Button variant="primary" disabled={move.isPending} onClick={() => move.mutate({ status: 'awaiting_pastor' })}>
+          <Button
+            variant="primary"
+            disabled={move.isPending || !content.data?.version}
+            onClick={() => move.mutate({ status: 'awaiting_pastor', approved_version: content.data!.version })}
+          >
             Approve and send to the Resident Pastor
           </Button>
         )}
         {can.pastorApprove && (
-          <Button variant="primary" disabled={move.isPending} onClick={() => move.mutate({ status: 'approved' })}>
+          <Button
+            variant="primary"
+            disabled={move.isPending || !content.data?.version}
+            onClick={() => move.mutate({ status: 'approved', approved_version: content.data!.version })}
+          >
             Give final approval
           </Button>
         )}
-        {can.sendNow && !i.send_now_at && (
+        {(can.sendNow || can.retry) && (
           <Button
             variant="primary"
             disabled={move.isPending}
             onClick={() => {
-              if (window.confirm(live ? 'Send this issue to G-Squad members now?' : 'Send this issue to the test list now?'))
+              if (window.confirm(mode ? 'Send this issue to G-Squad members now?' : 'Send this issue to the test list now?'))
                 move.mutate({ send_now_at: new Date().toISOString() });
             }}
           >
-            Send now
+            {can.retry ? 'Try sending again' : 'Send now'}
           </Button>
         )}
       </div>
@@ -143,7 +157,12 @@ export function Issue() {
       {sendingNow && <Notice tone="info">This issue is being sent. It cannot be changed now.</Notice>}
       {i.status === 'approved' && i.send_error && !sendingNow && (
         <Notice tone="warn" title="Not finished sending">
-          {i.send_error}. It will try again within 15 minutes{i.send_attempts >= 5 ? '; after 5 tries it has stopped: ask the Operations Lead' : ''}.
+          {i.send_error}.{' '}
+          {i.send_attempts >= 5
+            ? 'After 5 tries it has stopped. The G-Squad Coordinator or Resident Pastor can try sending again.'
+            : i.send_live && !live
+              ? 'Sending to members was switched off part-way; it carries on only if the Resident Pastor switches it on again.'
+              : 'It will try again within 15 minutes.'}
         </Notice>
       )}
 

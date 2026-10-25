@@ -90,9 +90,9 @@ Units, purposes and people come from importing the G-Squad 2027 Volunteer Model 
 | `newsletter_recipient_count()` | Same | A count, never addresses |
 | `newsletter_issue_stats(issue)` | Same | How many received it, RSVP and reaction counts |
 | `start_newsletter_issue(month)` | Editors, G-Squad Coordinator, Operations Lead | Starts an issue, its project and the team-update requests |
-| `newsletter_issue_content(issue)` | Editors, Coordinator, Resident Pastor, Operations Lead | The issue's content as the email shows it, with left-out items marked |
+| `newsletter_issue_content(issue)` | Editors, Coordinator, Resident Pastor, Operations Lead | The issue's content as the email shows it, with left-out items marked, and its `version`, which each approval must send back (review 18, Y01) |
 | `newsletter_test_send(issue)` | Same | Checks, logs and limits (10 a day) a test send; returns the test list |
-| `newsletter_claim_due()`, `newsletter_send_content(issue)`, `newsletter_next_recipients(issue, n)`, `newsletter_record_deliveries(issue, rows)`, `newsletter_finish(issue, error)`, `peek_email_link(token)` | **Service role only** (the send-newsletter and email-link Edge Functions) | Sending an approved, due issue once; recipients with fresh personal links; what a link is for |
+| `newsletter_claim_due()`, `newsletter_send_content(issue)`, `newsletter_next_recipients(issue, n)`, `newsletter_record_deliveries(issue, rows)`, `newsletter_release_deliveries(issue, rows)`, `newsletter_finish(issue, error)`, `peek_email_link(token)` | **Service role only** (the send-newsletter and email-link Edge Functions) | Sending an approved, due issue once; recipients with fresh personal links; what a link is for |
 | `log_export(scope, rows)` | Anyone exporting | Logs an export |
 | `export_person(person)` | Operations Lead, Resident Pastor | Everything held on a person (subject access request) |
 | `anonymise_person(person)` | Operations Lead | Erasure on request |

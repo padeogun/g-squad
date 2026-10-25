@@ -6,6 +6,7 @@ import {
   esc,
   isToken,
   linkUrl,
+  readLimited,
   monthLabel,
   renderHtml,
   renderText,
@@ -45,6 +46,15 @@ describe('words', () => {
   });
   it('keeps the subject on one line', () => {
     expect(subjectFor(content({ headline: 'A\r\nBcc: x@example.org' }))).not.toMatch(/[\r\n]/);
+  });
+  // SECURITY REVIEW 18 (Y11): other line ends and control characters too.
+  it('removes every control character and Unicode line separator from the subject', () => {
+    for (const bad of ['\u2028', '\u2029', '\u0085', '\u000b', '\u000c', '\u0000', '\t', '\u007f']) {
+      const subject = subjectFor(content({ headline: `A${bad}Bcc: x@example.org` }));
+      // oxlint-disable-next-line no-control-regex -- checking that none are left.
+      expect(subject).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/);
+      expect(subject).toContain('A Bcc: x@example.org');
+    }
   });
   it('shows gatherings in London time', () => {
     expect(whenLabel('2026-11-14T18:00:00Z')).toBe('Sat 14 Nov, 6:00pm');
@@ -104,9 +114,24 @@ describe('renderText', () => {
 });
 
 describe('sending helpers', () => {
-  it('gives the same key to the same batch', () => {
-    expect(batchKey('i', ['a', 'b'])).toBe(batchKey('i', ['a', 'b']));
-    expect(batchKey('i', ['a', 'b'])).not.toBe(batchKey('i', ['a']));
+  it('gives the same key to the same batch', async () => {
+    expect(await batchKey('i', ['a', 'b'])).toBe(await batchKey('i', ['a', 'b']));
+    expect(await batchKey('i', ['a', 'b'])).not.toBe(await batchKey('i', ['a']));
+  });
+  // SECURITY REVIEW 18 (Y03): the old key was the first recipient and the count only.
+  it('gives different batches of the same size and first recipient different keys, whatever the order', async () => {
+    expect(await batchKey('i', ['a', 'b'])).not.toBe(await batchKey('i', ['a', 'c']));
+    expect(await batchKey('i', ['b', 'a'])).toBe(await batchKey('i', ['a', 'b']));
+    expect(await batchKey('i', ['a'])).not.toBe(await batchKey('j', ['a']));
+    expect((await batchKey('00000000-0000-4000-8000-000000000000', ['a'])).length).toBeLessThanOrEqual(256);
+  });
+  // SECURITY REVIEW 18 (Y10): bodies are read only up to the limit.
+  it('reads a body only up to the limit', async () => {
+    const post = (body: string, headers: Record<string, string> = {}) => new Request('https://x.test/', { method: 'POST', body, headers });
+    expect(await readLimited(post('{"action":"tick"}'), 100)).toBe('{"action":"tick"}');
+    expect(await readLimited(post('x'.repeat(101)), 100)).toBeNull();
+    expect(await readLimited(post('x', { 'Content-Length': '5000' }), 100)).toBeNull();
+    expect(await readLimited(new Request('https://x.test/'), 100)).toBe('');
   });
   it('builds one-click unsubscribe headers', () => {
     expect(unsubscribeHeaders('https://x.supabase.co/functions/v1', 'abc')).toEqual({

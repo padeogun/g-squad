@@ -24,6 +24,7 @@ import { corsHeaders, defaultOrigins, parseOrigins, PRODUCTION_ORIGINS } from '.
 import {
   BATCH_MAX,
   batchKey,
+  readLimited,
   renderHtml,
   renderText,
   subjectFor,
@@ -64,39 +65,55 @@ interface OutEmail {
 
 // One batch call to Resend. Returns the message ids in the same order, or an error message
 // that is safe to store (never the API key or an address).
-async function sendBatch(emails: OutEmail[], key: string): Promise<{ ids: string[] } | { error: string }> {
+// SECURITY REVIEW 18 (Y03): what the answer means for the recipients matters:
+//   sent      accepted: confirm them;
+//   repeat    409, this idempotency key was used before, so this batch was already sent by an
+//             earlier run that died before recording it: confirm them, never send again;
+//   refused   not sent (refused, rate-limited or unreachable): hand them back for a later run;
+//   unknown   accepted but the answer could not be read: keep them as handed over (a later
+//             claim retries them under the same key, which Resend answers with 409 if sent).
+type BatchResult =
+  | { kind: 'sent'; ids: string[] }
+  | { kind: 'repeat' }
+  | { kind: 'refused'; error: string }
+  | { kind: 'unknown'; error: string };
+async function sendBatch(emails: OutEmail[], key: string): Promise<BatchResult> {
   let res: Response;
   try {
     res = await fetch('https://api.resend.com/emails/batch', {
       method: 'POST',
       headers: { Authorization: `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': key },
       body: JSON.stringify(emails),
+      signal: AbortSignal.timeout(30_000),
     });
   } catch {
-    return { error: 'The email service could not be reached' };
+    return { kind: 'refused', error: 'The email service could not be reached' };
   }
-  if (res.status === 429) return { error: 'The email service limit was reached; sending continues later' };
+  if (res.status === 409) return { kind: 'repeat' };
+  if (res.status === 429) return { kind: 'refused', error: 'The email service limit was reached; sending continues later' };
   if (!res.ok) {
     console.error('resend batch failed', res.status);
-    return { error: `The email service refused the batch (${res.status})` };
+    return { kind: 'refused', error: `The email service refused the batch (${res.status})` };
   }
   const body = (await res.json().catch(() => null)) as { data?: { id: string }[] } | null;
   const ids = (body?.data ?? []).map((d) => d.id);
-  if (ids.length !== emails.length) return { error: 'The email service gave an unexpected answer' };
-  return { ids };
+  if (ids.length !== emails.length) return { kind: 'unknown', error: 'The email service gave an unexpected answer' };
+  return { kind: 'sent', ids };
 }
 
 // ---------- tick: send whatever is due ----------
 async function tick(admin: SupabaseClient): Promise<Response> {
   const { data: due, error } = await admin.rpc('newsletter_claim_due');
   if (error) return json(500, { error: 'Could not check for due issues' });
-  const results: Record<string, string> = {};
+  // SECURITY REVIEW 18 (Y10): anyone may call tick, so the answer is counts only (it listed
+  // every claimed issue's id and outcome).
+  const results = { sent: 0, retry: 0, error: 0 };
 
   for (const issue of (due ?? []) as { issue_id: string; live: boolean }[]) {
     const { data: content, error: cErr } = await admin.rpc('newsletter_send_content', { p_issue: issue.issue_id });
     if (cErr || !content) {
       await admin.rpc('newsletter_finish', { p_issue: issue.issue_id, p_error: 'The approved content could not be read' });
-      results[issue.issue_id] = 'error';
+      results.error += 1;
       continue;
     }
     const c = content as IssueContent;
@@ -120,20 +137,29 @@ async function tick(admin: SupabaseClient): Promise<Response> {
         text: renderText(c, { appUrl: APP_URL, firstName: r.first_name, links: r.links, test: !issue.live }),
         headers: r.links ? unsubscribeHeaders(FUNCTIONS_URL, r.links.unsubscribe) : undefined,
       }));
-      const sent = await sendBatch(emails, batchKey(issue.issue_id, list.map((r) => r.person_id ?? r.email)));
-      if ('error' in sent) {
+      const who = (r: (typeof list)[number]) => (r.person_id ? { person_id: r.person_id } : { test_address: r.email });
+      const sent = await sendBatch(emails, await batchKey(issue.issue_id, list.map((r) => r.person_id ?? r.email)));
+      if (sent.kind === 'refused') {
+        // Not sent: hand them back so the next run sends them (Y03).
+        await admin.rpc('newsletter_release_deliveries', { p_issue: issue.issue_id, p_rows: list.map(who) });
+        failure = sent.error;
+        break;
+      }
+      if (sent.kind === 'unknown') {
         failure = sent.error;
         break;
       }
       const { error: dErr } = await admin.rpc('newsletter_record_deliveries', {
         p_issue: issue.issue_id,
-        p_rows: list.map((r, i) => (r.person_id ? { person_id: r.person_id, provider_id: sent.ids[i] } : { test_address: r.email, provider_id: sent.ids[i] })),
+        p_rows: list.map((r, i) => ({ ...who(r), provider_id: sent.kind === 'sent' ? sent.ids[i] : 'already-sent' })),
       });
       if (dErr) failure = 'Sent, but could not record who received it';
     }
 
     const { data: outcome } = await admin.rpc('newsletter_finish', { p_issue: issue.issue_id, p_error: failure });
-    results[issue.issue_id] = String(outcome ?? 'error');
+    if (outcome === 'sent') results.sent += 1;
+    else if (outcome === 'retry') results.retry += 1;
+    else results.error += 1;
   }
   return json(200, { issues: results });
 }
@@ -179,8 +205,9 @@ Deno.serve(async (req) => {
   if (req.method !== 'POST') return json(405, { error: 'Method not allowed' }, cors);
   if (!RESEND_KEY || !FROM) return json(503, { error: 'The email service is not set up yet' }, cors);
 
-  const raw = await req.text();
-  if (raw.length > 2000) return json(413, { error: 'Request too large' }, cors);
+  // SECURITY REVIEW 18 (Y10): stop reading at the limit rather than after reading it all.
+  const raw = await readLimited(req, 2000);
+  if (raw === null) return json(413, { error: 'Request too large' }, cors);
   let body: { action?: unknown; issue_id?: unknown };
   try {
     body = JSON.parse(raw || '{}');

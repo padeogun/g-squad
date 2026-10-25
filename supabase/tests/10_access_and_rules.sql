@@ -439,10 +439,18 @@ insert into public.projects (level, name, starts_at, ends_at)
 values ('church', 'The Greatness Brief', date_trunc('month', now()) + interval '1 month', date_trunc('month', now()) + interval '2 months' - interval '1 second');
 reset role;
 select test.login('editor'); set role authenticated;
-insert into public.newsletter_issues (project_id, issue_month, headline, status)
-select id, (date_trunc('month', now()) + interval '1 month')::date, 'Your finance and the Ministry', 'approved'
+-- SECURITY REVIEW 18 (Y06): issues are started only through start_newsletter_issue.
+select test.throws($q$insert into public.newsletter_issues (project_id, issue_month, headline, status)
+                      select id, (date_trunc('month', now()) + interval '1 month')::date, 'Your finance and the Ministry', 'approved'
+                      from public.projects where name = 'The Greatness Brief'$q$,
+                   'Y06: editors cannot attach an issue to an existing project');
+reset role;
+select test.login('');   -- the issue for the checks below (system change)
+insert into public.newsletter_issues (church_id, project_id, issue_month, headline)
+select church_id, id, (date_trunc('month', now()) + interval '1 month')::date, 'Your finance and the Ministry'
 from public.projects where name = 'The Greatness Brief';
 select test.ok((select status from public.newsletter_issues) = 'draft', 'A new issue is always a draft');
+select test.login('editor'); set role authenticated;
 insert into public.newsletter_items (issue_id, kind, body, names_a_person)
 select id, 'win', 'We welcomed twins to a family in the church.', true from public.newsletter_issues;
 select test.throws($q$update public.newsletter_issues set status = 'awaiting_coordinator'$q$, 'R18: a named item needs agreement first');
@@ -454,10 +462,14 @@ select test.login('rp'); set role authenticated;
 select test.throws($q$update public.newsletter_issues set status = 'approved'$q$, 'R17: the Resident Pastor cannot approve before the Coordinator');
 reset role;
 select test.login('coord'); set role authenticated;
-update public.newsletter_issues set status = 'awaiting_pastor';
+-- SECURITY REVIEW 18 (Y01): an approval names the version of the content it approves.
+select test.throws($q$update public.newsletter_issues set status = 'awaiting_pastor'$q$, 'Y01: an approval without the content version is refused');
+select test.throws($q$update public.newsletter_issues set status = 'awaiting_pastor', approved_version = md5('stale')$q$,
+                   'Y01: ... and one for an out-of-date version');
+update public.newsletter_issues set status = 'awaiting_pastor', approved_version = public.newsletter_issue_content(id) ->> 'version';
 reset role;
 select test.login('rp'); set role authenticated;
-update public.newsletter_issues set status = 'approved';
+update public.newsletter_issues set status = 'approved', approved_version = public.newsletter_issue_content(id) ->> 'version';
 select test.ok((select status from public.newsletter_issues) = 'approved', 'R17: Coordinator then Resident Pastor approve');
 reset role;
 select test.login('editor'); set role authenticated;
@@ -607,7 +619,8 @@ select test.login('editor'); set role authenticated;
 delete from public.newsletter_items where body = 'A late named item.';
 reset role;
 select test.login('coord'); set role authenticated;
-update public.newsletter_issues set status = 'awaiting_pastor', pastor_approved_by = test.id('coord');
+update public.newsletter_issues set status = 'awaiting_pastor', pastor_approved_by = test.id('coord'),
+                                   approved_version = public.newsletter_issue_content(id) ->> 'version';
 select test.ok((select pastor_approved_by from public.newsletter_issues) is null, 'F10: Coordinator cannot pre-fill the pastor''s approval');
 reset role;
 
@@ -2876,6 +2889,8 @@ select test.ok((select cardinality(newsletter_test_recipients) = 0 from public.c
                'X03: an editor cannot set the test list');
 select test.login('coord'); set role authenticated;
 select test.throws($q$update public.church_settings set newsletter_test_recipients = '{Not An Email}'$q$, 'X03: test addresses must be valid');
+select test.throws($q$update public.church_settings set newsletter_test_recipients = '{coord@example.org,someone@outside.example}'$q$,
+                   'Y04: a test address must be a leader''s sign-in address');
 select test.lives($q$update public.church_settings set newsletter_test_recipients = '{coord@example.org,editor@example.org}'$q$,
                   'X03: the Coordinator sets the test list');
 select test.throws($q$update public.church_settings set newsletter_live = true$q$,
@@ -2902,13 +2917,32 @@ select test.login('editor'); set role authenticated;
 update public.newsletter_issues set status = 'awaiting_coordinator' where id = test.id('iss2');
 reset role;
 select test.login('coord'); set role authenticated;
-update public.newsletter_issues set status = 'awaiting_pastor' where id = test.id('iss2');
+update public.newsletter_issues set status = 'awaiting_pastor', approved_version = public.newsletter_issue_content(id) ->> 'version'
+where id = test.id('iss2');
 select test.throws(format('update public.newsletter_issues set send_now_at = now() where id = %L', test.id('iss2')),
                    'X05: Send now only once approved');
 reset role;
-select test.login('rp'); set role authenticated;
-update public.newsletter_issues set status = 'approved' where id = test.id('iss2');
+-- Y01: the Team Lead rewrites their update after the Coordinator approved.
+select test.login('ul_a'); set role authenticated;
+update public.project_inputs set body = 'Production trained three new camera operators. Also, something nobody approved.'
+where body like 'Production trained%';
 reset role;
+select test.login('rp'); set role authenticated;
+select test.throws(format($q$update public.newsletter_issues set status = 'approved', approved_version = public.newsletter_issue_content(id) ->> 'version'
+                             where id = %L$q$, test.id('iss2')),
+                   'Y01: content changed after the Coordinator approved cannot get final approval');
+reset role;
+select test.login('ul_a'); set role authenticated;
+update public.project_inputs set body = 'Production trained three new camera operators.' where body like 'Production trained%';
+reset role;
+select test.login('rp'); set role authenticated;
+select test.throws(format($q$update public.newsletter_issues set status = 'approved', approved_version = md5('what I saw yesterday') where id = %L$q$, test.id('iss2')),
+                   'Y01: the Resident Pastor cannot approve a version they were not shown');
+update public.newsletter_issues set status = 'approved', approved_version = public.newsletter_issue_content(id) ->> 'version'
+where id = test.id('iss2');
+reset role;
+select test.ok((select status = 'approved' from public.newsletter_issues where id = test.id('iss2')),
+               'Y01: the version the Coordinator approved gets final approval');
 select test.ok((select count(*) from public.newsletter_snapshots where issue_id = test.id('iss2')) = 1, 'X05: final approval takes a snapshot');
 select test.ok((select jsonb_array_length(content -> 'team_updates') from public.newsletter_snapshots where issue_id = test.id('iss2')) = 0,
                'X05: the snapshot leaves out what editors excluded');
@@ -2931,11 +2965,15 @@ select test.login(''); set role service_role;
 select test.ok((select count(*) from public.newsletter_claim_due() where issue_id = test.id('iss2') and not live) = 1,
                'X06: the job claims the due issue, in test mode');
 select test.ok((select count(*) from public.newsletter_claim_due()) = 0, 'X06: a claimed issue is not claimed twice');
-select test.ok((select array_agg(email order by email) from public.newsletter_next_recipients(test.id('iss2')))
-               = '{coord@example.org,editor@example.org}'
-               and (select bool_and(person_id is null and links is null) from public.newsletter_next_recipients(test.id('iss2'))),
+create temporary table x_tests as select * from public.newsletter_next_recipients(test.id('iss2'));
+select test.ok((select array_agg(email order by email) from x_tests) = '{coord@example.org,editor@example.org}'
+               and (select bool_and(person_id is null and links is null) from x_tests),
                'X06: in test mode only the test list is returned, with no personal links');
+select test.ok(not exists (select 1 from public.newsletter_next_recipients(test.id('iss2'))),
+               'Y03: recipients handed over are not handed over again in the same run');
 reset role;
+select test.ok((select count(*) from public.newsletter_deliveries where issue_id = test.id('iss2') and provider_id is null) = 2,
+               'Y03: they are recorded as handed over, not yet confirmed');
 select test.login('editor'); set role authenticated;
 select test.throws(format($q$update public.newsletter_issues set headline = 'Changed mid-send' where id = %L$q$, test.id('iss2')),
                    'X06: an issue cannot be edited while it is being sent');
@@ -2948,8 +2986,9 @@ select test.throws(format('select * from public.newsletter_next_recipients(%L)',
 reset role;
 select test.ok((select send_started_at is null and send_error is not null from public.newsletter_issues where id = test.id('iss2')),
                'X06: the claim is released with a note');
-update public.newsletter_issues set send_started_at = now() where id = test.id('iss2');   -- as a fresh claim (system)
 select test.login(''); set role service_role;
+select test.ok((select count(*) from public.newsletter_claim_due() where issue_id = test.id('iss2')) = 1,
+               'Y03: the next run claims it again and releases the unconfirmed recipient');
 select test.ok((select array_agg(email) from public.newsletter_next_recipients(test.id('iss2'))) = '{editor@example.org}',
                'X06: a retry skips who already received it');
 select public.newsletter_record_deliveries(test.id('iss2'), '[{"test_address":"editor@example.org","provider_id":"t2"}]');
@@ -2957,6 +2996,8 @@ select test.ok(public.newsletter_finish(test.id('iss2'), null) = 'sent', 'X06: w
 reset role;
 select test.ok((select status = 'sent' and sent_as_test and sent_at is not null from public.newsletter_issues where id = test.id('iss2')),
                'X06: a test-mode issue is marked as sent to the test list');
+select test.ok(not exists (select 1 from public.newsletter_snapshots where issue_id = test.id('iss2')),
+               'Y09: the snapshot (person ids, names, birthdays) is deleted once sent');
 select test.login('editor'); set role authenticated;
 select test.ok((select total from public.newsletter_issue_stats(test.id('iss2')) where item = 'delivered') = 2, 'X06: editors see how many received it');
 reset role;
@@ -2980,9 +3021,11 @@ select test.lives($q$update public.church_settings set newsletter_live = true$q$
 reset role;
 -- The first issue (next month) is put back to the Resident Pastor's step (system change) and approved.
 select test.login('');
-update public.newsletter_issues set status = 'awaiting_pastor', send_on = current_date where id = test.id('iss1');
+update public.newsletter_issues set status = 'awaiting_pastor', send_on = current_date,
+       approved_version = app.newsletter_content_version(id) where id = test.id('iss1');
 select test.login('rp'); set role authenticated;
-update public.newsletter_issues set status = 'approved' where id = test.id('iss1');
+update public.newsletter_issues set status = 'approved', approved_version = public.newsletter_issue_content(id) ->> 'version'
+where id = test.id('iss1');
 reset role;
 select test.ok((select count(*) from public.newsletter_snapshots s, jsonb_array_elements(s.content -> 'celebrations') c
                 where s.issue_id = test.id('iss1') and c ->> 'kind' = 'birthday' and c ? 'person_id') = 1,
@@ -3026,9 +3069,33 @@ select test.login('editor'); set role authenticated;
 select test.throws(format($q$update public.newsletter_issues set headline = 'Too late' where id = %L$q$, test.id('iss1')),
                    'X07: once anyone has received it, the issue cannot change');
 reset role;
+-- Y02: "Stop sending to members" part-way stops the issue; it never moves to the test list.
+select test.login('coord'); set role authenticated;
+update public.church_settings set newsletter_live = false;
+reset role;
+select test.login(''); set role service_role;
+select test.throws(format('select * from public.newsletter_next_recipients(%L)', test.id('iss1')),
+                   'Y02: no more members are handed over once sending to members is switched off');
+select test.ok(public.newsletter_finish(test.id('iss1'), null) = 'retry', 'Y02: ... and the issue is not marked sent');
+select test.ok((select count(*) from public.newsletter_claim_due() where issue_id = test.id('iss1')) = 0,
+               'Y02: ... nor claimed again (not even for the test list)');
+reset role;
+select test.ok((select send_error = 'Sending to members was switched off' and send_live from public.newsletter_issues where id = test.id('iss1')),
+               'Y02: the issue says why it stopped and stays a members'' issue');
+select test.login('rp'); set role authenticated;
+update public.church_settings set newsletter_live = true;
+reset role;
+select test.login(''); set role service_role;
+select test.ok((select count(*) from public.newsletter_claim_due() where issue_id = test.id('iss1') and live) = 1,
+               'Y02: switched back on, it carries on for members');
+create temporary table x_again as select * from public.newsletter_next_recipients(test.id('iss1'), 100);
+reset role;
+select test.ok(not exists (select 1 from x_again where person_id in (test.id('pN1'), test.id('pN2')))
+               and (select count(*) from x_again) = (select count(*) from x_recipients) - 2,
+               'Y03: who already had it, and who unsubscribed, are not sent it again');
 select test.login(''); set role service_role;
 select public.newsletter_record_deliveries(test.id('iss1'),
-  (select jsonb_agg(jsonb_build_object('person_id', person_id, 'provider_id', 'p')) from x_recipients where person_id <> test.id('pN1')));
+  (select jsonb_agg(jsonb_build_object('person_id', person_id, 'provider_id', 'p')) from x_again));
 select test.ok(public.newsletter_finish(test.id('iss1'), null) = 'sent', 'X07: the unsubscribed member is not waited for; the issue is sent');
 reset role;
 select test.ok((select status = 'sent' and not sent_as_test from public.newsletter_issues where id = test.id('iss1')), 'X07: sent to members');
@@ -3042,6 +3109,109 @@ reset role;
 select test.login('');
 update public.people set celebration_opt_in = true where id = test.id('pN1');
 update public.people set newsletter_subscribed = true where id = test.id('pN2');
+
+-- =====================================================================================
+-- Y. Security review 18 (slice 6)
+-- =====================================================================================
+select test.login('editor'); set role authenticated;
+select public.start_newsletter_issue((date_trunc('month', now()) + interval '3 months')::date);
+reset role;
+insert into test.ids select 'iss3', id from public.newsletter_issues
+  where issue_month = (date_trunc('month', now()) + interval '3 months')::date;
+insert into test.ids select 'iss3p', project_id from public.newsletter_issues where id = test.id('iss3');
+
+-- Y05: the issue's project collects team updates and nothing else.
+select test.login('editor'); set role authenticated;
+select test.throws(format($q$insert into public.team_demand (project_id, unit_id, on_date, slots_needed)
+                             values (%L, %L, (date_trunc('month', now()) + interval '3 months')::date + 5, 2)$q$, test.id('iss3p'), test.id('A1')),
+                   'Y05: the editor who owns an issue''s project cannot ask units for volunteers on it');
+select test.throws(format($q$insert into public.event_plans (project_id, size, complexity) values (%L, 'small', 'low')$q$, test.id('iss3p')),
+                   'Y05: ... nor add an event plan');
+select test.throws(format($q$update public.projects set status = 'submitted' where id = %L$q$, test.id('iss3p')),
+                   'Y05: ... nor submit it for approval onto the calendar');
+select test.throws(format($q$update public.projects set starts_at = starts_at - interval '1 day' where id = %L$q$, test.id('iss3p')),
+                   'Y05: ... nor move its dates');
+select test.lives(format($q$update public.projects set description = 'Team updates for the issue.' where id = %L$q$, test.id('iss3p')),
+                  'Y05: its description can still be changed');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.throws(format($q$insert into public.team_demand (project_id, unit_id, on_date, slots_needed)
+                             values (%L, %L, (date_trunc('month', now()) + interval '3 months')::date + 5, 2)$q$, test.id('iss3p'), test.id('A1')),
+                   'Y05: not by the Operations Lead either');
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$update public.project_inputs set body = 'Y05 update', status = 'received'
+                            where project_id = %L and requested_from_user_id = %L$q$, test.id('iss3p'), test.id('ul_a')),
+                  'Y05: Team Leads still give their team update on it');
+reset role;
+
+-- Y07: an issue that reached nobody is not marked sent (a sent issue is final).
+select test.login('');
+update public.church_settings set newsletter_test_recipients = '{}', newsletter_live = false where church_id = test.id('churchA');
+update public.newsletter_issues set status = 'approved', send_now_at = now() where id = test.id('iss3');
+select test.login(''); set role service_role;
+select test.ok((select count(*) from public.newsletter_claim_due() where issue_id = test.id('iss3') and not live) = 1, 'Y07: claimed in test mode');
+select test.ok(not exists (select 1 from public.newsletter_next_recipients(test.id('iss3'))), 'Y07: with an empty test list nobody is handed over');
+select test.ok(public.newsletter_finish(test.id('iss3'), null) = 'retry', 'Y07: ... and the issue is not marked sent');
+reset role;
+select test.ok((select status = 'approved' and send_error like 'There are no test addresses%' from public.newsletter_issues where id = test.id('iss3')),
+               'Y07: the issue says why');
+
+-- Y08: Send now once; Try again only after sending has given up.
+select test.login('coord'); set role authenticated;
+select test.throws(format('update public.newsletter_issues set send_now_at = now() where id = %L', test.id('iss3')),
+                   'Y08: Send now cannot be pressed again while sending is still being tried');
+reset role;
+select test.login('');
+update public.newsletter_issues set send_attempts = 5 where id = test.id('iss3');
+select test.login('editor'); set role authenticated;
+select test.throws(format('update public.newsletter_issues set send_now_at = now() where id = %L', test.id('iss3')),
+                   'Y08: an editor cannot restart sending');
+reset role;
+select test.login('rp'); set role authenticated;
+select test.lives(format('update public.newsletter_issues set send_now_at = now() where id = %L', test.id('iss3')),
+                  'Y08: the Resident Pastor can try again once sending has given up');
+reset role;
+select test.ok((select send_attempts = 0 from public.newsletter_issues where id = test.id('iss3')), 'Y08: ... which starts the attempts again');
+select test.login('');
+update public.church_settings set newsletter_test_recipients = '{coord@example.org,editor@example.org}' where church_id = test.id('churchA');
+
+-- Y04: an address that stops being a leader's sign-in address drops out of the test list.
+update public.app_users set is_active = false where id = test.id('editor');
+select test.login(''); set role service_role;
+select test.ok((select count(*) from public.newsletter_claim_due() where issue_id = test.id('iss3')) = 1, 'Y04: claimed');
+select test.ok((select array_agg(email) from public.newsletter_next_recipients(test.id('iss3'))) = '{coord@example.org}',
+               'Y04: a switched-off leader account no longer receives test sends');
+reset role;
+update public.app_users set is_active = true where id = test.id('editor');
+
+-- Y12: links of a member who has left do nothing, except unsubscribing.
+update public.people set status = 'left', date_left = current_date where id = test.id('pN1');
+select test.login(''); set role service_role;
+select test.ok((select public.peek_email_link(links -> 'react' ->> 'heart') ->> 'purpose' from x_recipients where person_id = test.id('pN1')) = 'invalid',
+               'Y12: a reaction link of a member who has left is not valid');
+select test.ok((select public.redeem_email_link(links -> 'react' ->> 'heart') from x_recipients where person_id = test.id('pN1')) = 'invalid',
+               'Y12: ... and records nothing');
+select test.ok((select public.peek_email_link(links ->> 'unsubscribe') ->> 'purpose' from x_recipients where person_id = test.id('pN1')) = 'unsubscribe',
+               'Y12: unsubscribing still works');
+reset role;
+select test.login('');
+update public.people set status = 'active', date_left = null where id = test.id('pN1');
+
+-- Grants: nothing new for anonymous callers; the sending functions for the service role only.
+select test.ok(not has_function_privilege('anon', p.oid, 'execute'), 'Y: anon cannot run ' || p.oid::regprocedure)
+from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+where n.nspname in ('public', 'app')
+  and p.proname in ('start_newsletter_issue','newsletter_issue_content','newsletter_claim_due','newsletter_send_content',
+                    'newsletter_next_recipients','newsletter_record_deliveries','newsletter_release_deliveries','newsletter_finish',
+                    'peek_email_link','redeem_email_link','newsletter_test_send','newsletter_issue_stats','newsletter_content',
+                    'newsletter_content_version','newsletter_test_list','is_leader_email','email_link_usable','issue_project_only_inputs');
+select test.ok(not has_function_privilege('authenticated', p.oid, 'execute'), 'Y: signed-in users cannot run ' || p.oid::regprocedure)
+from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+where n.nspname in ('public', 'app')
+  and p.proname in ('newsletter_claim_due','newsletter_send_content','newsletter_next_recipients','newsletter_record_deliveries',
+                    'newsletter_release_deliveries','newsletter_finish','peek_email_link','redeem_email_link','newsletter_content',
+                    'newsletter_content_version','newsletter_test_list','is_leader_email','email_link_usable','issue_project_only_inputs');
 
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
