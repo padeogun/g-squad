@@ -5,8 +5,14 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
 // Stub Supabase: no network. signInWithOtp's result is set per test.
+// The email is asked for through emailRequestClient (no PKCE, so the link and code work on
+// any device); the 6-digit code is checked by the main client's verifyOtp.
 const signInWithOtp = vi.fn();
-vi.mock('../lib/supabase', () => ({ supabase: { auth: { signInWithOtp: (...a: unknown[]) => signInWithOtp(...a) } } }));
+const verifyOtp = vi.fn();
+vi.mock('../lib/supabase', () => ({
+  supabase: { auth: { verifyOtp: (...a: unknown[]) => verifyOtp(...a) } },
+  emailRequestClient: { auth: { signInWithOtp: (...a: unknown[]) => signInWithOtp(...a) } },
+}));
 vi.mock('../auth/AuthProvider', () => ({ useAuth: () => ({ session: null, loading: false, signOut: vi.fn() }) }));
 
 import { SignIn } from './SignIn';
@@ -21,7 +27,32 @@ function renderPage() {
 }
 
 describe('SignIn', () => {
-  beforeEach(() => signInWithOtp.mockReset());
+  beforeEach(() => {
+    signInWithOtp.mockReset();
+    verifyOtp.mockReset();
+  });
+
+  it('signs in with the 6-digit code from the email', async () => {
+    signInWithOtp.mockResolvedValue({ error: null });
+    verifyOtp.mockResolvedValue({ error: null });
+    renderPage();
+    await userEvent.type(screen.getByLabelText(/email address/i), 'lead@example.org');
+    await userEvent.click(screen.getByRole('button', { name: /email me a sign-in link/i }));
+    await userEvent.type(await screen.findByLabelText(/6-digit code/i), '123 456');
+    await userEvent.click(screen.getByRole('button', { name: /sign in with the code/i }));
+    expect(verifyOtp).toHaveBeenCalledWith({ email: 'lead@example.org', token: '123456', type: 'email' });
+  });
+
+  it('says so when the code is wrong or expired', async () => {
+    signInWithOtp.mockResolvedValue({ error: null });
+    verifyOtp.mockResolvedValue({ error: { status: 403, message: 'Token has expired or is invalid' } });
+    renderPage();
+    await userEvent.type(screen.getByLabelText(/email address/i), 'lead@example.org');
+    await userEvent.click(screen.getByRole('button', { name: /email me a sign-in link/i }));
+    await userEvent.type(await screen.findByLabelText(/6-digit code/i), '000000');
+    await userEvent.click(screen.getByRole('button', { name: /sign in with the code/i }));
+    expect(await screen.findByText(/that code didn't work/i)).toBeInTheDocument();
+  });
 
   it('never creates an account (invite-only)', async () => {
     signInWithOtp.mockResolvedValue({ error: null });

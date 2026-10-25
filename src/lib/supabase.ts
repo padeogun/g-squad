@@ -24,3 +24,20 @@ export const supabase = createClient<Database>(env.supabaseUrl, env.supabaseKey,
     detectSessionInUrl: true,
   },
 });
+
+// Used ONLY to ask for a sign-in email (signInWithOtp), never for a session.
+// Why a second client: with PKCE, the emailed link and code are tied to a secret kept in the
+// browser that asked for them, so a link opened on another device (or in an email app's own
+// browser) cannot sign in. The emails no longer carry a sign-in URL with tokens in it (they
+// link to /auth/confirm with a one-time hash, see src/lib/email-sign-in.ts), so asking without
+// PKCE puts nothing in an address bar. The main client above, still PKCE, then exchanges the
+// hash or the 6-digit code for the session.
+export const emailRequestClient = createClient<Database>(env.supabaseUrl, env.supabaseKey, {
+  auth: {
+    flowType: 'implicit',
+    persistSession: false,
+    autoRefreshToken: false,
+    detectSessionInUrl: false,
+    storageKey: 'gsquad-email-request', // its own key, so it never touches the real session
+  },
+});

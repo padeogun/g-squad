@@ -19,7 +19,7 @@ on:
   push:
     branches: [main]
     # Database migrations and Edge Functions (slice 1 added supabase/functions).
-    paths: ['supabase/migrations/**', 'supabase/functions/**']
+    paths: ['supabase/migrations/**', 'supabase/functions/**', 'supabase/templates/**']
   workflow_dispatch:
     inputs:
       include_seed:
@@ -93,3 +93,28 @@ jobs:
           # Slice 6: The Greatness Brief (settings from supabase/config.toml).
           npx --no-install supabase functions deploy send-newsletter --project-ref "$SUPABASE_PROJECT_REF"
           npx --no-install supabase functions deploy email-link --project-ref "$SUPABASE_PROJECT_REF"
+      # Sign-in and invitation emails (supabase/templates). Supabase reads these from the
+      # project's auth settings, not from the repository, so they are sent with the Management
+      # API. Only these four settings are changed; nothing else in the auth settings is touched.
+      # The subjects match supabase/config.toml. jq builds the JSON from the files, so nothing
+      # in a template can break out of it.
+      - name: Update the sign-in email templates
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          jq -n \
+            --rawfile invite supabase/templates/invite.html \
+            --rawfile magic supabase/templates/magic_link.html \
+            '{mailer_subjects_invite: "Invitation to the G-Squad Planner",
+              mailer_templates_invite_content: $invite,
+              mailer_subjects_magic_link: "Your G-Squad Planner sign-in",
+              mailer_templates_magic_link_content: $magic}' > "$RUNNER_TEMP/auth-templates.json"
+          curl --fail-with-body -sS -X PATCH \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/config/auth" \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary @"$RUNNER_TEMP/auth-templates.json" -o "$RUNNER_TEMP/auth-reply.json" \
+            || { echo "Updating the templates failed:"; head -c 500 "$RUNNER_TEMP/auth-reply.json"; exit 1; }
+          # The reply is the whole auth configuration, so it is not printed when all is well.
+          echo "Sign-in email templates updated"
