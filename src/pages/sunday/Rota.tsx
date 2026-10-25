@@ -17,7 +17,7 @@ import { friendlyError } from '../../data/errors';
 import { byId, useChurchRoles, useUnits } from '../../data/reference';
 import { fullName, usePersonNames } from '../../data/people';
 import { shortDate, todayIso } from '../../data/sundays';
-import { buildEvents, buildRota, fitsLimit, monthBounds, useCandidates, useMonthSundays, useUnitAssignments, useUnitDemand, useUnitEventDemand, type RotaSlot } from '../../data/rota';
+import { buildEvents, buildRota, fitsLimit, monthBounds, placeHours, useCandidates, useMonthSundays, useUnitAssignments, useUnitDemand, useUnitEventDemand, type RotaSlot } from '../../data/rota';
 import { useSettings } from '../../data/newsletter';
 import { hasRole, ledUnitIds, viewedUnitIds, useMe } from '../../auth/useMe';
 
@@ -104,7 +104,10 @@ function MonthRota({ unitId, month, isOps, canEdit }: { unitId: string; month: s
   const roles = useChurchRoles();
   // SECURITY REVIEW FIX Q10: names of the people on this rota only (not everyone's records).
   const people = usePersonNames((assignments.data ?? []).map((a) => a.person_id));
-  const events = useUnitEventDemand(unitId, from, to);
+  // SECURITY REVIEW 19 (Z06): bookings outside this month's Sunday services, shown under events
+  // even when their place has gone (they still count towards the limit).
+  const eventBookings = (assignments.data ?? []).filter((a) => !projectIds.includes(a.project_id));
+  const events = useUnitEventDemand(unitId, from, to, [...new Set(eventBookings.map((a) => a.project_id))]);
   const settings = useSettings();
   const roleMap = byId(roles.data);
   const personMap = byId(people.data);
@@ -198,7 +201,8 @@ function MonthRota({ unitId, month, isOps, canEdit }: { unitId: string; month: s
                               onClick={() =>
                                 setPicking({
                                   ...cell,
-                                  hours: (demand.data ?? []).find((d) => d.on_date === cell.date && (d.church_role_id ?? null) === cell.roleId)?.hours ?? null,
+                                  // SECURITY REVIEW 19 (Z07): counted as the database counts it.
+                                  hours: placeHours(demand.data ?? [], cell.projectId, cell.roleId, cell.date, defaultHours),
                                 })
                               }
                             >
@@ -219,14 +223,13 @@ function MonthRota({ unitId, month, isOps, canEdit }: { unitId: string; month: s
         {cancel.isError && <Notice tone="danger">{friendlyError(cancel.error)}</Notice>}
       </Card>
       <EventsCard
-        groups={buildEvents(events.data?.demand ?? [], events.data?.projects ?? [], assignments.data ?? [])}
+        groups={buildEvents(events.data?.demand ?? [], events.data?.projects ?? [], eventBookings, defaultHours)}
         loading={events.isPending}
         roleName={(id) => (id ? roleMap.get(id)?.name ?? 'Role' : 'Any role')}
         personName={(id) => {
           const p = personMap.get(id);
           return p ? fullName(p) : 'Member';
         }}
-        defaultHours={defaultHours}
         canEdit={canEdit}
         onPick={(slot, hours) => setPicking({ ...slot, hours })}
         onCancel={(id) => cancel.mutate(id)}
@@ -288,10 +291,15 @@ function AssignPanel({
 
   const list = candidates.data ?? [];
   // The panel opens below the lists: bring it into view so the leader sees who can serve.
+  // SECURITY REVIEW 19 (Z07): and move focus to it, so keyboard and screen reader users land on
+  // the list rather than staying on the "+ Assign" button far above.
   const box = useRef<HTMLDivElement>(null);
-  useEffect(() => box.current?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' }), [slot]);
+  useEffect(() => {
+    box.current?.focus?.({ preventScroll: true });
+    box.current?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+  }, [slot]);
   return (
-    <div ref={box}>
+    <div ref={box} tabIndex={-1} className="app-assign-panel" role="region" aria-label={`Assign ${roleName} on ${shortDate(slot.date)}`}>
     <Card title={`Assign ${roleName} · ${shortDate(slot.date)} · ${hours} h`} tone="tint" action={<Button size="sm" variant="quiet" onClick={onClose}>Close</Button>}>
       <p className="type-caption" style={{ margin: 0 }}>
         Fewest hours this month first. One limit counts across all teams, Sundays, events and team activities.
@@ -369,12 +377,14 @@ function AssignPanel({
 }
 
 // ---------- Events, outreach and team activities (migration 28) ----------
+// SECURITY REVIEW 19 (Z06/Z07): hours are shown per place when a day's places differ, and
+// bookings whose place has gone (or whose project is no longer approved) are listed, marked,
+// with Remove but no new places.
 function EventsCard({
   groups,
   loading,
   roleName,
   personName,
-  defaultHours,
   canEdit,
   onPick,
   onCancel,
@@ -384,7 +394,6 @@ function EventsCard({
   loading: boolean;
   roleName: (id: string | null) => string;
   personName: (id: string) => string;
-  defaultHours: number;
   canEdit: boolean;
   onPick: (slot: RotaSlot, hours: number) => void;
   onCancel: (assignmentId: string) => void;
@@ -400,58 +409,58 @@ function EventsCard({
           on each <Link to="/projects">project</Link>.
         </p>
       )}
-      {groups.map((g) => {
-        const hours = g.hours ?? defaultHours;
-        return (
-          <section key={`${g.projectId}-${g.date}`} className="app-event-group" aria-label={`${g.name}, ${shortDate(g.date)}`}>
-            <div className="app-event-head">
-              <Link to={`/projects/${g.projectId}`}>
-                <strong>{g.name}</strong>
-              </Link>
-              <span className="type-caption">
-                {shortDate(g.date)} · {hours} h each
-              </span>
-            </div>
-            <ul className="app-candidates">
-              {g.slots.map((s, i) => {
-                const a = s.assignment;
-                return (
-                  <li key={a?.id ?? `${s.roleId}-${i}`}>
-                    <span>
-                      {roleName(s.roleId)}
-                      {a && <strong> · {personName(a.person_id)}</strong>}
-                    </span>
-                    {a?.status === 'served' && <Chip tone="ok">Served</Chip>}
-                    {a?.status === 'no_show' && <Chip tone="danger">No-show</Chip>}
-                    {!a && !canEdit && <span className="type-caption">Open</span>}
-                    {!a && canEdit && (
-                      <button
-                        type="button"
-                        className="app-link-button"
-                        aria-label={`Assign ${roleName(s.roleId)} for ${g.name} on ${shortDate(g.date)}`}
-                        onClick={() => onPick(s, hours)}
-                      >
-                        + Assign
-                      </button>
-                    )}
-                    {a?.status === 'planned' && canEdit && (
-                      <button
-                        type="button"
-                        className="app-link-button"
-                        aria-label={`Take ${personName(a.person_id)} off ${g.name} on ${shortDate(g.date)}`}
-                        disabled={cancelling}
-                        onClick={() => onCancel(a.id)}
-                      >
-                        Remove
-                      </button>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
-        );
-      })}
+      {groups.map((g) => (
+        <section key={`${g.projectId}-${g.date}`} className="app-event-group" aria-label={`${g.name}, ${shortDate(g.date)}`}>
+          <div className="app-event-head">
+            <Link to={`/projects/${g.projectId}`}>
+              <strong>{g.name}</strong>
+            </Link>
+            <span className="type-caption">
+              {shortDate(g.date)}
+              {g.hours !== null ? ` · ${g.hours} h each` : ''}
+            </span>
+            {!g.open && <Chip tone="warn">No longer asking for people</Chip>}
+          </div>
+          <ul className="app-candidates">
+            {g.slots.map((s, i) => {
+              const a = s.assignment;
+              return (
+                <li key={a?.id ?? `${s.roleId}-${i}`}>
+                  <span>
+                    {roleName(s.roleId)}
+                    {g.hours === null && <span className="type-caption">{` · ${s.hours} h`}</span>}
+                    {a && <strong> · {personName(a.person_id)}</strong>}
+                  </span>
+                  {a?.status === 'served' && <Chip tone="ok">Served</Chip>}
+                  {a?.status === 'no_show' && <Chip tone="danger">No-show</Chip>}
+                  {!a && !canEdit && <span className="type-caption">Open</span>}
+                  {!a && canEdit && (
+                    <button
+                      type="button"
+                      className="app-link-button"
+                      aria-label={`Assign ${roleName(s.roleId)} for ${g.name} on ${shortDate(g.date)}, ${s.hours} hours`}
+                      onClick={() => onPick(s, s.hours)}
+                    >
+                      + Assign
+                    </button>
+                  )}
+                  {a?.status === 'planned' && canEdit && (
+                    <button
+                      type="button"
+                      className="app-link-button"
+                      aria-label={`Take ${personName(a.person_id)} off ${g.name} on ${shortDate(g.date)}`}
+                      disabled={cancelling}
+                      onClick={() => onCancel(a.id)}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ))}
     </Card>
   );
 }

@@ -1,7 +1,7 @@
 // The rota layout: one row per role and slot, a cell where a Sunday needs that slot or
 // someone already fills it, and nothing assigned ever hidden.
 import { describe, expect, it } from 'vitest';
-import { buildEvents, buildRota, fitsLimit, monthBounds } from './rota';
+import { buildEvents, buildRota, fitsLimit, monthBounds, placeHours } from './rota';
 import { weeklyDates } from './projects';
 
 const sundays = [
@@ -66,7 +66,7 @@ describe('buildEvents', () => {
       [{ id: 'b', project_id: 'p1', person_id: 'x', status: 'planned', church_role_id: null, serve_date: '2026-11-14' }],
     );
     expect(g.map((x) => [x.date, x.hours, x.slots.length])).toEqual([
-      ['2026-11-07', null, 1],
+      ['2026-11-07', 3, 1], // no hours given: the church's usual hours
       ['2026-11-14', 4, 2],
     ]);
     expect(g[1].slots[0].assignment?.person_id).toBe('x');
@@ -82,6 +82,45 @@ describe('buildEvents', () => {
       ],
     );
     expect(g[0].slots).toHaveLength(2);
+  });
+});
+
+// SECURITY REVIEW 19 (Z03, Z06, Z07): hours as the database counts them; nothing booked hidden.
+describe('placeHours', () => {
+  const demand = [
+    { project_id: 'p1', church_role_id: null, on_date: '2026-11-14', slots_needed: 1, hours: null },
+    { project_id: 'p1', church_role_id: null, on_date: '2026-11-14', slots_needed: 1, hours: 0.5 },
+    { project_id: 'p1', church_role_id: 'r1', on_date: '2026-11-21', slots_needed: 1, hours: 1 },
+    { project_id: 'p1', church_role_id: null, on_date: '2026-11-21', slots_needed: 1, hours: 4 },
+  ];
+  it('counts a row with no hours at the usual hours, and the larger of two rows', () => {
+    expect(placeHours(demand, 'p1', null, '2026-11-14', 3)).toBe(3);
+  });
+  it("uses the role's own row, else the any-role row, else nothing", () => {
+    expect(placeHours(demand, 'p1', 'r1', '2026-11-21', 3)).toBe(1);
+    expect(placeHours(demand, 'p1', 'r2', '2026-11-21', 3)).toBe(4);
+    expect(placeHours(demand, 'p1', 'r2', '2026-11-28', 3)).toBeNull();
+    expect(placeHours(demand, 'p2', null, '2026-11-14', 3)).toBeNull();
+  });
+});
+
+describe('buildEvents (review 19)', () => {
+  it('shows hours per place when they differ, and a booking with no place left', () => {
+    const g = buildEvents(
+      [
+        { project_id: 'p1', church_role_id: 'r1', on_date: '2026-11-21', slots_needed: 1, hours: 1 },
+        { project_id: 'p1', church_role_id: 'r2', on_date: '2026-11-21', slots_needed: 1, hours: 8 },
+      ],
+      [{ id: 'p1', name: 'Harvest outreach' }, { id: 'p9', name: 'Old rehearsal' }],
+      [{ id: 'z', project_id: 'p9', person_id: 'q', status: 'planned', church_role_id: null, serve_date: '2026-11-03', hours: 2 }],
+      3,
+    );
+    expect(g.map((x) => [x.name, x.hours, x.open])).toEqual([
+      ['Old rehearsal', 2, false],
+      ['Harvest outreach', null, true],
+    ]);
+    expect(g[1].slots.map((x) => x.hours)).toEqual([1, 8]);
+    expect(g[0].slots[0].assignment?.person_id).toBe('q');
   });
 });
 

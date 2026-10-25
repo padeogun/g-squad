@@ -73,9 +73,12 @@ export const useUnitAssignments = (unitId: string, from: string, to: string) =>
 
 // Migration 28: one unit's places on events, outreach and team activities in a month (every
 // project except Sunday services that is approved or under way), with each project's name.
-export const useUnitEventDemand = (unitId: string, from: string, to: string) =>
+// SECURITY REVIEW 19 (Z06): `bookedIds` are the projects of this month's bookings outside Sunday
+// services. Their names are loaded whatever their status, so a booking whose place was removed,
+// or whose project went back for approval, is still shown (it still counts towards the limit).
+export const useUnitEventDemand = (unitId: string, from: string, to: string, bookedIds: string[] = []) =>
   useQuery({
-    queryKey: ['demand', 'unit-events', unitId, from, to],
+    queryKey: ['demand', 'unit-events', unitId, from, to, [...bookedIds].sort()],
     enabled: !!unitId,
     queryFn: async () => {
       const { data: demand, error } = await supabase
@@ -86,16 +89,15 @@ export const useUnitEventDemand = (unitId: string, from: string, to: string) =>
         .lte('on_date', to)
         .order('on_date');
       if (error) throw error;
-      const ids = [...new Set(demand.map((d) => d.project_id))];
+      const ids = [...new Set([...demand.map((d) => d.project_id), ...bookedIds])];
       if (!ids.length) return { demand: [], projects: [] };
       const { data: projects, error: pErr } = await supabase
         .from('projects')
         .select('id, name, status, is_sunday_service, level')
         .in('id', ids)
-        .eq('is_sunday_service', false)
-        .in('status', ['approved', 'in_progress']);
+        .eq('is_sunday_service', false);
       if (pErr) throw pErr;
-      const open = new Set(projects.map((p) => p.id));
+      const open = new Set(projects.filter((p) => p.status === 'approved' || p.status === 'in_progress').map((p) => p.id));
       return { demand: demand.filter((d) => open.has(d.project_id)), projects };
     },
   });
@@ -188,42 +190,98 @@ export interface EventDemand extends DemandRow {
   hours: number | null;
 }
 
+// The hours a place gives, as the database counts them (app.place_hours, SECURITY REVIEW 19
+// Z03): the role's own rows, else the "any role" rows for that day; a row with no hours counts
+// the church's usual hours, and the larger wins. Null when the team was not asked.
+export function placeHours(
+  demand: (EventDemand | (DemandRow & { hours?: number | null }))[],
+  projectId: string,
+  roleId: string | null,
+  date: string,
+  defaultHours: number,
+): number | null {
+  const at = (r: string | null) =>
+    demand.filter((d) => d.project_id === projectId && d.on_date === date && (d.church_role_id ?? null) === r);
+  const own = at(roleId);
+  const rows = own.length || roleId === null ? own : at(null);
+  if (!rows.length) return null;
+  return Math.max(...rows.map((d) => (d.hours == null ? defaultHours : Number(d.hours))));
+}
+
+export interface EventSlot extends RotaSlot {
+  hours: number; // a booking's own hours (set by the database), or the place's for an open one
+}
+
 export interface EventGroup {
   projectId: string;
   name: string;
   date: string;
-  hours: number | null; // null = the church's usual hours per slot
-  slots: RotaSlot[];
+  // The hours each place gives when they are all the same, else null (shown per place).
+  hours: number | null;
+  // False when the project is no longer approved or the place was removed (Z06): bookings only.
+  open: boolean;
+  slots: EventSlot[];
 }
 
+type EventBooking = Pick<Assignment, 'id' | 'person_id' | 'status' | 'church_role_id' | 'serve_date' | 'project_id'> & {
+  hours?: number | null;
+};
+
 // One group per project and day, in date order; each needed place is a slot, filled in a stable
-// order by that day's assignments for the role. Assignments beyond the places asked for are
-// kept so nothing booked is hidden.
+// order by that day's assignments for the role. Assignments beyond the places asked for, and
+// SECURITY REVIEW 19 (Z06) bookings with no place at all, are kept so nothing booked is hidden.
+// `projects` names every project; demand is only for those open to booking.
 export function buildEvents(
   demand: EventDemand[],
   projects: { id: string; name: string }[],
-  assignments: Pick<Assignment, 'id' | 'person_id' | 'status' | 'church_role_id' | 'serve_date' | 'project_id'>[],
+  assignments: EventBooking[],
+  defaultHours = 3,
 ): EventGroup[] {
   const names = new Map(projects.map((p) => [p.id, p.name]));
   const groups = new Map<string, EventGroup>();
+  const group = (projectId: string, date: string, open: boolean) => {
+    const gk = `${date}|${projectId}`;
+    if (!groups.has(gk)) groups.set(gk, { projectId, name: names.get(projectId) ?? 'Project', date, hours: null, open, slots: [] });
+    const g = groups.get(gk)!;
+    g.open = g.open || open;
+    return g;
+  };
   const need = new Map<string, number>(); // group|role -> places
   for (const d of demand) {
     if (!names.has(d.project_id)) continue;
-    const gk = `${d.on_date}|${d.project_id}`;
-    if (!groups.has(gk)) groups.set(gk, { projectId: d.project_id, name: names.get(d.project_id)!, date: d.on_date, hours: d.hours, slots: [] });
-    const g = groups.get(gk)!;
-    if (d.hours !== null && (g.hours === null || d.hours > g.hours)) g.hours = d.hours;
-    const rk = `${gk}|${d.church_role_id ?? '*'}`;
+    group(d.project_id, d.on_date, true);
+    const rk = `${d.on_date}|${d.project_id}|${d.church_role_id ?? '*'}`;
     need.set(rk, (need.get(rk) ?? 0) + d.slots_needed);
   }
+  const used = new Set<string>();
   for (const [rk, n] of need) {
     const [date, projectId, role] = rk.split('|');
     const roleId = role === '*' ? null : role;
     const booked = assignments
       .filter((a) => a.project_id === projectId && a.serve_date === date && (a.church_role_id ?? null) === roleId)
       .sort((x, y) => x.id.localeCompare(y.id));
+    const placeH = placeHours(demand, projectId, roleId, date, defaultHours) ?? defaultHours;
     const g = groups.get(`${date}|${projectId}`)!;
-    for (let i = 0; i < Math.max(n, booked.length); i++) g.slots.push({ roleId, date, projectId, assignment: booked[i] ?? null });
+    for (let i = 0; i < Math.max(n, booked.length); i++) {
+      const a = booked[i] ?? null;
+      if (a) used.add(a.id);
+      g.slots.push({ roleId, date, projectId, assignment: a, hours: a?.hours != null ? Number(a.hours) : placeH });
+    }
+  }
+  for (const a of [...assignments].sort((x, y) => x.id.localeCompare(y.id))) {
+    if (used.has(a.id)) continue;
+    const g = group(a.project_id, a.serve_date, false);
+    g.slots.push({
+      roleId: a.church_role_id ?? null,
+      date: a.serve_date,
+      projectId: a.project_id,
+      assignment: a,
+      hours: a.hours != null ? Number(a.hours) : defaultHours,
+    });
+  }
+  for (const g of groups.values()) {
+    const hs = new Set(g.slots.map((x) => x.hours));
+    g.hours = hs.size === 1 ? [...hs][0] : null;
   }
   return [...groups.values()].sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name));
 }

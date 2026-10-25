@@ -13,6 +13,7 @@ import { supabase } from '../../lib/supabase';
 import { friendlyError } from '../../data/errors';
 import { byId, useChurchRoles, useLeaders, useUnits } from '../../data/reference';
 import { useDemand, shortDate, todayIso } from '../../data/sundays';
+import { useSettings } from '../../data/newsletter';
 import { isoToLondon, safeHttpsUrl, SHORTFALL_ACTIONS, useInputs, useRefreshProject, weeklyDates, type Input, type Project, type Readiness } from '../../data/projects';
 
 const { Card, Notice, Button, Chip, TextField, SelectField, Checkbox } = TEC;
@@ -74,6 +75,7 @@ export function DemandCard({ p, canManage, shortfall }: { p: Project; canManage:
   const units = useUnits();
   const roles = useChurchRoles();
   const refresh = useRefreshProject(p.id);
+  const settings = useSettings();
   const first = isoToLondon(p.starts_at).date;
   const last = isoToLondon(p.ends_at).date;
   // Migration 28: hours each person gives (blank = the church's hours per slot), and an
@@ -114,6 +116,8 @@ export function DemandCard({ p, canManage, shortfall }: { p: Project; canManage:
   const total = rows.reduce((n, d) => n + d.slots_needed, 0);
   const slots = Number(v.slots);
   const hours = v.hours ? Number(v.hours) : null;
+  const repeatDays = v.until ? weeklyDates(v.date, v.until, last).length : 1;
+  const usualHours = Number(settings.data?.hours_per_slot ?? 3);
   const valid =
     !!v.unit && !!v.date && Number.isInteger(slots) && slots >= 1 && slots <= 500 &&
     (hours === null || (hours >= 0.5 && hours <= 16 && Number.isInteger(hours * 2))) && (!v.until || v.until >= v.date);
@@ -183,9 +187,26 @@ export function DemandCard({ p, canManage, shortfall }: { p: Project; canManage:
           )}
           <TextField id="dm-slots" label="People" type="number" inputMode="numeric" min={1} max={500} value={v.slots} onChange={(e) => setV({ ...v, slots: e.target.value })} />
           {/* Migration 28: hours count towards each person's monthly limit across all serving. */}
-          <TextField id="dm-hours" label="Hours each" hint="(blank: usual slot)" type="number" inputMode="decimal" min={0.5} max={16} step={0.5} value={v.hours} onChange={(e) => setV({ ...v, hours: e.target.value })} />
+          <TextField
+            id="dm-hours"
+            label="Hours each"
+            hint={`(half-hours; blank for the usual ${usualHours} h)`}
+            type="number"
+            inputMode="decimal"
+            min={0.5}
+            max={16}
+            step={0.5}
+            value={v.hours}
+            onChange={(e) => setV({ ...v, hours: e.target.value })}
+          />
           {first !== last && (
             <TextField id="dm-until" label="Repeat weekly until" hint="(optional)" type="date" min={v.date} max={last} value={v.until} onChange={(e) => setV({ ...v, until: e.target.value })} />
+          )}
+          {/* SECURITY REVIEW 19 (Z07): say how many days a weekly repeat adds (at most 60). */}
+          {v.until && valid && (
+            <p className="type-caption" style={{ margin: 0 }} aria-live="polite">
+              Adds {repeatDays} {repeatDays === 1 ? 'day' : 'days'}, the last on {shortDate(weeklyDates(v.date, v.until, last)[repeatDays - 1])}.
+            </p>
           )}
           <div>
             <Button size="sm" variant="secondary" disabled={!valid || add.isPending} onClick={() => add.mutate()}>
