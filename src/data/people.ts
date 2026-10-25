@@ -72,6 +72,24 @@ export const usePersonNames = (ids: string[]) => {
   });
 };
 
+// Names only of everyone this leader may see, for pickers (e.g. an event's on-the-day lead):
+// no contact or personal details are loaded.
+export const usePeopleNames = () =>
+  useQuery({
+    queryKey: ['people', 'names', 'all'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('people')
+        .select('id, first_name, surname')
+        .is('anonymised_at', null)
+        .neq('status', 'left')
+        .order('surname')
+        .order('first_name');
+      if (error) throw error;
+      return data as PersonName[];
+    },
+  });
+
 // Live memberships (pending or active) the leader can see, for lists and My Unit.
 export const useMemberships = () =>
   useQuery({
