@@ -101,4 +101,37 @@ psql "$TEST_URL" -v ON_ERROR_STOP=1 -q -t -f tests/10_access_and_rules.sql > "$o
 # The result column is padded ("FAIL  "), so allow spaces before the bar.
 grep -E '\| FAIL +\|' "$out" || true
 rm -f "$out"
-exit "$status"
+[[ "$status" == "0" ]] || exit "$status"
+
+# Sample data (run by hand on Supabase from the "Sample data" workflow): check it loads,
+# gives the tester every role, can be removed and loaded again, on a clean database of its
+# own so the checks above never see it.
+echo "== sample data"
+SAMPLE_DB="gsquad_sample_check"
+SAMPLE_URL="$(printf '%s' "$ADMIN_URL" | sed -E 's#/[^/?]*(\?.*)?$##')/${SAMPLE_DB}"
+psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -q -c "drop database if exists ${SAMPLE_DB}" -c "create database ${SAMPLE_DB}"
+srun() { psql "$SAMPLE_URL" -v ON_ERROR_STOP=1 -q -f "$1"; }
+srun tests/00_supabase_shim.sql
+for f in migrations/*.sql; do srun "$f" > /dev/null; done
+srun seed.sql > /dev/null
+# A leader account, as the app's invite would make it.
+psql "$SAMPLE_URL" -v ON_ERROR_STOP=1 -q -c "
+  insert into auth.users (id, email) values ('00000000-0000-0000-0000-00000000aa01', 'tester@example.org');
+  insert into public.app_users (id, church_id, display_name)
+  select '00000000-0000-0000-0000-00000000aa01', id, 'Tester' from public.churches where slug = 'tec-manchester';"
+sample_sql="$(mktemp)"
+sed 's/__TEST_EMAIL__/Tester@Example.org/' sample-data.sql > "$sample_sql"
+srun "$sample_sql"
+srun "$sample_sql"   # a second run changes nothing
+roles="$(psql "$SAMPLE_URL" -At -c "select count(distinct role) from public.role_assignments")"
+people="$(psql "$SAMPLE_URL" -At -c "select count(*) from public.people where email like '%@g-squad.example'")"
+srun sample-data-remove.sql
+left="$(psql "$SAMPLE_URL" -At -c "select count(*) from public.people where email like '%@g-squad.example'")"
+srun "$sample_sql"   # and it loads again after removal
+rm -f "$sample_sql"
+psql "$ADMIN_URL" -q -c "drop database if exists ${SAMPLE_DB}"
+if [[ "$roles" != "9" || "$people" != "30" || "$left" != "0" ]]; then
+  echo "Sample data check failed: roles=$roles people=$people left_after_removal=$left" >&2
+  exit 1
+fi
+echo "Sample data loads, gives 9 roles, and removes cleanly"

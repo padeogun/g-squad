@@ -1,0 +1,86 @@
+# -------------------------------------------------------------------------------------
+# Loads or removes the made-up sample data on the Supabase project, by hand only.
+#
+# Why a separate workflow: sample data is not a migration (it must be removable before
+# go-live, and real churches never get it), so it never runs on a normal deploy.
+#   load    runs supabase/sample-data.sql: 30 invented members, four Sundays, events,
+#           one-to-ones and recognitions. Optionally gives every leader role to one tester's
+#           sign-in (invite that person in the app first, so their account exists).
+#   remove  runs supabase/sample-data-remove.sql (before go-live, slice 7).
+#
+# Same protections as "Deploy database": main branch only, the supabase-test environment,
+# and the access token given only to the steps that need it.
+# -------------------------------------------------------------------------------------
+name: Sample data
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Load or remove the sample data
+        type: choice
+        options: [load, remove]
+        default: load
+      tester_email:
+        description: (load only) A leader's sign-in email to give every role. Leave blank for none.
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+# Never alongside a deploy: both change the same database.
+concurrency:
+  group: deploy-database
+  cancel-in-progress: false
+
+jobs:
+  run:
+    # As SECURITY REVIEW FIX J02: only the reviewed code on main may touch the database.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: supabase-test
+    env:
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci --ignore-scripts
+      - name: Link the project
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: npx --no-install supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
+      # The email arrives through an environment variable, never pasted into the script by
+      # GitHub (that would let a crafted value run commands). It must be a plain address:
+      # letters, digits and . _ % + - only, so no quote or semicolon can reach the SQL.
+      - name: Prepare the SQL
+        env:
+          ACTION: ${{ inputs.action }}
+          TESTER_EMAIL: ${{ inputs.tester_email }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTION" = "remove" ]; then
+            cp supabase/sample-data-remove.sql "$RUNNER_TEMP/run.sql"
+            exit 0
+          fi
+          email="$(printf '%s' "$TESTER_EMAIL" | tr -d '[:space:]')"
+          if [ -n "$email" ] && ! printf '%s' "$email" | grep -Eq '^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,180}\.[A-Za-z]{2,24}$'; then
+            echo "That doesn't look like a plain email address." >&2
+            exit 1
+          fi
+          # Blank: the placeholder stays and matches no one, so no role is given.
+          if [ -n "$email" ]; then
+            sed "s/__TEST_EMAIL__/$email/" supabase/sample-data.sql > "$RUNNER_TEMP/run.sql"
+          else
+            cp supabase/sample-data.sql "$RUNNER_TEMP/run.sql"
+          fi
+      - name: Run it
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: npx --no-install supabase db query --linked -f "$RUNNER_TEMP/run.sql"
