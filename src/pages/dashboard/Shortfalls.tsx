@@ -8,6 +8,8 @@ import { Link } from 'react-router-dom';
 import { TEC } from '../../design-system';
 import { friendlyError } from '../../data/errors';
 import { STATUS_LABEL, useShortfalls } from '../../data/projects';
+import { CAPACITY_ROLES } from '../../data/dashboards';
+import { hasRole, useMe } from '../../auth/useMe';
 
 const { Card, Notice, Chip } = TEC;
 
@@ -15,9 +17,13 @@ const monthName = (iso: string) =>
   new Date(`${iso.slice(0, 10)}T12:00:00Z`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 
 export function ShortfallsCard({ unitId = null, enabled = true }: { unitId?: string | null; enabled?: boolean }) {
+  const me = useMe();
   const list = useShortfalls(unitId, enabled);
+  // The calendar link only for those who may open it (the Pastoral Lead sees this card but
+  // not the capacity calendar; security review 16).
+  const seesCalendar = hasRole(me.data, ...CAPACITY_ROLES);
   return (
-    <Card title="Volunteer shortfalls" action={<Link to="/capacity">Capacity calendar</Link>}>
+    <Card title="Volunteer shortfalls" action={seesCalendar ? <Link to="/capacity">Capacity calendar</Link> : undefined}>
       {list.isPending && <p>Loading…</p>}
       {list.error && <Notice tone="danger">{friendlyError(list.error)}</Notice>}
       {list.data && list.data.length === 0 && (
