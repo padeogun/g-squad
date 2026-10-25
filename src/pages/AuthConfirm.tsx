@@ -5,7 +5,7 @@
 // used by a scanner is gone before the leader clicks it. The leader presses "Sign in", and
 // only then is the link's token hash exchanged for a session. It works on any device, not only
 // the one that asked for the link. If the link is no longer valid, the page says so and offers
-// the sign-in page, where the 6-digit code from the same email also works.
+// the sign-in page, where the 8-digit code from the same email also works.
 // -------------------------------------------------------------------------------------
 import { useEffect, useRef, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
@@ -29,7 +29,14 @@ export function AuthConfirm() {
   }, [state]);
 
   // Signed in (just now, or already): into the app.
-  if (session && state !== 'failed') return <Navigate to="/" replace />;
+  // SECURITY REVIEW 22 (L06): a link opened while someone is already signed in is dropped, not
+  // kept for later. The link is no longer tied to the browser that asked for it (no PKCE), so a
+  // leader can be sent someone else's link; it must never switch the account in use, and must
+  // not be waiting in memory to be pressed after signing out.
+  if (session && state !== 'failed') {
+    clearPendingLink();
+    return <Navigate to="/" replace />;
+  }
   // No link in memory (page reloaded, or opened by hand): the normal sign-in page.
   if (!link) return <Navigate to="/sign-in" replace />;
 
@@ -60,7 +67,7 @@ export function AuthConfirm() {
             <div ref={message} tabIndex={-1}>
               <Notice tone="warn" title="This link has already been used or has expired">
                 Each link works once, for an hour. Go to the sign-in page and ask for a new one; you can also type
-                the 6-digit code from that email instead of clicking its link.
+                the 8-digit code from that email instead of clicking its link.
               </Notice>
               <p style={{ marginTop: 12 }}>
                 <Link to="/sign-in">Go to the sign-in page</Link>

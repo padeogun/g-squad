@@ -9,7 +9,8 @@ const verifyOtp = vi.fn();
 let pending: { tokenHash: string; type: 'invite' | 'email' } | null = null;
 vi.mock('../lib/supabase', () => ({ supabase: { auth: { verifyOtp: (...a: unknown[]) => verifyOtp(...a) } } }));
 vi.mock('../lib/invite-landing', () => ({ pendingEmailLink: () => pending, clearPendingLink: () => (pending = null) }));
-vi.mock('../auth/AuthProvider', () => ({ useAuth: () => ({ session: null, loading: false, signOut: vi.fn() }) }));
+let session: object | null = null;
+vi.mock('../auth/AuthProvider', () => ({ useAuth: () => ({ session, loading: false, signOut: vi.fn() }) }));
 
 import { AuthConfirm } from './AuthConfirm';
 
@@ -24,6 +25,7 @@ function renderPage() {
 describe('AuthConfirm', () => {
   beforeEach(() => {
     verifyOtp.mockReset();
+    session = null;
     pending = { tokenHash: 'a'.repeat(56), type: 'invite' };
   });
 
@@ -42,5 +44,13 @@ describe('AuthConfirm', () => {
     await userEvent.click(screen.getByRole('button', { name: /^sign in$/i }));
     expect(await screen.findByText(/already been used or has expired/i)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /sign-in page/i })).toBeInTheDocument();
+  });
+
+  // Review 22 (L06): someone else's link must never switch the account in use.
+  it('drops a link opened while already signed in, without using it', () => {
+    session = { user: { id: 'u1' } };
+    renderPage();
+    expect(verifyOtp).not.toHaveBeenCalled();
+    expect(pending).toBeNull();
   });
 });

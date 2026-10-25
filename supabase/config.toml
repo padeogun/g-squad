@@ -230,7 +230,11 @@ secure_password_change = true
 # Controls the minimum amount of time that must pass before sending another signup confirmation or password reset email.
 max_frequency = "1s"
 # Number of characters used in the email OTP.
-otp_length = 6
+# SECURITY REVIEW 22 (L03): 8, not 6. The code in the sign-in email can be tried by anyone with
+# the public key, limited only per IP address (token_verifications above), and a stranger can
+# have a fresh code sent to any leader. 8 digits make guessing 100 times harder. The live
+# project gets the same value from the "Deploy database" workflow.
+otp_length = 8
 # Number of seconds before the email OTP expires (defaults to 1 hour).
 otp_expiry = 3600
 
@@ -254,6 +258,12 @@ content_path = "./supabase/templates/invite.html"
 [auth.email.template.magic_link]
 subject = "Your G-Squad Planner sign-in"
 content_path = "./supabase/templates/magic_link.html"
+
+# SECURITY REVIEW 22 (L02): sent instead of the magic link to a leader who has not yet accepted
+# their invitation; see the comment in the file.
+[auth.email.template.confirmation]
+subject = "Your G-Squad Planner sign-in"
+content_path = "./supabase/templates/confirmation.html"
 
 # Uncomment to customize notification email template
 # [auth.email.notification.password_changed]

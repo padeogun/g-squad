@@ -31,7 +31,14 @@ export const supabase = createClient<Database>(env.supabaseUrl, env.supabaseKey,
 // browser) cannot sign in. The emails no longer carry a sign-in URL with tokens in it (they
 // link to /auth/confirm with a one-time hash, see src/lib/email-sign-in.ts), so asking without
 // PKCE puts nothing in an address bar. The main client above, still PKCE, then exchanges the
-// hash or the 6-digit code for the session.
+// hash or the 8-digit code for the session.
+// SECURITY REVIEW 22: this holds only while EVERY email Supabase can send for this request uses
+// a token_hash link. A leader who has not accepted their invitation gets the "confirm signup"
+// email instead of the magic link; left as Supabase's default it would have put session tokens
+// in the address bar (now supabase/templates/confirmation.html, L02). A guard test checks every
+// template. The price of no PKCE: a link no longer belongs to one browser, so someone could send
+// a leader their own link; /auth/confirm ignores links while signed in (L06), and the app shows
+// whose account is in use.
 export const emailRequestClient = createClient<Database>(env.supabaseUrl, env.supabaseKey, {
   auth: {
     flowType: 'implicit',

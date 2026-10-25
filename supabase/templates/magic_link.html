@@ -1,11 +1,12 @@
 <!--
   G-Squad Planner: sign-in email (Supabase Auth "magic link" template).
   Why this template: the default link signs in the moment it is opened, so email scanners used
-  it before the leader did. This links to the app (/?token_hash=…&type=email), which signs in
-  only when the leader presses Sign in, on any device. The 6-digit code is a second way in,
-  typed on the sign-in page.
-  {{ .RedirectTo }} is the app address the sign-in page asked for (it ends in "/").
+  it before the leader did. This links to the app (/auth/confirm?token_hash=…&type=email), which
+  signs in only when the leader presses Sign in, on any device. The 8-digit code is a second way
+  in, typed on the sign-in page.
+  SECURITY REVIEW 22 (L01): .SiteURL, not .RedirectTo: see invite.html.
   Deployed to Supabase by .github/workflows/deploy-database.yml.
+  (Template actions are left out of this comment: Supabase would fill them in here too.)
 -->
 <div style="font-family: Arial, sans-serif; color: #0E1E3A; max-width: 520px; margin: 0 auto;">
   <div style="background: #1B4F93; color: #FFFFFF; padding: 20px 24px;">
@@ -15,7 +16,7 @@
   <div style="padding: 24px; background: #FFFFFF; border: 1px solid #D9E3EF;">
     <p style="margin: 0 0 20px;">Press the button below, then press <strong>Sign in</strong> on the page that opens.</p>
     <p style="margin: 0 0 20px;">
-      <a href="{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=email"
+      <a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email"
          style="display: inline-block; background: #1B4F93; color: #FFFFFF; padding: 12px 20px; border-radius: 6px; text-decoration: none; font-weight: bold;">Sign in to the G-Squad Planner</a>
     </p>
     <p style="margin: 0 0 8px;">Or type this code on the sign-in page:</p>

@@ -6,7 +6,7 @@ import { MemoryRouter } from 'react-router-dom';
 
 // Stub Supabase: no network. signInWithOtp's result is set per test.
 // The email is asked for through emailRequestClient (no PKCE, so the link and code work on
-// any device); the 6-digit code is checked by the main client's verifyOtp.
+// any device); the 8-digit code is checked by the main client's verifyOtp.
 const signInWithOtp = vi.fn();
 const verifyOtp = vi.fn();
 vi.mock('../lib/supabase', () => ({
@@ -32,15 +32,15 @@ describe('SignIn', () => {
     verifyOtp.mockReset();
   });
 
-  it('signs in with the 6-digit code from the email', async () => {
+  it('signs in with the 8-digit code from the email', async () => {
     signInWithOtp.mockResolvedValue({ error: null });
     verifyOtp.mockResolvedValue({ error: null });
     renderPage();
     await userEvent.type(screen.getByLabelText(/email address/i), 'lead@example.org');
     await userEvent.click(screen.getByRole('button', { name: /email me a sign-in link/i }));
-    await userEvent.type(await screen.findByLabelText(/6-digit code/i), '123 456');
+    await userEvent.type(await screen.findByLabelText(/8-digit code/i), '1234 5678');
     await userEvent.click(screen.getByRole('button', { name: /sign in with the code/i }));
-    expect(verifyOtp).toHaveBeenCalledWith({ email: 'lead@example.org', token: '123456', type: 'email' });
+    expect(verifyOtp).toHaveBeenCalledWith({ email: 'lead@example.org', token: '12345678', type: 'email' });
   });
 
   it('says so when the code is wrong or expired', async () => {
@@ -49,7 +49,7 @@ describe('SignIn', () => {
     renderPage();
     await userEvent.type(screen.getByLabelText(/email address/i), 'lead@example.org');
     await userEvent.click(screen.getByRole('button', { name: /email me a sign-in link/i }));
-    await userEvent.type(await screen.findByLabelText(/6-digit code/i), '000000');
+    await userEvent.type(await screen.findByLabelText(/8-digit code/i), '00000000');
     await userEvent.click(screen.getByRole('button', { name: /sign in with the code/i }));
     expect(await screen.findByText(/that code didn't work/i)).toBeInTheDocument();
   });

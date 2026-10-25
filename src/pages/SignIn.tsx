@@ -3,7 +3,7 @@
 // address that was never invited gets no account. The message after sending is the same
 // whether or not the address is known, so the form can't be used to discover who is a leader.
 //
-// The email carries a link to /auth/confirm and a 6-digit code (src/lib/email-sign-in.ts).
+// The email carries a link to /auth/confirm and an 8-digit code (src/lib/email-sign-in.ts).
 // The code can be typed here, which helps when the email is read on another device or the
 // link was used up by an email scanner.
 // -------------------------------------------------------------------------------------
@@ -88,12 +88,12 @@ export function SignIn() {
             <form className="auth-form" onSubmit={onCode} noValidate>
               <Notice tone="ok" title="Check your email">
                 If this address belongs to a G-Squad leader, an email is on its way. Open its link and press Sign
-                in, or type its 6-digit code here. Both work once, for an hour. If nothing arrives within a few
+                in, or type its 8-digit code here. Both work once, for an hour. If nothing arrives within a few
                 minutes, check your spam folder, then try again.
               </Notice>
               <TextField
                 id="code"
-                label="6-digit code from the email"
+                label="8-digit code from the email"
                 inputMode="numeric"
                 autoComplete="one-time-code"
                 value={code}

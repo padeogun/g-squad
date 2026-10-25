@@ -10,7 +10,7 @@
 // (?token_hash=…&type=…). Opening that page changes nothing; the leader presses "Sign in",
 // and only then is the hash exchanged for a session (verifyOtp). The hash needs no secret
 // kept in the browser that asked for it, so the link also works on another device. Each email
-// also carries a 6-digit code as a second way in.
+// also carries an 8-digit code as a second way in.
 // -------------------------------------------------------------------------------------
 
 export type EmailLinkType = 'invite' | 'email';
@@ -34,7 +34,8 @@ export function parseEmailLink(search: string): EmailLink | null {
   return { tokenHash, type };
 }
 
-// A 6-digit code as typed: spaces and dashes dropped. Supabase sends 6 to 10 digits.
+// A code as typed: spaces and dashes dropped. Supabase sends 6 to 10 digits (G-Squad uses 8,
+// review 22 L03); any length in that range is passed on, so changing the setting needs no release.
 export function cleanCode(input: string): string | null {
   const digits = input.replace(/[\s-]/g, '');
   return /^\d{6,10}$/.test(digits) ? digits : null;
