@@ -4,6 +4,9 @@
 //        is used throughout, so no connection is ever attempted.
 //   J01  no file in src/ passes import.meta.env as a whole object, because Vite would then
 //        inline every VITE_* variable from the build environment into the public bundle.
+//   K01  (review 21) scripts/sample-data-prepare.sh lets only a plain email, a GitHub user name
+//        and a run number into the sample-data SQL, and the workflow never pastes an input
+//        into a script with ${{ }}.
 // -------------------------------------------------------------------------------------
 import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -77,5 +80,86 @@ describe('browser bundle (J01)', () => {
       /import\.meta\.env(?!\.[A-Z_])/.test(readFileSync(file, 'utf8').replace(/\/\/.*$/gm, '')),
     );
     expect(offenders).toEqual([]);
+  });
+});
+
+// Builds the sample-data SQL as the workflow would, into a temporary file.
+function prepareSample(env: Record<string, string>) {
+  const out = join(mkdtempSync(join(tmpdir(), 'gsquad-sample-')), 'run.sql');
+  const r = spawnSync('bash', [join(root, 'scripts/sample-data-prepare.sh')], {
+    env: { PATH: '/usr/bin:/bin', OUT: out, ...env },
+    encoding: 'utf8',
+  });
+  return { ...r, sql: r.status === 0 ? readFileSync(out, 'utf8') : '' };
+}
+
+describe('sample data workflow input (K01)', () => {
+  const hostile = [
+    "x'); select 1; --@example.org",
+    'a@b.org/e; s/.*/drop table people/',
+    'a&b@example.org',
+    'a\\@example.org',
+    'a@example.org\nselect 1',
+    '$(id)@example.org',
+    '`id`@example.org',
+    'a"b@example.org',
+    'no-at-sign.example.org',
+  ];
+
+  it.each(hostile)('refuses %j', (email) => {
+    const r = prepareSample({ ACTION: 'load', TESTER_EMAIL: email });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/plain email/);
+  });
+
+  it('puts a plain address in, and the Resident Pastor role only when asked', () => {
+    const plain = prepareSample({ ACTION: 'load', TESTER_EMAIL: ' Ops.Lead+test@example.org\n' });
+    expect(plain.status).toBe(0);
+    expect(plain.sql).toContain("lower('Ops.Lead+test@example.org')");
+    expect(plain.sql).not.toContain('__TEST_EMAIL__');
+    expect(plain.sql).toContain("'no' = 'yes'");
+    const rp = prepareSample({ ACTION: 'load', TESTER_EMAIL: 'a@example.org', GIVE_RESIDENT_PASTOR: 'true' });
+    expect(rp.sql).toContain("'yes' = 'yes'");
+  });
+
+  // A sign-in per role (Paul, 25 Oct 2026): a fixed choice of role set reaches the SQL.
+  it('gives one role or every role, and Resident Pastor alone only with the box ticked', () => {
+    expect(prepareSample({ ACTION: 'load', TESTER_EMAIL: 'a@example.org' }).sql).toContain("when 'all' in");
+    expect(prepareSample({ ACTION: 'load', TESTER_EMAIL: 'a@example.org', ROLE_SET: 'team_lead' }).sql).toContain("when 'team_lead' in");
+    const noTick = prepareSample({ ACTION: 'load', TESTER_EMAIL: 'a@example.org', ROLE_SET: 'resident_pastor' });
+    expect(noTick.status).toBe(1);
+    expect(noTick.stderr).toMatch(/Tick the Resident Pastor box/);
+    const ticked = prepareSample({ ACTION: 'load', TESTER_EMAIL: 'a@example.org', ROLE_SET: 'resident_pastor', GIVE_RESIDENT_PASTOR: 'true' });
+    expect(ticked.sql).toContain("when 'resident_pastor' in");
+    expect(prepareSample({ ACTION: 'load', ROLE_SET: "all'; drop table people; --" }).status).toBe(1);
+  });
+
+  it('leaves the placeholder (no roles) when the email is blank', () => {
+    const r = prepareSample({ ACTION: 'load', TESTER_EMAIL: '' });
+    expect(r.status).toBe(0);
+    expect(r.sql).toContain("lower('__TEST_EMAIL__')");
+  });
+
+  it('logs an unexpected user name or run number as a harmless label', () => {
+    const r = prepareSample({ ACTION: 'remove', RUN_BY: "x'; drop table people; --", RUN_ID: '1;2' });
+    expect(r.status).toBe(0);
+    expect(r.sql).toContain("'github_user', 'unknown'");
+    expect(r.sql).toContain("'github_run', '0'");
+  });
+
+  it('refuses an unknown action', () => {
+    expect(prepareSample({ ACTION: 'drop' }).status).toBe(1);
+  });
+
+  // Allowed: an environment variable (NAME: ${{ ... }}) or a step condition (if: ${{ ... }}).
+  // Anything else, such as a ${{ }} on any line of a run: script, is refused.
+  it('never pastes a ${{ }} value into a script in the database workflows', () => {
+    for (const name of ['sample-data.yml', 'deploy-database.yml']) {
+      const lines = readFileSync(join(root, '.github/workflows', name), 'utf8').split('\n');
+      const offenders = lines.filter(
+        (line) => line.includes('${{') && !/^\s*([A-Z][A-Z0-9_]*|if): \$\{\{[^}]*\}\}\s*$/.test(line),
+      );
+      expect(offenders, name).toEqual([]);
+    }
   });
 });
