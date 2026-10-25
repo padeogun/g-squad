@@ -119,8 +119,10 @@
 .app-content { overflow-wrap: break-word; }
 /* Flex rows: let text items shrink and wrap (flex items otherwise keep their longest word's width). */
 .app-candidates li > *, .app-checkin li > *, .tec-card-head > *, .tec-row > * { min-width: 0; overflow-wrap: anywhere; }
-/* Chips wrap in rows and cards; inside tables they stay on one line and the table scrolls. */
-.app-content .tec-chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+/* Chips wrap in rows and cards, between words only (break-word, unlike "anywhere", keeps a
+   word whole when sizing, so a short chip like "Pass" never splits into letters); inside
+   tables they stay on one line and the table scrolls. Chips keep their own width in rows. */
+.app-content .tec-chip { max-width: 100%; white-space: normal; overflow-wrap: break-word; min-width: auto; flex-shrink: 0; }
 .app-content td .tec-chip { white-space: nowrap; }
 
 /* A small select beside a card title (e.g. "Show" on the TECi list): label and select on one line. */
@@ -131,3 +133,55 @@
 
 /* File picker on the upload page: the browser's button inside the usual input box. */
 .app-file-input { padding-top: var(--space-2); padding-bottom: var(--space-2); }
+
+/* ---------- Projects and events (slice 4) ---------- */
+/* Project page: the plan beside the side cards; one column on narrow screens. */
+.app-project-grid { display: flex; flex-wrap: wrap; gap: var(--space-5); align-items: flex-start; }
+.app-project-main { flex: 2 1 520px; min-width: 0; display: flex; flex-direction: column; gap: var(--space-5); }
+.app-project-side { flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: var(--space-5); }
+
+/* Status steps: Draft → Submitted → Approved → In progress → Done. */
+.app-steps { list-style: none; margin: 0; padding: var(--space-4) var(--space-5); display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5);
+  background: var(--surface-raised); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.app-steps li { display: inline-flex; align-items: center; gap: var(--space-2); font: 600 13px/18px var(--font-sans); color: var(--ink-muted); }
+.app-step-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--line); flex: none; }
+.app-steps li.is-done .app-step-dot { background: var(--ok); }
+.app-steps li.is-current { color: var(--link); }
+.app-steps li.is-current .app-step-dot { background: var(--link); box-shadow: 0 0 0 3px var(--surface-tint); }
+
+/* Event plan: numbered sections that open in place. */
+.app-plan { list-style: none; margin: 0 calc(-1 * var(--space-2)); padding: 0; }
+.app-plan > li { border-bottom: 1px solid var(--line); }
+.app-plan > li:last-child { border-bottom: 0; }
+.app-plan > li.is-open { background: var(--surface); }
+.app-plan-head { width: 100%; display: flex; align-items: center; gap: var(--space-3); min-height: 52px; padding: var(--space-2); border: 0; background: none;
+  font: 500 14px/20px var(--font-sans); color: var(--ink); text-align: left; cursor: pointer; border-radius: var(--radius-sm); }
+.app-plan-head:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.app-plan-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.app-plan-num { width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex: none;
+  font: 700 12px var(--font-display); background: var(--surface-tint); color: var(--link); }
+.app-plan-num.is-done { background: var(--link); color: var(--on-navy); }
+.app-plan-body { padding: 0 var(--space-2) var(--space-4) calc(28px + var(--space-3) + var(--space-2)); display: flex; flex-direction: column; gap: var(--space-4); }
+.app-plan-body .tec-fields { padding: 0; }
+@media (max-width: 600px) { .app-plan-body { padding-left: var(--space-2); } }
+.app-subhead { margin: 0; font: 700 14px/20px var(--font-display); color: var(--ink); }
+
+/* Before-approval checks: a chip then the sentence. */
+.app-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.app-checks li { display: flex; align-items: flex-start; gap: var(--space-2); font-size: 14px; line-height: 20px; }
+.app-checks li > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+
+/* Inputs tracker rows. */
+.app-inputs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.app-inputs > li { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3) 0; border-bottom: 1px solid var(--line); }
+.app-input-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.app-input-head > span { min-width: 0; overflow-wrap: anywhere; }
+.app-input-body { margin: 0; font-size: 14px; color: var(--ink-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.app-details > summary { cursor: pointer; font: 600 14px/44px var(--font-sans); color: var(--link); }
+.app-details[open] { display: flex; flex-direction: column; gap: var(--space-3); }
+.app-details .tec-fields { padding: 0; }
+/* Side-card forms: narrower columns so two fit in a side card. */
+.app-fields-narrow { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); padding: 0; }
+
+/* Visually hidden but read by screen readers (e.g. a fieldset legend). */
+.app-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

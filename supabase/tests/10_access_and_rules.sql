@@ -2340,6 +2340,67 @@ select test.throws(format($q$insert into public.unit_memberships (church_id, per
                    'S14: the Coordinator cannot put an anonymised record in a unit');
 reset role;
 
+-- ---------- Migration 24: projects and events (slice 4) ----------
+-- A unit project in A1 (purpose P1, Purpose Head 'ph'), owned by its Team Lead.
+select test.login('ul_a'); set role authenticated;
+insert into public.projects (level, unit_id, name, starts_at, ends_at)
+values ('unit', test.id('A1'), 'M24 sound workshop', now() + interval '60 days', now() + interval '60 days 3 hours');
+select test.ok((public.project_readiness((select id from public.projects where name = 'M24 sound workshop')) ->> 'can_manage')::boolean
+               and not (public.project_readiness((select id from public.projects where name = 'M24 sound workshop')) ->> 'can_approve')::boolean,
+               'M24: readiness tells the owner they manage the project but do not approve it');
+select test.throws(format($q$insert into public.team_demand (project_id, unit_id, on_date, slots_needed)
+                             values ((select id from public.projects where name = 'M24 sound workshop'), %L, current_date + 90, 2)$q$, test.id('A1')),
+                   'M24: volunteers cannot be needed on a day outside the project');
+select test.lives(format($q$insert into public.team_demand (project_id, unit_id, on_date, slots_needed)
+                            values ((select id from public.projects where name = 'M24 sound workshop'), %L,
+                                    ((now() + interval '60 days') at time zone 'Europe/London')::date, 1)$q$, test.id('A1')),
+                  'M24: ... and can on a day of it');
+update public.projects set status = 'submitted' where name = 'M24 sound workshop';
+select test.throws($q$update public.projects set decision_note = 'Approve me' where name = 'M24 sound workshop'$q$,
+                   'M24: the owner cannot write the decision note');
+reset role;
+
+select test.login('ph'); set role authenticated;
+select test.ok((public.project_readiness((select id from public.projects where name = 'M24 sound workshop')) ->> 'can_approve')::boolean,
+               'M24: readiness tells the Purpose Head they approve it');
+select test.lives($q$update public.projects set status = 'draft', decision_note = 'Add the equipment list first' where name = 'M24 sound workshop'$q$,
+                  'M24: the Purpose Head sends a submitted unit project back, with a note');
+select test.ok((select status = 'draft' and decision_note = 'Add the equipment list first' from public.projects where name = 'M24 sound workshop'),
+               'M24: ... it is a draft again and the note is kept');
+select test.throws($q$update public.projects set status = 'cancelled' where name = 'M24 sound workshop'$q$,
+                   'M24: ... but the Purpose Head does not cancel it');
+reset role;
+select test.login('ul_a'); set role authenticated;
+update public.projects set status = 'submitted' where name = 'M24 sound workshop';
+reset role;
+select test.login('ph'); set role authenticated;
+select test.lives($q$update public.projects set status = 'approved', decision_note = 'Approved' where name = 'M24 sound workshop'$q$,
+                  'M24: the Purpose Head approves it after changes');
+reset role;
+select test.login('ul_b'); set role authenticated;   -- leads another unit, not P1's Purpose Head
+update public.projects set status = 'draft' where name = 'Production training';   -- finds no row it may change
+reset role;
+select test.ok((select status from public.projects where name = 'Production training') = 'approved',
+               'M24: someone else cannot send a project back');
+select test.login('editor'); set role authenticated;
+select test.throws($q$select public.project_readiness((select id from public.projects where name = 'M24 sound workshop'))$q$,
+                   'M24: readiness is not shown to roles outside planning');
+reset role;
+
+-- The event review's completion time is the database's.
+select test.login('ops'); set role authenticated;
+update public.event_plans set review_completed_at = '2000-01-01'
+where project_id = (select id from public.projects where name = 'Harvest outreach');
+select test.ok((select review_completed_at > now() - interval '1 minute' from public.event_plans e
+                join public.projects p on p.id = e.project_id where p.name = 'Harvest outreach'),
+               'M24: marking the review complete records now, not the time sent');
+select test.ok((public.project_readiness((select id from public.projects where name = 'Harvest outreach')) -> 'lead_time' ->> 'weeks_needed')::int = 8,
+               'M24: readiness gives the lead time a Large event needs');
+reset role;
+set role anon;
+select test.throws($q$select public.project_readiness(gen_random_uuid())$q$, 'M24: signed-out visitors cannot call readiness');
+reset role;
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;

@@ -752,14 +752,14 @@ isOneToOne: false
                   ]
                 },"projects": {
                   Row: {
-                    "approved_at": string | null,"approved_by": string | null,"church_id": string,"created_at": string,"description": string | null,"ends_at": string,"id": string,"is_sunday_service": boolean,"level": Database["public"]['Enums']["project_level"],"name": string,"origin": Database["public"]['Enums']["project_origin"],"origin_note": string | null,"owner_user_id": string,"shortfall_action": Database["public"]['Enums']["shortfall_action"] | null,"shortfall_action_note": string | null,"site_id": string | null,"starts_at": string,"status": Database["public"]['Enums']["project_status"],"type_id": string | null,"unit_id": string | null,"updated_at": string
+                    "approved_at": string | null,"approved_by": string | null,"church_id": string,"created_at": string,"decision_note": string | null,"description": string | null,"ends_at": string,"id": string,"is_sunday_service": boolean,"level": Database["public"]['Enums']["project_level"],"name": string,"origin": Database["public"]['Enums']["project_origin"],"origin_note": string | null,"owner_user_id": string,"shortfall_action": Database["public"]['Enums']["shortfall_action"] | null,"shortfall_action_note": string | null,"site_id": string | null,"starts_at": string,"status": Database["public"]['Enums']["project_status"],"type_id": string | null,"unit_id": string | null,"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "approved_at"?: string | null,"approved_by"?: string | null,"church_id"?: string,"created_at"?: string,"description"?: string | null,"ends_at": string,"id"?: string,"is_sunday_service"?: boolean,"level": Database["public"]['Enums']["project_level"],"name": string,"origin"?: Database["public"]['Enums']["project_origin"],"origin_note"?: string | null,"owner_user_id"?: string,"shortfall_action"?: Database["public"]['Enums']["shortfall_action"] | null,"shortfall_action_note"?: string | null,"site_id"?: string | null,"starts_at": string,"status"?: Database["public"]['Enums']["project_status"],"type_id"?: string | null,"unit_id"?: string | null,"updated_at"?: string
+                    "approved_at"?: string | null,"approved_by"?: string | null,"church_id"?: string,"created_at"?: string,"decision_note"?: string | null,"description"?: string | null,"ends_at": string,"id"?: string,"is_sunday_service"?: boolean,"level": Database["public"]['Enums']["project_level"],"name": string,"origin"?: Database["public"]['Enums']["project_origin"],"origin_note"?: string | null,"owner_user_id"?: string,"shortfall_action"?: Database["public"]['Enums']["shortfall_action"] | null,"shortfall_action_note"?: string | null,"site_id"?: string | null,"starts_at": string,"status"?: Database["public"]['Enums']["project_status"],"type_id"?: string | null,"unit_id"?: string | null,"updated_at"?: string
                   }
                   Update: {
-                    "approved_at"?: string | null,"approved_by"?: string | null,"church_id"?: string,"created_at"?: string,"description"?: string | null,"ends_at"?: string,"id"?: string,"is_sunday_service"?: boolean,"level"?: Database["public"]['Enums']["project_level"],"name"?: string,"origin"?: Database["public"]['Enums']["project_origin"],"origin_note"?: string | null,"owner_user_id"?: string,"shortfall_action"?: Database["public"]['Enums']["shortfall_action"] | null,"shortfall_action_note"?: string | null,"site_id"?: string | null,"starts_at"?: string,"status"?: Database["public"]['Enums']["project_status"],"type_id"?: string | null,"unit_id"?: string | null,"updated_at"?: string
+                    "approved_at"?: string | null,"approved_by"?: string | null,"church_id"?: string,"created_at"?: string,"decision_note"?: string | null,"description"?: string | null,"ends_at"?: string,"id"?: string,"is_sunday_service"?: boolean,"level"?: Database["public"]['Enums']["project_level"],"name"?: string,"origin"?: Database["public"]['Enums']["project_origin"],"origin_note"?: string | null,"owner_user_id"?: string,"shortfall_action"?: Database["public"]['Enums']["shortfall_action"] | null,"shortfall_action_note"?: string | null,"site_id"?: string | null,"starts_at"?: string,"status"?: Database["public"]['Enums']["project_status"],"type_id"?: string | null,"unit_id"?: string | null,"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -1315,6 +1315,9 @@ isOneToOne: false
 { Args: { "p_issue_month": string }; Returns: {
               "description": string,"display_name": string,"recognised_on": string,"value_letter": string,"value_name": string
             }[]
+                           },
+"project_readiness":
+{ Args: { "p_project": string }; Returns: Json
                            },
 "redeem_email_link":
 { Args: { "p_token": string }; Returns: string
