@@ -1,0 +1,30 @@
+<!--
+  G-Squad Planner: sign-in email for a leader who has not yet accepted their invitation
+  (Supabase Auth "confirm signup" template).
+  SECURITY REVIEW 22 (L02): why this template exists. A leader whose invitation expired, or who
+  ignored it and used the sign-in page, has not confirmed their email address yet. For such an
+  address Supabase sends this email instead of the magic-link one. Left as Supabase's default it
+  linked to /verify (used up by email scanners, the very fault this change fixes) and, because the
+  sign-in page now asks without PKCE, would have put session tokens in the address bar. It is the
+  same as magic_link.html: a link to /auth/confirm that does nothing until the leader presses
+  Sign in, and the code. type=email accepts this email's token hash and code as well.
+  Address: .SiteURL, not .RedirectTo (see invite.html, L01).
+  Deployed to Supabase by .github/workflows/deploy-database.yml.
+  (Template actions are left out of this comment: Supabase would fill them in here too.)
+-->
+<div style="font-family: Arial, sans-serif; color: #0E1E3A; max-width: 520px; margin: 0 auto;">
+  <div style="background: #1B4F93; color: #FFFFFF; padding: 20px 24px;">
+    <div style="font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: #BFD000; font-weight: bold;">The Elevation Church · Manchester</div>
+    <div style="font-size: 22px; font-weight: bold; margin-top: 4px;">G-Squad Planner</div>
+  </div>
+  <div style="padding: 24px; background: #FFFFFF; border: 1px solid #D9E3EF;">
+    <p style="margin: 0 0 20px;">Press the button below, then press <strong>Sign in</strong> on the page that opens.</p>
+    <p style="margin: 0 0 20px;">
+      <a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email"
+         style="display: inline-block; background: #1B4F93; color: #FFFFFF; padding: 12px 20px; border-radius: 6px; text-decoration: none; font-weight: bold;">Sign in to the G-Squad Planner</a>
+    </p>
+    <p style="margin: 0 0 8px;">Or type this code on the sign-in page:</p>
+    <p style="margin: 0 0 20px; font-size: 28px; font-weight: bold; letter-spacing: 0.2em;">{{ .Token }}</p>
+    <p style="margin: 0; font-size: 13px; color: #4A5B73;">The link and the code work once and expire in an hour. If you didn't ask to sign in, you can ignore this email.</p>
+  </div>
+</div>

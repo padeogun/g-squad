@@ -32,9 +32,12 @@ import { LeadershipQuestions } from '../pages/care/LeadershipQuestions';
 import { Issues } from '../pages/newsletter/Issues';
 import { Issue } from '../pages/newsletter/Issue';
 import { EmailLink } from '../pages/EmailLink';
+import { AuthConfirm } from '../pages/AuthConfirm';
 
 export const router = createBrowserRouter([
   { path: '/sign-in', element: <SignIn /> },
+  // Where invitation and sign-in emails land; signs in only when the button is pressed.
+  { path: '/auth/confirm', element: <AuthConfirm /> },
   // Slice 6: members' personal newsletter links. Public: members do not sign in.
   { path: '/e/:token', element: <EmailLink /> },
   {
