@@ -3801,6 +3801,162 @@ select test.lives(format($q$update public.assignments set status = 'cancelled' w
                   'R32: the Team Lead withdraws a waiting request');
 reset role;
 
+-- ---------- SECURITY REVIEW 23 ----------------------------------------------------------
+-- Fixtures (system): a second member of A1, three approved team events running today whose
+-- dates overlap, and a fourth event just after the three overlapping ones above.
+select test.login('');
+do $$
+declare v uuid; d timestamptz := date_trunc('month', current_date) + interval '6 months' + interval '9 days 10 hours';
+begin
+  insert into public.people (church_id, first_name, surname, email, date_joined)
+  values (test.id('churchA'), 'Ray', 'Restore', 'ray.restore@example.org', current_date - 200) returning id into v;
+  insert into test.ids values ('pR', v);
+  insert into public.unit_memberships (church_id, person_id, unit_id) values (test.id('churchA'), v, test.id('A1'));
+  for i in 1 .. 3 loop
+    insert into public.projects (church_id, level, unit_id, name, starts_at, ends_at, status, owner_user_id)
+    values (test.id('churchA'), 'unit', test.id('A1'), 'Today overlap ' || i, now() - interval '1 day', now() + interval '1 day', 'approved', test.id('ul_a'))
+    returning id into v;
+    insert into test.ids values ('td' || i, v);
+    insert into public.team_demand (church_id, project_id, unit_id, on_date, slots_needed, hours)
+    values (test.id('churchA'), v, test.id('A1'), (now() at time zone 'Europe/London')::date, 2, 1);
+  end loop;
+  insert into public.projects (church_id, level, unit_id, name, starts_at, ends_at, status, owner_user_id)
+  values (test.id('churchA'), 'unit', test.id('A1'), 'Far event', d + interval '4 days', d + interval '4 days 3 hours', 'approved', test.id('ul_a'))
+  returning id into v;
+  insert into test.ids values ('far', v);
+  insert into public.team_demand (church_id, project_id, unit_id, on_date, slots_needed, hours)
+  values (test.id('churchA'), v, test.id('A1'), ((d + interval '4 days') at time zone 'Europe/London')::date, 1, 2);
+end $$;
+
+-- SECURITY REVIEW 23 (R01): a slot recorded straight as served is counted too.
+select test.login('ul_a'); set role authenticated;
+select test.lives(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) values (%L, %L, %L, (now() at time zone %L)::date), (%L, %L, %L, (now() at time zone %L)::date)',
+                         test.id('td1'), test.id('pR'), test.id('A1'), 'Europe/London', test.id('td2'), test.id('pR'), test.id('A1'), 'Europe/London'),
+                  'R01 (setup): two overlapping events today');
+select test.throws(format($q$insert into public.assignments (project_id, person_id, unit_id, serve_date, status) values (%L, %L, %L, (now() at time zone 'Europe/London')::date, 'served')$q$,
+                          test.id('td3'), test.id('pR'), test.id('A1')),
+                   'R01: a third overlapping event cannot be recorded straight as served without the Coordinator');
+select test.lives(format($q$insert into public.assignments (project_id, person_id, unit_id, serve_date, status) values (%L, %L, %L, (now() at time zone 'Europe/London')::date, 'cancelled')$q$,
+                         test.id('td3'), test.id('pR'), test.id('A1')),
+                  'R01 (setup): a cancelled slot on the third');
+select test.throws(format($q$update public.assignments set status = 'served' where project_id = %L and person_id = %L$q$, test.id('td3'), test.id('pR')),
+                   'R01: ... nor brought back from cancelled as served');
+reset role;
+select test.ok(not exists (select 1 from public.assignments where project_id = test.id('td3') and person_id = test.id('pR') and status in ('planned', 'served')),
+               'R01: the third event has no live slot for them');
+
+-- SECURITY REVIEW 23 (R02): moving a project's dates onto a member's other events counts again.
+select test.login('ul_a'); set role authenticated;
+select test.lives(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) select %L, %L, %L, on_date from public.team_demand where project_id = %L',
+                         test.id('far'), test.id('pS'), test.id('A1'), test.id('far')),
+                  'R02 (setup): an event after the overlapping ones is booked without approval');
+select test.ok((select status from public.assignments where project_id = test.id('far') and person_id = test.id('pS')) = 'planned',
+               'R02 (setup): ... and is planned');
+select test.lives(format($q$update public.projects set starts_at = starts_at - interval '4 days' where id = %L$q$, test.id('far')),
+                  'R02 (setup): its owner moves its dates onto the other two');
+select test.ok((select status from public.assignments where project_id = test.id('far') and person_id = test.id('pS')) = 'pending_approval',
+               'R02: moving the dates puts the booking back to wait for the Coordinator');
+reset role;
+select test.ok(exists (select 1 from public.audit_log l join public.assignments a on a.id = l.record_id
+                       where l.action = 'serving_approval_requested' and a.project_id = test.id('far')
+                         and l.detail->>'reason' = 'project_changed' and l.actor_id = test.id('ul_a')),
+               'R02: ... logged as a request, with who moved the dates');
+-- ... and bringing a cancelled project back does too.
+select test.login('ul_a'); set role authenticated;
+select test.lives(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) select project_id, %L, %L, on_date from public.team_demand where project_id in (%L, %L)',
+                         test.id('pR'), test.id('A1'), test.id('ov1'), test.id('ov2')),
+                  'R02 (setup): a second member on two overlapping events');
+select test.lives(format($q$update public.projects set status = 'cancelled' where id = %L$q$, test.id('ov2')),
+                  'R02 (setup): one of them is cancelled (its bookings stay planned)');
+select test.lives(format('insert into public.assignments (project_id, person_id, unit_id, serve_date) select %L, %L, %L, on_date from public.team_demand where project_id = %L',
+                         test.id('ov3'), test.id('pR'), test.id('A1'), test.id('ov3')),
+                  'R02 (setup): a third is then booked without approval');
+select test.ok((select status from public.assignments where project_id = test.id('ov3') and person_id = test.id('pR')) = 'planned',
+               'R02 (setup): ... and is planned');
+select test.lives(format($q$update public.projects set status = 'draft' where id = %L$q$, test.id('ov2')),
+                  'R02 (setup): the cancelled event is brought back');
+select test.ok((select status from public.assignments where project_id = test.id('ov2') and person_id = test.id('pR')) = 'pending_approval',
+               'R02: bringing a cancelled event back puts its booking back to wait for the Coordinator');
+-- Nobody else can make that move: the marker is the trigger's own.
+select test.throws(format($q$update public.assignments set status = 'pending_approval' where project_id = %L and person_id = %L$q$, test.id('ov3'), test.id('pR')),
+                   'R02: a booking still cannot be put into "waiting" by hand');
+reset role;
+
+-- SECURITY REVIEW 23 (R03, R04): the Resident Pastor cannot end a waiting team request; a
+-- withdrawal is logged and listed.
+select test.login('');
+insert into public.unit_memberships (church_id, person_id, unit_id) values (test.id('churchA'), test.id('pS'), test.id('A2'));
+reset role;
+select test.login('ops'); set role authenticated;
+insert into public.unit_memberships (person_id, unit_id) values (test.id('pS'), test.id('A3'));
+select test.ok((select status from public.unit_memberships where person_id = test.id('pS') and unit_id = test.id('A3')) = 'pending_approval',
+               'R03 (setup): a third team waits for the Coordinator');
+reset role;
+select test.login('rp'); set role authenticated;
+select test.throws(format($q$update public.unit_memberships set status = 'ended' where person_id = %L and unit_id = %L$q$, test.id('pS'), test.id('A3')),
+                   'R03: the Resident Pastor cannot end (decline) a waiting team request');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.lives(format($q$update public.unit_memberships set status = 'ended' where person_id = %L and unit_id = %L$q$, test.id('pS'), test.id('A3')),
+                  'R03: the Operations Lead can withdraw it');
+reset role;
+select test.login('coord'); set role authenticated;
+select test.ok(exists (select 1 from public.serving_approvals() a join public.unit_memberships m on m.id = a.request_id
+                       where m.person_id = test.id('pS') and m.unit_id = test.id('A3') and a.state = 'withdrawn' and a.decided_by = 'Ops'),
+               'R04: a withdrawn team request is listed as withdrawn, with who withdrew it');
+select test.ok(exists (select 1 from public.serving_approvals() where request_id = current_setting('test.as3')::uuid and state = 'withdrawn'),
+               'R04: so is a withdrawn booking');
+reset role;
+select test.login('ops'); set role authenticated;
+insert into public.unit_memberships (person_id, unit_id) values (test.id('pS'), test.id('A4'));
+reset role;
+select test.login('coord'); set role authenticated;
+select test.lives(format($q$select public.decide_serving_approval('team', (select id from public.unit_memberships where person_id = %L and unit_id = %L), true)$q$,
+                         test.id('pS'), test.id('A4')),
+                  'R03: the Coordinator approves a team request');
+select test.ok((select status = 'active' and approved_by = test.id('coord') from public.unit_memberships where person_id = test.id('pS') and unit_id = test.id('A4')),
+               'R03: ... which is active and records who approved it');
+select test.ok(exists (select 1 from public.serving_approvals() a join public.unit_memberships m on m.id = a.request_id
+                       where m.person_id = test.id('pS') and m.unit_id = test.id('A4') and a.state = 'approved'),
+               'R04: the Coordinator''s own decision is not logged as a withdrawal');
+reset role;
+
+-- SECURITY REVIEW 23 (R05): one serving request at a time per person.
+select test.ok(pg_get_functiondef('app.assignment_spread_guard'::regproc) like '%gsquad-spread:%'
+               and pg_get_functiondef('app.membership_guard'::regproc) like '%gsquad-teams:%',
+               'R05: overlapping-event and extra-team checks hold a per-person lock');
+
+-- SECURITY REVIEW 23 (R06): an approved event keeps its run of show.
+select test.login('ul_a'); set role authenticated;
+insert into public.projects (level, unit_id, name, starts_at, ends_at)
+values ('unit', test.id('A1'), 'Quiz night', now() + interval '85 days', now() + interval '85 days 3 hours');
+select set_config('test.ros3', public.start_run_of_show((select id from public.projects where name = 'Quiz night'))::text, false);
+update public.projects set status = 'submitted' where name = 'Quiz night';
+reset role;
+select test.login('ph'); set role authenticated;
+select test.lives($q$update public.projects set status = 'approved' where name = 'Quiz night'$q$, 'R06 (setup): the event is approved');
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.throws(format('delete from public.service_grids where id = %L', current_setting('test.ros3')),
+                   'R06: the draft run of show of an approved event cannot be deleted');
+reset role;
+select test.ok(exists (select 1 from public.service_grids where id = current_setting('test.ros3')::uuid), 'R06: ... and is still there');
+
+-- SECURITY REVIEW 23 (R07): an event's run of show on a Sunday does not block that Sunday's service.
+select test.login('ul_a'); set role authenticated;
+select set_config('test.sun', (current_date + 150 + (7 - extract(isodow from current_date + 150))::int)::text, false);
+select test.lives(format($q$insert into public.projects (level, unit_id, name, starts_at, ends_at)
+                           values ('unit', %L, 'Sunday picnic', (%L::date + time '14:00') at time zone 'Europe/London', (%L::date + time '17:00') at time zone 'Europe/London')$q$,
+                         test.id('A1'), current_setting('test.sun'), current_setting('test.sun')),
+                  'R07 (setup): a team event on a Sunday');
+select test.lives($q$select public.start_run_of_show((select id from public.projects where name = 'Sunday picnic'))$q$,
+                  'R07 (setup): ... with its run of show');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.lives(format('select public.create_sunday_service(%L::date)', current_setting('test.sun')),
+                  'R07: the Operations Lead can still set up that Sunday''s service');
+reset role;
+
 -- Settings: the Operations Lead or Coordinator sets how many overlapping projects.
 select test.login('ops'); set role authenticated;
 select test.throws(format('update public.church_settings set projects_before_approval = 0 where church_id = %L', test.id('churchA')),

@@ -304,6 +304,9 @@ begin
     raise exception 'Person and unit of a membership cannot be changed; end it and add a new one' using errcode = '42501';
   end if;
 
+  -- SECURITY REVIEW 23 (R05): one team change at a time per person, so two teams adding the
+  -- same person at the same moment cannot both count the other as not yet there.
+  perform pg_advisory_xact_lock(hashtextextended('gsquad-teams:' || new.person_id::text, 0));
   select s.units_before_approval into v_max from public.church_settings s where s.church_id = new.church_id;
   select count(*) into v_live from public.unit_memberships m
   where m.person_id = new.person_id and m.status = 'active' and m.id <> new.id;
@@ -333,6 +336,19 @@ begin
     new.approved_by := (select auth.uid());
   elsif new.approved_by is distinct from old.approved_by then
     raise exception 'approved_by is set automatically' using errcode = '42501';
+  end if;
+  -- SECURITY REVIEW 23 (R03): only the Coordinator decides a waiting request. Others may
+  -- withdraw it (end it): the team's lead, who asked, or the Operations Lead. Before, the
+  -- Resident Pastor, who may update memberships (migration 7), could end a waiting request,
+  -- which declines it, although the Resident Pastor is kept in the loop read-only.
+  -- SECURITY REVIEW 23 (R04): a withdrawal is logged, so it does not just vanish from the list.
+  if old.status = 'pending_approval' and new.status = 'ended'
+     and current_setting('gsquad.serving_decision', true) is distinct from new.id::text then
+    if not (app.is_unit_lead_of(new.unit_id) or app.has_role('operations_lead')) then
+      raise exception 'The G-Squad Coordinator decides this request; the team''s lead can withdraw it' using errcode = '42501';
+    end if;
+    perform app.audit('serving_approval_decided', 'unit_memberships', new.id,
+                      jsonb_build_object('kind', 'team', 'decision', 'withdrawn', 'person_id', new.person_id, 'unit_id', new.unit_id));
   end if;
   -- Re-activating an ended membership counts as joining again.
   if old.status = 'ended' and new.status = 'active' and v_live >= v_max and not app.has_role('gsquad_coordinator') then
@@ -375,6 +391,17 @@ declare
 begin
   if app.is_system() then return new; end if;
 
+  -- SECURITY REVIEW 23 (R02): app.project_spread_recheck (below) moves bookings on a project
+  -- whose dates changed, or which came back from cancelled, into "waiting". It marks the one
+  -- project it is working on with the transaction-local gsquad.spread_recheck setting (set only
+  -- inside that trigger function; set_config is not reachable through the API, as
+  -- gsquad.plan_resubmit in project_guard). Only that move, and nothing else, is accepted here.
+  if tg_op = 'UPDATE' and old.status = 'planned' and new.status = 'pending_approval'
+     and current_setting('gsquad.spread_recheck', true) = new.project_id::text
+     and (to_jsonb(new) - array['status', 'updated_at']) = (to_jsonb(old) - array['status', 'updated_at']) then
+    return new;
+  end if;
+
   -- Only the database puts a booking into "waiting for approval", and only the Coordinator's
   -- decision (or the Team Lead withdrawing it, which cancels it) takes it out.
   if new.status = 'pending_approval' and (tg_op = 'INSERT' or old.status <> 'pending_approval') then
@@ -391,14 +418,31 @@ begin
     if new.status <> 'cancelled' and not app.has_role('gsquad_coordinator') then
       raise exception 'The G-Squad Coordinator approves serving on another overlapping project' using errcode = '42501';
     end if;
+    -- SECURITY REVIEW 23 (R04): a request withdrawn by the Team Lead or the Operations Lead is
+    -- logged, so the Coordinator (and the Resident Pastor) see it was withdrawn and by whom,
+    -- rather than it silently leaving the list. The Coordinator's own decision is logged by
+    -- public.decide_serving_approval, which marks the request it is deciding.
+    if new.status = 'cancelled' and current_setting('gsquad.serving_decision', true) is distinct from new.id::text then
+      perform app.audit('serving_approval_decided', 'assignments', new.id,
+                        jsonb_build_object('kind', 'project', 'decision', 'withdrawn', 'person_id', new.person_id,
+                                           'project_id', new.project_id, 'unit_id', new.unit_id));
+    end if;
     return new;   -- approved (re-checked by the guards before this one) or withdrawn
   end if;
 
   -- A booking that newly puts the person on this project.
-  if new.status <> 'planned'
+  -- SECURITY REVIEW 23 (R01): "served" counts as well as "planned". Before, a slot added (or
+  -- brought back from cancelled) straight as served, on or after the day, skipped the check,
+  -- so a third overlapping event could be recorded without the Coordinator.
+  if new.status not in ('planned', 'served')
      or (tg_op = 'UPDATE' and old.status in ('planned', 'served') and new.project_id = old.project_id) then
     return new;
   end if;
+  -- SECURITY REVIEW 23 (R05): one serving request at a time per person. The hours lock taken by
+  -- app.assignment_guard is per month, but overlapping projects can span months, so two
+  -- bookings for different months at the same moment could each count one other project and
+  -- both pass. Re-entrant and held to the end of the transaction.
+  perform pg_advisory_xact_lock(hashtextextended('gsquad-spread:' || new.person_id::text, 0));
   if app.is_sunday_project(new.project_id) then return new; end if;
   if exists (select 1 from public.assignments a
              where a.person_id = new.person_id and a.project_id = new.project_id and a.id <> new.id
@@ -408,6 +452,11 @@ begin
   v_max := coalesce((select s.projects_before_approval from public.church_settings s where s.church_id = new.church_id), 2);
   v_other := app.overlapping_projects(new.person_id, new.project_id);
   if v_other >= v_max then
+    if new.status = 'served' and not app.has_role('gsquad_coordinator') then
+      -- SECURITY REVIEW 23 (R01): a record of serving cannot wait for approval; book first.
+      raise exception 'Serving on another event at the same time needs the G-Squad Coordinator''s approval: book the person first'
+        using errcode = '42501';
+    end if;
     if app.has_role('gsquad_coordinator') then
       perform app.audit('serving_approval_decided', 'assignments', new.id,
                         jsonb_build_object('kind', 'project', 'decision', 'approved', 'direct', true,
@@ -427,6 +476,52 @@ grant execute on function app.assignment_spread_guard() to service_role;
 create trigger assignment_spread_guard before insert or update on public.assignments
   for each row execute function app.assignment_spread_guard();
 
+-- SECURITY REVIEW 23 (R02): the overlap is counted when a person is booked, from the project
+-- dates and statuses at that moment. Before, it could be got round afterwards: book a member
+-- onto a team event dated well away from their other events, then move its dates onto them; or
+-- cancel one of their events (its bookings stay "planned" but stop counting), book a third, and
+-- bring the cancelled one back to draft and through approval again. The approver saw only the
+-- new dates, never the overlap. Now, when a project's dates change or it comes back from
+-- cancelled, its coming planned bookings are counted again, and any that now need the
+-- Coordinator wait for them as a new booking would (logged as a request). Served and past
+-- slots are history and left alone. Runs for every change except a system change.
+create or replace function app.project_spread_recheck() returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  v_max int;
+  v_row record;
+begin
+  if app.is_system() then return null; end if;
+  if new.status in ('cancelled', 'done') then return null; end if;
+  if new.starts_at = old.starts_at and new.ends_at = old.ends_at and old.status <> 'cancelled' then return null; end if;
+  if app.is_sunday_project(new.id) then return null; end if;
+  v_max := coalesce((select s.projects_before_approval from public.church_settings s where s.church_id = new.church_id), 2);
+  perform set_config('gsquad.spread_recheck', new.id::text, true);
+  for v_row in
+    select a.id, a.person_id, a.unit_id
+    from public.assignments a
+    where a.project_id = new.id and a.status = 'planned'
+      and a.serve_date >= (now() at time zone 'Europe/London')::date
+    order by a.serve_date, a.id
+  loop
+    perform pg_advisory_xact_lock(hashtextextended('gsquad-spread:' || v_row.person_id::text, 0));
+    if app.overlapping_projects(v_row.person_id, new.id) >= v_max then
+      update public.assignments set status = 'pending_approval' where id = v_row.id;
+      perform app.audit('serving_approval_requested', 'assignments', v_row.id,
+                        jsonb_build_object('kind', 'project', 'person_id', v_row.person_id, 'project_id', new.id,
+                                           'unit_id', v_row.unit_id, 'overlapping', app.overlapping_projects(v_row.person_id, new.id),
+                                           'reason', 'project_changed'));
+    end if;
+  end loop;
+  perform set_config('gsquad.spread_recheck', '', true);
+  return null;
+end $$;
+revoke all on function app.project_spread_recheck() from public, anon, authenticated;
+grant execute on function app.project_spread_recheck() to service_role;
+create trigger project_spread_recheck after update of starts_at, ends_at, status on public.projects
+  for each row execute function app.project_spread_recheck();
+
 -- The Coordinator approves or declines a waiting request. SECURITY DEFINER: the Coordinator
 -- does not otherwise update memberships or bookings; the guards still run (as the Coordinator)
 -- and re-check everything on approval (hours, rest, holidays, the place).
@@ -443,6 +538,9 @@ begin
   if p_approve is null or p_kind not in ('team', 'project') then
     raise exception 'Say which request and whether it is approved' using errcode = '22023';
   end if;
+  -- SECURITY REVIEW 23 (R03, R04): marks the one request being decided, so the guards know this
+  -- is the Coordinator's decision (logged below), not a withdrawal (logged by the guards).
+  perform set_config('gsquad.serving_decision', coalesce(p_id::text, ''), true);
   if p_kind = 'team' then
     select m.id, m.person_id, m.unit_id, null::uuid as project_id into v_row
       from public.unit_memberships m
@@ -467,6 +565,7 @@ begin
   perform app.audit('serving_approval_decided', case when p_kind = 'team' then 'unit_memberships' else 'assignments' end, p_id,
                     jsonb_build_object('kind', p_kind, 'decision', case when p_approve then 'approved' else 'declined' end,
                                        'person_id', v_row.person_id, 'unit_id', v_row.unit_id, 'project_id', v_row.project_id));
+  perform set_config('gsquad.serving_decision', '', true);
 end $$;
 revoke all on function public.decide_serving_approval(text, uuid, boolean) from public, anon;
 grant execute on function public.decide_serving_approval(text, uuid, boolean) to authenticated, service_role;
@@ -942,4 +1041,65 @@ begin
   if v_moved < v_to_move then
     raise exception 'You cannot reorder this run of show' using errcode = '42501';
   end if;
+end $$;
+
+-- From 20261023001900_sunday_operations.sql: SECURITY REVIEW 23 (R06) adds the event check.
+-- An event is approved only once its run of show is started (app.project_run_of_show_guard),
+-- but a draft run of show could then be deleted, leaving an approved event without one. Now an
+-- event's run of show cannot be deleted while the event is approved, in progress or done. (A
+-- project being deleted takes its grid with it: the project is gone by then, so this allows it.)
+create or replace function app.grid_delete_guard() returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+begin
+  if old.status <> 'draft' and not app.is_system() then
+    raise exception 'A finalised or approved service grid cannot be deleted; put it back to draft first'
+      using errcode = '42501';
+  end if;
+  if not old.is_sunday and not app.is_system()
+     and exists (select 1 from public.projects p
+                 where p.id = old.project_id and p.is_event and p.status in ('approved', 'in_progress', 'done')) then
+    raise exception 'An approved event keeps its run of show' using errcode = '23514';
+  end if;
+  return old;
+end $$;
+
+-- From 20261023001900_sunday_operations.sql: SECURITY REVIEW 23 (R07) counts only Sunday grids
+-- as "already a service grid for that Sunday". Before, any leader who owns an event on a Sunday
+-- could start its run of show and so stop the Operations Lead setting up that Sunday's service.
+create or replace function public.create_sunday_service(
+  p_date date,
+  p_starts time default '10:00',
+  p_ends time default '12:40',
+  p_theme text default null,
+  p_site uuid default null)
+returns uuid
+language plpgsql volatile security invoker set search_path = ''
+as $$
+declare
+  v_project uuid;
+  v_grid uuid;
+begin
+  if p_date is null or extract(isodow from p_date) <> 7 then
+    raise exception 'Choose a Sunday' using errcode = '22023';
+  end if;
+  if p_ends <= p_starts then
+    raise exception 'The service must end after it starts' using errcode = '22023';
+  end if;
+  if exists (select 1 from public.service_grids g
+             where g.service_date = p_date and g.church_id = app.current_church_id() and g.is_sunday) then
+    raise exception 'There is already a service grid for that Sunday' using errcode = '23505';
+  end if;
+
+  insert into public.projects (name, level, is_sunday_service, site_id, starts_at, ends_at)
+  values ('Sunday service ' || to_char(p_date, 'FMDD Mon YYYY'), 'church', true, p_site,
+          (p_date + p_starts) at time zone 'Europe/London',
+          (p_date + p_ends) at time zone 'Europe/London')
+  returning id into v_project;
+
+  insert into public.service_grids (project_id, service_date, theme)
+  values (v_project, p_date, nullif(btrim(p_theme), ''))
+  returning id into v_grid;
+
+  return v_grid;
 end $$;

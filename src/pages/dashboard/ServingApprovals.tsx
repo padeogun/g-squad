@@ -77,7 +77,10 @@ export function ServingApprovalsCard() {
               <li key={`${r.request_id}-${r.decided_at}`}>
                 <Request r={r} />
                 <span className="type-caption">
-                  <Chip tone={r.state === 'approved' ? 'ok' : 'neutral'}>{r.state === 'approved' ? 'Approved' : 'Declined'}</Chip>
+                  {/* SECURITY REVIEW 23 (R04): a request withdrawn by the team's lead or the Operations Lead is shown as such. */}
+                  <Chip tone={r.state === 'approved' ? 'ok' : 'neutral'}>
+                    {r.state === 'approved' ? 'Approved' : r.state === 'withdrawn' ? 'Withdrawn' : 'Declined'}
+                  </Chip>
                   {r.decided_at ? ` ${shortDate(r.decided_at.slice(0, 10))}` : ''}
                   {r.decided_by ? ` by ${r.decided_by}` : ''}
                 </span>
