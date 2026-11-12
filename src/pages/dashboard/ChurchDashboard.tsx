@@ -15,6 +15,7 @@ import { GridStatus } from '../sunday/GridStatus';
 import { EngagementBar } from './EngagementBar';
 import { ShortfallsCard } from './Shortfalls';
 import { FairShareCard, ServingRulesCard } from './FairShare';
+import { ServingApprovalsCard } from './ServingApprovals';
 
 const { SectionHeading, Card, Notice, StatTile, DataTable, Chip } = TEC;
 
@@ -55,6 +56,9 @@ export function ChurchDashboard() {
           tone={d.inputs_overdue ? 'danger' : 'default'}
         />
       </div>
+
+      {/* Migration 32: what waits for the G-Squad Coordinator (others see it read-only). */}
+      <ServingApprovalsCard />
 
       <Card title="Engagement mix">
         <EngagementBar mix={d.engagement} />

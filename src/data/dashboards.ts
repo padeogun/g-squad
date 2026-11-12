@@ -4,7 +4,8 @@
 // mirror the JSON they build. Also: the capacity calendar (migration 6) and the outstanding
 // project inputs list (v_project_inputs, readable church-wide).
 // -------------------------------------------------------------------------------------
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { Database } from '../lib/database.types';
 import { supabase } from '../lib/supabase';
 
 export interface EngagementMix {
@@ -231,12 +232,15 @@ export interface ServingRules {
   hours_per_slot: number;
   sundays_off_per_month: number;
   leader_roles_max: number;
+  // Migration 32: overlapping projects (not Sundays) before the G-Squad Coordinator approves another.
+  projects_before_approval: number;
 }
 export const SERVING_RULES: { key: keyof ServingRules; label: string; min: number; max: number; step: number }[] = [
   { key: 'serving_limit_per_month', label: 'Usual slots a month', min: 1, max: 31, step: 1 },
   { key: 'hours_per_slot', label: 'Hours in a usual slot', min: 0.5, max: 16, step: 0.5 },
   { key: 'sundays_off_per_month', label: 'Sundays off a month', min: 0, max: 3, step: 1 },
   { key: 'leader_roles_max', label: 'Leadership roles at once', min: 1, max: 10, step: 1 },
+  { key: 'projects_before_approval', label: 'Overlapping events before approval', min: 1, max: 10, step: 1 },
 ];
 
 export function servingRulesPatch(
@@ -256,4 +260,47 @@ export function servingRulesPatch(
     if (n !== Number(current[r.key])) patch[r.key] = n;
   }
   return { patch };
+}
+
+// ---------- Serving approvals (migration 32) ----------
+// A member joining more teams than the church allows, or serving on more overlapping events,
+// waits for the G-Squad Coordinator. The Coordinator decides; the Operations Lead and the
+// Resident Pastor see the list read-only (the Resident Pastor is kept in the loop, decision of
+// 12 Nov 2026). The database checks the role on every call.
+export const APPROVAL_READERS = ['gsquad_coordinator', 'operations_lead', 'resident_pastor'] as const;
+export type ServingApproval = Database['public']['Functions']['serving_approvals']['Returns'][number];
+
+export const useServingApprovals = (enabled: boolean) =>
+  useQuery({
+    queryKey: ['serving_approvals'],
+    enabled,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('serving_approvals', { p_days: 90 });
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+
+export function useDecideServingApproval() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { kind: 'team' | 'project'; id: string; approve: boolean }) => {
+      const { error } = await supabase.rpc('decide_serving_approval', { p_kind: v.kind, p_id: v.id, p_approve: v.approve });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['serving_approvals'] });
+      void qc.invalidateQueries({ queryKey: ['assignments'] });
+      void qc.invalidateQueries({ queryKey: ['memberships'] });
+      void qc.invalidateQueries({ queryKey: ['dashboard'] });
+    },
+  });
+}
+
+// What a request is for, in words.
+// (The database leaves the project and overlap empty for a team request, whatever the generated types say.)
+export function approvalSubject(a: { kind: string; unit_name: string | null; project_name: string | null; overlapping: number | null }): string {
+  if (a.kind === 'team') return `Join ${a.unit_name ?? 'another team'} (more teams than the church allows)`;
+  const others = a.overlapping ?? 0;
+  return `Serve at ${a.project_name ?? 'an event'} for ${a.unit_name ?? 'their team'}${others ? ` (already on ${others} event${others === 1 ? '' : 's'} at the same time)` : ''}`;
 }

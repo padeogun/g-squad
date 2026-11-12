@@ -232,3 +232,12 @@
 .app-band-bar { display: block; height: 100%; border-radius: var(--radius-pill); background: var(--navy); }
 .app-band-bar.is-over { background: var(--danger); }
 .app-band-count { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Serving approvals (migration 32): one request per row; its buttons wrap under it on phones. */
+.app-approvals { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+/* Request on the left, decision buttons in a fixed right-hand column, so every row lines up
+   however long the event name is; on phones the buttons drop under the request. */
+.app-approvals li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-2) var(--space-4); padding: var(--space-3) 0; border-bottom: 1px solid var(--line); }
+@media (max-width: 560px) { .app-approvals li { grid-template-columns: minmax(0, 1fr); } }
+.app-approvals li:last-child { border-bottom: 0; }
+.app-approvals li > * { min-width: 0; overflow-wrap: anywhere; }

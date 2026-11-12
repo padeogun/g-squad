@@ -521,9 +521,14 @@ begin
   -- Decided in the window
   select d.detail->>'kind', d.record_id, d.detail->>'decision',
          coalesce(p.first_name || ' ' || p.surname, 'Former member'), u.name, pr.name,
-         a.serve_date, a.serve_date, r.at, d.at, au.display_name, (r.detail->>'overlapping')::int
+         a.serve_date, a.serve_date, r.at, d.at, au.display_name,
+         coalesce((r.detail->>'overlapping')::int, (d.detail->>'overlapping')::int)
   from dec d
-  left join req r on r.record_id = d.record_id
+  -- The request this decision answered: the latest one before it (a booking can be asked for again).
+  left join lateral (select l.at, l.detail from public.audit_log l
+                     where l.church_id = v_church and l.action = 'serving_approval_requested'
+                       and l.record_id = d.record_id and l.at <= d.at
+                     order by l.at desc limit 1) r on true
   left join public.people p on p.id = (d.detail->>'person_id')::uuid
   left join public.units u on u.id = (d.detail->>'unit_id')::uuid
   left join public.projects pr on pr.id = nullif(d.detail->>'project_id', '')::uuid

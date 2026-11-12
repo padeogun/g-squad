@@ -29,6 +29,8 @@ export const useMonthSundays = (month: string) =>
       const { data, error } = await supabase
         .from('service_grids')
         .select('id, project_id, service_date, status, version')
+        // Migration 32: events have runs of show too; the rota's Sundays are the Sunday grids.
+        .eq('is_sunday', true)
         .gte('service_date', from)
         .lte('service_date', to)
         .order('service_date');
@@ -65,7 +67,8 @@ export const useUnitAssignments = (unitId: string, from: string, to: string) =>
         .eq('unit_id', unitId)
         .gte('serve_date', from)
         .lte('serve_date', to)
-        .in('status', ['planned', 'served', 'no_show']);
+        // Migration 32: a booking waiting for the G-Squad Coordinator holds its place and is shown.
+        .in('status', ['planned', 'served', 'no_show', 'pending_approval']);
       if (error) throw error;
       return data as Assignment[];
     },

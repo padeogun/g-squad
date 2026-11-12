@@ -30,6 +30,7 @@ import { hasRole, useMe } from '../../auth/useMe';
 import { NotFound } from '../NotFound';
 import { EventPlanCard } from './EventPlanCard';
 import { DemandCard, InputsCard, ReadinessCard } from './ProjectSide';
+import { RunOfShowCard } from './RunOfShowCard';
 
 const { SectionHeading, Card, Notice, Button, TextField, SelectField } = TEC;
 
@@ -66,7 +67,7 @@ function ProjectPage({ p }: { p: ProjectRow }) {
   return (
     <>
       <SectionHeading
-        eyebrow={`${p.level === 'church' ? 'Church project' : `${unit?.name ?? 'Unit'} project`}${typeName ? ` · ${typeName}` : ''}`}
+        eyebrow={`${p.level === 'church' ? 'Church project' : `${unit?.name ?? 'Unit'} project`}${typeName ? ` · ${typeName}` : ''}${p.is_event ? '' : ' · Routine team activity'}`}
         title={p.name}
         rule
       >
@@ -102,6 +103,8 @@ function ProjectPage({ p }: { p: ProjectRow }) {
 
       <div className="app-project-grid">
         <div className="app-project-main">
+          {/* Migration 32: every event has a run of show (not routine team activities or the Brief). */}
+          {p.is_event && <RunOfShowCard p={p} canManage={canManage} />}
           {plan.isPending && <p>Loading the event plan…</p>}
           {plan.error && <Notice tone="danger">{friendlyError(plan.error)}</Notice>}
           {plan.data && <EventPlanCard plan={plan.data} projectId={p.id} canManage={canManage} canApprove={canApprove} status={p.status} />}

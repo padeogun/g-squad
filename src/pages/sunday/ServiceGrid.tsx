@@ -1,12 +1,13 @@
 // -------------------------------------------------------------------------------------
-// One Sunday's service grid: the order of service with times worked out from each start and
-// duration, gaps and overlaps flagged, the units and roles the Sunday needs (which set its
-// rota), attached text blocks, and the PDF for officiating leaders.
-// Who does what is decided in the database (migration 8, R11):
-//   * the Operations Lead builds and finalises; any change to a finalised or approved grid
-//     makes a new version that needs approving again;
-//   * the Resident Pastor approves a finalised grid.
-// The screen only offers the buttons each role can use.
+// One Sunday's service grid, or (migration 32) one event's run of show: the order of service
+// with times worked out from each start and duration, gaps and overlaps flagged, the units and
+// roles a Sunday needs (which set its rota), attached text blocks, and the PDF for leaders.
+// Who does what is decided in the database (migration 8, R11; migration 32):
+//   * a Sunday: the Operations Lead builds and finalises, the Resident Pastor approves;
+//   * an event: its owner (or the Operations Lead) builds and finalises, the event's approver
+//     (Purpose Head for a team event, Operations Lead for a church event) approves;
+//   * any change to a finalised or approved one makes a new version to approve again.
+// The screen asks the database what this leader may do (run_of_show_rights) and offers only those buttons.
 // -------------------------------------------------------------------------------------
 import { useState, type FormEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
@@ -31,12 +32,13 @@ import {
   useDemand,
   useGrid,
   useGridBlocks,
+  useRunOfShowRights,
   useSegments,
   useSundays,
   type Grid,
   type Segment,
 } from '../../data/sundays';
-import { hasRole, useMe } from '../../auth/useMe';
+import { useProject } from '../../data/projects';
 import { NotFound } from '../NotFound';
 import { GridStatus } from './GridStatus';
 
@@ -51,13 +53,17 @@ export function ServiceGrid() {
 }
 
 function GridScreen({ grid }: { grid: Grid }) {
-  const me = useMe();
   const qc = useQueryClient();
   const segments = useSegments(grid.id);
   const units = useUnits();
   const unitMap = byId(units.data);
-  const canBuild = hasRole(me.data, 'operations_lead');
-  const canApprove = hasRole(me.data, 'resident_pastor');
+  const rights = useRunOfShowRights(grid.id);
+  const canBuild = rights.data?.can_edit ?? false;
+  const canApprove = rights.data?.can_approve ?? false;
+  const sunday = grid.is_sunday;
+  // An event's run of show shows the event's name and links back to it.
+  const project = useProject(sunday ? undefined : grid.project_id);
+  const eventName = project.data?.name;
   // null = no form open; 'new' = adding; otherwise the id of the segment being edited.
   const [editing, setEditing] = useState<string | null>(null);
 
@@ -66,13 +72,14 @@ function GridScreen({ grid }: { grid: Grid }) {
   const gapMap = gaps(list);
   const deadline = finaliseDeadline(grid.service_date);
   const [today] = useState(todayIso); // read once per visit (render must not read the clock)
-  const lateToFinalise = grid.status === 'draft' && today > deadline;
+  const lateToFinalise = sunday && grid.status === 'draft' && today > deadline;
 
   // Everything that changes the grid refreshes the grid (its version may have gone up) and its parts.
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['grids'] });
     qc.invalidateQueries({ queryKey: ['segments', grid.id] });
     qc.invalidateQueries({ queryKey: ['grid_blocks', grid.id] });
+    qc.invalidateQueries({ queryKey: ['projects'] });
   };
 
   // Status changes: finalise, back to draft, approve. The database checks who may.
@@ -111,23 +118,28 @@ function GridScreen({ grid }: { grid: Grid }) {
 
   return (
     <>
-      <SectionHeading eyebrow="Sunday Operations" title={longDate(grid.service_date)} rule>
-        {grid.theme ? `Theme: ${grid.theme}` : undefined}
+      <SectionHeading
+        eyebrow={sunday ? 'Sunday Operations' : 'Run of show'}
+        title={sunday ? longDate(grid.service_date) : (eventName ?? 'Event')}
+        rule
+      >
+        {[sunday ? null : longDate(grid.service_date), grid.theme ? `Theme: ${grid.theme}` : null].filter(Boolean).join(' · ') ||
+          undefined}
       </SectionHeading>
       <p style={{ margin: 0 }}>
-        <Link to="/sundays">All Sundays</Link>
+        {sunday ? <Link to="/sundays">All Sundays</Link> : <Link to={`/projects/${grid.project_id}`}>Back to the event</Link>}
       </p>
 
       <Card
         title="Status"
-        action={<PdfButton grid={grid} segments={list} ledBy={ledBy} />}
+        action={<PdfButton grid={grid} segments={list} ledBy={ledBy} eventName={sunday ? undefined : eventName} />}
       >
         <div className="tec-row" style={{ padding: 0 }}>
           <GridStatus grid={grid} />
-          <span className="type-caption">Finalise by {shortDate(deadline)}</span>
+          {sunday && <span className="type-caption">Finalise by {shortDate(deadline)}</span>}
           {span && (
             <span className="type-caption">
-              Service {span.start} – {span.end} · {formatDuration(span.minutes)}
+              {sunday ? 'Service' : 'Runs'} {span.start} – {span.end} · {formatDuration(span.minutes)}
             </span>
           )}
         </div>
@@ -138,18 +150,18 @@ function GridScreen({ grid }: { grid: Grid }) {
         )}
         {grid.status !== 'draft' && canBuild && (
           <p className="type-caption" style={{ margin: 0 }}>
-            Any change now makes a new version that the Resident Pastor approves again.
+            Any change now makes a new version that {sunday ? 'the Resident Pastor' : "the event's approver"} approves again.
           </p>
         )}
         <div className="tec-row" style={{ padding: 0 }}>
           {canBuild && grid.status === 'draft' && (
             <Button variant="primary" disabled={setStatus.isPending || list.length === 0} onClick={() => setStatus.mutate('finalised')}>
-              Finalise grid
+              {sunday ? 'Finalise grid' : 'Finalise run of show'}
             </Button>
           )}
           {canApprove && grid.status === 'finalised' && (
             <Button variant="lime" icon="check" disabled={setStatus.isPending} onClick={() => setStatus.mutate('approved')}>
-              Approve grid
+              {sunday ? 'Approve grid' : 'Approve run of show'}
             </Button>
           )}
           {canBuild && grid.status !== 'draft' && (
@@ -180,7 +192,7 @@ function GridScreen({ grid }: { grid: Grid }) {
         {segments.data && list.length === 0 && (
           <>
             <p>No segments yet.</p>
-            {canBuild && <CopyFromSunday grid={grid} onDone={refresh} />}
+            {canBuild && sunday && <CopyFromSunday grid={grid} onDone={refresh} />}
           </>
         )}
         {editing === 'new' && (
@@ -292,7 +304,8 @@ function GridScreen({ grid }: { grid: Grid }) {
         )}
       </Card>
 
-      <UnitsNeeded grid={grid} canEdit={canBuild} />
+      {/* An event's volunteers are asked for on its project page (Volunteers needed). */}
+      {sunday && <UnitsNeeded grid={grid} canEdit={canBuild} />}
       <AttachedBlocks grid={grid} canEdit={canBuild} onChange={refresh} />
     </>
   );
@@ -583,7 +596,8 @@ function AttachedBlocks({ grid, canEdit, onChange }: { grid: Grid; canEdit: bool
   });
   if (!blocks.data?.length) return null;
   return (
-    <Card title="Printed with the grid">
+    // Events call their grid a run of show (migration 32); Sundays keep the familiar name.
+    <Card title={grid.is_sunday ? 'Printed with the grid' : 'Printed with the run of show'}>
       <div className="tec-fields" style={{ padding: 0 }}>
         {blocks.data.map((b) => (
           <Checkbox
@@ -602,7 +616,17 @@ function AttachedBlocks({ grid, canEdit, onChange }: { grid: Grid; canEdit: bool
 }
 
 // ---------- PDF download ----------
-function PdfButton({ grid, segments, ledBy }: { grid: Grid; segments: Segment[]; ledBy: (s: Segment) => string }) {
+function PdfButton({
+  grid,
+  segments,
+  ledBy,
+  eventName,
+}: {
+  grid: Grid;
+  segments: Segment[];
+  ledBy: (s: Segment) => string;
+  eventName?: string;
+}) {
   const blocks = useBlocks();
   const attached = useGridBlocks(grid.id);
   const [busy, setBusy] = useState(false);
@@ -621,6 +645,7 @@ function PdfButton({ grid, segments, ledBy }: { grid: Grid; segments: Segment[];
       if (!blocks.data || !attached.data || attachedBlocks.some((b) => !b)) throw new Error('Blocks not loaded');
       await downloadGridPdf({
         serviceDate: grid.service_date,
+        eventName,
         theme: grid.theme,
         version: grid.version,
         status: grid.status,

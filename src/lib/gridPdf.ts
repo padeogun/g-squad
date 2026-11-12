@@ -59,6 +59,8 @@ export interface PdfSegment {
 
 export interface PdfGrid {
   serviceDate: string;
+  // Migration 32: an event's run of show prints its event name instead of "Sunday Service Grid".
+  eventName?: string;
   theme: string | null;
   version: number;
   status: 'draft' | 'finalised' | 'approved';
@@ -98,7 +100,7 @@ export async function buildGridPdf(input: PdfGrid) {
   doc.setFontSize(9);
   doc.text('THE ELEVATION CHURCH · MANCHESTER', margin, 28);
   doc.setFontSize(20);
-  doc.text('Sunday Service Grid', margin, 54);
+  doc.text(pdfSafe(grid.eventName ? `Run of show: ${grid.eventName}` : 'Sunday Service Grid').slice(0, 60), margin, 54);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);
   doc.text(longDate(grid.serviceDate), pageW - margin, 54, { align: 'right' });
@@ -180,8 +182,8 @@ export async function buildGridPdf(input: PdfGrid) {
   return doc;
 }
 
-// Builds and saves "Service-grid-2026-10-25-v2.pdf".
+// Builds and saves "Service-grid-2026-10-25-v2.pdf" (or "Run-of-show-2026-12-20-v1.pdf").
 export async function downloadGridPdf(grid: PdfGrid): Promise<void> {
   const doc = await buildGridPdf(grid);
-  doc.save(`Service-grid-${grid.serviceDate}-v${grid.version}.pdf`);
+  doc.save(`${grid.eventName ? 'Run-of-show' : 'Service-grid'}-${grid.serviceDate}-v${grid.version}.pdf`);
 }

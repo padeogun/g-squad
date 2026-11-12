@@ -312,6 +312,7 @@ function AssignPanel({
         Fewest hours this month first. One limit counts across all teams, Sundays, events and team activities
         {/* SECURITY REVIEW 20 (F10): the church's own number of Sundays off (0 to 3), not always one. */}
         {isSunday && sundaysOff > 0 ? `, and everyone keeps at least ${sundaysOff} Sunday${sundaysOff === 1 ? '' : 's'} off a month` : ''}.
+        {!isSunday && ' Someone already serving on two events at the same time as this one waits for the G-Squad Coordinator\'s approval.'}
       </p>
       {candidates.isPending && <p>Loading…</p>}
       {candidates.error && <Notice tone="danger">{friendlyError(candidates.error)}</Notice>}
@@ -448,6 +449,8 @@ function EventsCard({
                   </span>
                   {a?.status === 'served' && <Chip tone="ok">Served</Chip>}
                   {a?.status === 'no_show' && <Chip tone="danger">No-show</Chip>}
+                  {/* Migration 32: a third overlapping project waits for the G-Squad Coordinator. */}
+                  {a?.status === 'pending_approval' && <Chip tone="warn">Waiting for the Coordinator</Chip>}
                   {!a && !canEdit && <span className="type-caption">Open</span>}
                   {!a && canEdit && (
                     <button
@@ -459,7 +462,7 @@ function EventsCard({
                       + Assign
                     </button>
                   )}
-                  {a?.status === 'planned' && canEdit && (
+                  {(a?.status === 'planned' || a?.status === 'pending_approval') && canEdit && (
                     <button
                       type="button"
                       className="app-link-button"

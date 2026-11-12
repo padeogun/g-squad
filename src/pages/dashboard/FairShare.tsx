@@ -118,6 +118,7 @@ export function ServingRulesCard() {
     hours_per_slot: Number(s.hours_per_slot),
     sundays_off_per_month: Number(s.sundays_off_per_month),
     leader_roles_max: Number(s.leader_roles_max),
+    projects_before_approval: Number(s.projects_before_approval),
   };
   const off = current.sundays_off_per_month;
   const submit = (e: React.FormEvent) => {
@@ -136,6 +137,7 @@ export function ServingRulesCard() {
       <p className="type-caption" style={{ margin: 0 }}>
         Each member may serve up to {current.serving_limit_per_month * current.hours_per_slot} hours a month across all teams
         {off > 0 ? `, with at least ${off} Sunday${off === 1 ? '' : 's'} off` : '; Sundays off are not required'}.
+        {` Serving on more than ${current.projects_before_approval} event${current.projects_before_approval === 1 ? '' : 's'} at the same time needs the G-Squad Coordinator's approval.`}
         {canEdit && ' Change the hours at the start of a month: places already booked keep their hours.'}
       </p>
       <form onSubmit={submit} noValidate>
