@@ -19,7 +19,7 @@
 //   ALLOWED_ORIGINS  optional; as invite-leader
 // Until the DPIA is signed only the test list receives email (church_settings.newsletter_live).
 // -------------------------------------------------------------------------------------
-import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.118.0';
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.119.0';
 import { corsHeaders, defaultOrigins, parseOrigins, PRODUCTION_ORIGINS } from '../invite-leader/logic.ts';
 import {
   BATCH_MAX,
