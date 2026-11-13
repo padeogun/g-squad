@@ -243,6 +243,7 @@ function MonthRota({ unitId, month, isOps, canEdit }: { unitId: string; month: s
           // Migration 30: the rest rule (at least one Sunday off) applies to Sunday places.
           isSunday={projectIds.includes(picking.projectId)}
           sundaysOff={Number(settings.data?.sundays_off_per_month ?? 1)}
+          overlapLimit={Number(settings.data?.projects_before_approval ?? 2)}
           roleName={picking.roleId ? roleMap.get(picking.roleId)?.name ?? 'Role' : 'Any role'}
           isOps={isOps}
           onClose={() => setPicking(null)}
@@ -259,6 +260,7 @@ function AssignPanel({
   hours,
   isSunday,
   sundaysOff,
+  overlapLimit,
   roleName,
   isOps,
   onClose,
@@ -268,6 +270,7 @@ function AssignPanel({
   hours: number;
   isSunday: boolean;
   sundaysOff: number;
+  overlapLimit: number;
   roleName: string;
   isOps: boolean;
   onClose: () => void;
@@ -312,6 +315,8 @@ function AssignPanel({
         Fewest hours this month first. One limit counts across all teams, Sundays, events and team activities
         {/* SECURITY REVIEW 20 (F10): the church's own number of Sundays off (0 to 3), not always one. */}
         {isSunday && sundaysOff > 0 ? `, and everyone keeps at least ${sundaysOff} Sunday${sundaysOff === 1 ? '' : 's'} off a month` : ''}.
+        {/* Security review 23 note: the church's own overlap setting (1 to 10), not always two. */}
+        {!isSunday && ` Someone already serving on ${overlapLimit} event${overlapLimit === 1 ? '' : 's'} at the same time as this one waits for the G-Squad Coordinator's approval.`}
       </p>
       {candidates.isPending && <p>Loading…</p>}
       {candidates.error && <Notice tone="danger">{friendlyError(candidates.error)}</Notice>}
@@ -448,6 +453,8 @@ function EventsCard({
                   </span>
                   {a?.status === 'served' && <Chip tone="ok">Served</Chip>}
                   {a?.status === 'no_show' && <Chip tone="danger">No-show</Chip>}
+                  {/* Migration 32: a third overlapping project waits for the G-Squad Coordinator. */}
+                  {a?.status === 'pending_approval' && <Chip tone="warn">Waiting for the Coordinator</Chip>}
                   {!a && !canEdit && <span className="type-caption">Open</span>}
                   {!a && canEdit && (
                     <button
@@ -459,7 +466,7 @@ function EventsCard({
                       + Assign
                     </button>
                   )}
-                  {a?.status === 'planned' && canEdit && (
+                  {(a?.status === 'planned' || a?.status === 'pending_approval') && canEdit && (
                     <button
                       type="button"
                       className="app-link-button"

@@ -1,6 +1,8 @@
 // -------------------------------------------------------------------------------------
 // New project: name, type, whole church or one unit, where and when, and (for an event) its
-// size and complexity, which start the High-level Event Planning form. The creator becomes
+// size and complexity, which start the High-level Event Planning form. Migration 32: an event
+// also gets a run of show (projects.is_event); only a team project may be a routine team
+// activity without one, so church projects are always events. The creator becomes
 // the owner. Every project starts as a draft (project_guard). Who may create which:
 //   * church projects: Operations Lead, G-Squad Coordinator, Purpose Heads (the Resident Pastor
 //     does not own projects: decision of 25 Oct 2026);
@@ -69,13 +71,14 @@ export function NewProject() {
           starts_at: starts,
           ends_at: ends,
           description: v.description.trim() || null,
+          is_event: v.level === 'church' || v.is_event,
         })
         .select('id')
         .single();
       if (error) throw error;
       // An event starts its planning form now; if that step fails, the project still exists
       // and the form can be started from the project page.
-      if (v.is_event) {
+      if (v.level === 'church' || v.is_event) {
         const { error: planError } = await supabase
           .from('event_plans')
           .insert({ project_id: data.id, size: v.size as 'small', complexity: v.complexity as 'low' });
@@ -189,8 +192,19 @@ export function NewProject() {
         </Card>
 
         <Card title="Event planning">
-          <Checkbox id="np-event" label="This is an event: use the High-level Event Planning form" checked={v.is_event} onChange={(e) => set('is_event', e.target.checked)} />
-          {v.is_event && (
+          {v.level === 'unit' ? (
+            <Checkbox
+              id="np-event"
+              label="This is an event: plan it with the High-level Event Planning form and give it a run of show (untick for a routine team activity such as a rehearsal, training or team meeting)"
+              checked={v.is_event}
+              onChange={(e) => set('is_event', e.target.checked)}
+            />
+          ) : (
+            <p className="type-caption" style={{ margin: 0 }}>
+              A church project is an event: it uses the High-level Event Planning form and has a run of show.
+            </p>
+          )}
+          {(v.level === 'church' || v.is_event) && (
             <div className="tec-fields">
               <SelectField
                 id="np-size"

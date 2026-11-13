@@ -1,0 +1,11 @@
+-- =====================================================================================
+-- G-Squad Planner: 31. A booking can wait for the G-Squad Coordinator's approval
+--
+-- Decision of 12 Nov 2026: a G-Squad member serving on a third project whose dates overlap
+-- two others needs the G-Squad Coordinator's approval (migration 32). Such a booking is kept
+-- as "pending_approval" until then. It does not count towards hours or Sundays until approved.
+--
+-- On its own because Postgres cannot use a new enum value in the migration that adds it
+-- (as migrations 21 and 29).
+-- =====================================================================================
+alter type public.assignment_status add value if not exists 'pending_approval';

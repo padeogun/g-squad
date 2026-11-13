@@ -2,9 +2,12 @@
 // Sunday operations data: Sundays (service grids), their segments, the units and roles each
 // Sunday needs (team demand), and reusable text blocks. Everyone signed in reads grids
 // (grids_read); the Operations Lead builds them and the Resident Pastor approves (migration 8).
+// Migration 32: every event has a run of show, stored the same way (service_grids with
+// is_sunday false). Its owner builds it and the event's approver approves it; the database
+// says who may do what (run_of_show_rights), so the screen does not work it out from roles.
 // Pure timing helpers are at the bottom and unit-tested in sundays.test.ts.
 // -------------------------------------------------------------------------------------
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Database } from '../lib/database.types';
 import { supabase } from '../lib/supabase';
 
@@ -20,12 +23,60 @@ async function rows<T>(p: PromiseLike<{ data: T[] | null; error: unknown }>): Pr
   return data ?? [];
 }
 
-// All Sundays, newest first (the list screen splits them into coming and past).
+// All Sundays, newest first (the list screen splits them into coming and past). Events' runs
+// of show are left out: they are reached from their project.
 export const useSundays = () =>
   useQuery({
     queryKey: ['grids'],
-    queryFn: () => rows(supabase.from('service_grids').select('*').order('service_date', { ascending: false })),
+    queryFn: () =>
+      rows(supabase.from('service_grids').select('*').eq('is_sunday', true).order('service_date', { ascending: false })),
   });
+
+// An event's run of show, if started (one per project).
+export const useProjectRunOfShow = (projectId: string | undefined) =>
+  useQuery({
+    queryKey: ['grids', 'project', projectId],
+    enabled: !!projectId,
+    queryFn: async () => {
+      const { data, error } = await supabase.from('service_grids').select('*').eq('project_id', projectId!).maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+  });
+
+export interface RunOfShowRights {
+  can_edit: boolean;
+  can_approve: boolean;
+  is_sunday: boolean;
+}
+
+// What the signed-in leader may do with one run of show, as the database decides it.
+export const useRunOfShowRights = (gridId: string | undefined) =>
+  useQuery({
+    queryKey: ['grids', gridId, 'rights'],
+    enabled: !!gridId,
+    queryFn: async (): Promise<RunOfShowRights> => {
+      const { data, error } = await supabase.rpc('run_of_show_rights', { p_grid: gridId! });
+      if (error) throw error;
+      return data?.[0] ?? { can_edit: false, can_approve: false, is_sunday: false };
+    },
+  });
+
+// Starts an event's run of show (for the event's first day); returns the new grid's id.
+export function useStartRunOfShow(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { data, error } = await supabase.rpc('start_run_of_show', { p_project: projectId });
+      if (error) throw error;
+      return data as string;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['grids'] });
+      void qc.invalidateQueries({ queryKey: ['projects'] });
+    },
+  });
+}
 
 export const useGrid = (id: string | undefined) =>
   useQuery({

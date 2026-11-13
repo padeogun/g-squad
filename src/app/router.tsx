@@ -56,6 +56,8 @@ export const router = createBrowserRouter([
           { path: '/my-unit', element: <MyUnit /> },
           { path: '/sundays', element: <Sundays /> },
           { path: '/sundays/:gridId', element: <ServiceGrid /> },
+          // Migration 32: an event's run of show uses the same screen as a Sunday grid.
+          { path: '/run-of-show/:gridId', element: <ServiceGrid /> },
           { path: '/rota', element: <Rota /> },
           { path: '/check-in', element: <CheckIn /> },
           { path: '/capacity', element: <Capacity /> },

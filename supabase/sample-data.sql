@@ -181,9 +181,18 @@ begin
   -- (People 1, 6 and 11 are at the 9-hour limit, so the rota shows them as full.)
   insert into public.assignments (church_id, project_id, person_id, unit_id, serve_date)
   values (v_church, v_project, v_people[7], v_unit_ids[2], v_sunday + 13);
+  -- Every event has a run of show (migration 32): a draft one for the fun day, to finalise
+  -- and approve when testing.
+  insert into public.service_grids (church_id, project_id, service_date, theme)
+  values (v_church, v_project, v_sunday + 13, 'Love your neighbour') returning id into v_grid;
+  insert into public.service_segments (church_id, grid_id, position, title, starts_at, duration_minutes, led_by_unit_id, led_by_text)
+  values (v_church, v_grid, 1, 'Set up the gazebos and stalls', '10:00', 60, v_unit_ids[2], null),
+         (v_church, v_grid, 2, 'Welcome and opening prayer', '11:00', 15, null, 'Resident Pastor'),
+         (v_church, v_grid, 3, 'Games, food and face painting', '11:15', 180, v_unit_ids[4], null),
+         (v_church, v_grid, 4, 'Pack down', '14:15', 45, v_unit_ids[2], null);
 
   insert into public.projects (church_id, owner_user_id, name, description, level, unit_id, status, starts_at, ends_at)
-  values (v_church, v_owner, 'Ushers training evening', 'Sample data: a team activity waiting for its Purpose Head',
+  values (v_church, v_owner, 'Ushers training evening', 'Sample data: a team event waiting for its Purpose Head (start its run of show first)',
           'unit', v_unit_ids[1], 'submitted',
           ((v_sunday + 3) + time '19:00') at time zone 'Europe/London',
           ((v_sunday + 3) + time '21:00') at time zone 'Europe/London');
