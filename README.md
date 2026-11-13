@@ -57,3 +57,14 @@ Database changes are **always new migration files** in `supabase/migrations/`, n
 ## Data
 
 Until the data protection impact assessment (DPIA) is signed, the database holds **fictional sample data only**. No real member, faith or pastoral information goes in before then.
+
+### Test version: made-up data for every function
+
+The "Sample data" workflow fills the test site so every screen has something to work on, and takes it all out again before go-live.
+
+1. **Switch it on:** Settings > Secrets and variables > Actions > Variables: set `SAMPLE_DATA_ALLOWED` to `true` (a repository admin only).
+2. **Load:** Actions > Sample data > Run workflow, action `load`. It adds 30 invented members (`@g-squad.example`, phones in the 07700 900 drama range), eight past and four coming Sundays, events at every stage (draft, waiting, approved, finished, cancelled, from the network, a routine team activity), event plans with inputs and safeguarding notes, faith fields, TECi stages, Greatness Communities, pastoral notes and check-in flags, one-to-ones with leadership questions, two serving approvals waiting for the G-Squad Coordinator, and next month's draft issue of The Greatness Brief.
+3. **A sign-in for each role:** invite each test address from Leaders in the app with the role it should have. The workflow can also give a role to a sign-in that already exists: put the address in `tester_email` and pick the role in `role_set` (the Resident Pastor role needs its box ticked, and the Resident Pastor's agreement).
+4. **Remove:** run the workflow with action `remove`. It deletes only what the load made (and takes back the roles the workflow gave); anything testers typed in stays, except answers typed to the two sample leadership questions, which go with the questions. A sample person whose email was changed (or who was anonymised) and a sample project whose description was edited are no longer recognised and stay too: the run's last line counts everything left (`other_people_to_check`, `other_projects_to_check`), and before go-live both must be zero or checked row by row. To start again with fresh data, run `remove` then `load`.
+
+Dates are worked out from the day of loading, so reload if the "coming" Sundays have passed. Remove the sample data before the Resident Pastor switches on sending to members, then delete the variable, the workflow and the two SQL files.

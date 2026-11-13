@@ -3,8 +3,8 @@
 #
 # Why a separate workflow: sample data is not a migration (it must be removable before
 # go-live, and real churches never get it), so it never runs on a normal deploy.
-#   load    runs supabase/sample-data.sql: 30 invented members, four Sundays, events,
-#           one-to-ones and recognitions. Optionally gives the leader roles to one tester's
+#   load    runs supabase/sample-data.sql: 30 invented members, eight past and four coming
+#           Sundays, events at every stage, one-to-ones, pastoral notes and a newsletter issue. Optionally gives the leader roles to one tester's
 #           sign-in (invite that person in the app first, so their account exists).
 #   remove  runs supabase/sample-data-remove.sql (before go-live, slice 7). It also takes
 #           back the roles the load gave.
@@ -36,7 +36,7 @@ on:
       role_set:
         description: (load only) Which roles the tester gets
         type: choice
-        options: [all, resident_pastor, team_lead]
+        options: [all, resident_pastor, purpose_head, gsquad_coordinator, operations_lead, teci_coordinator, team_lead, deputy_team_lead, pastoral_lead, newsletter_editor, finance]
         default: all
       give_resident_pastor:
         description: (load only) Also give the tester the Resident Pastor role. Only with the Resident Pastor's agreement.

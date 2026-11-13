@@ -9,6 +9,7 @@
 --   people        email ends in @g-squad.example
 --   projects      description starts with 'Sample data'
 --   church roles  description starts with 'Sample data'
+--   Greatness Communities and leadership questions   name ends with '(sample)'
 -- Most related rows (memberships, serving, one-to-ones, holidays, grids) go with them through
 -- the database's own "on delete cascade" links. Anything testers typed in by hand (new
 -- members, projects) stays and is listed at the end for a person to check.
@@ -39,11 +40,33 @@ declare
 begin
   -- Sample projects and people first: their serving, requests, memberships, grids, holidays,
   -- one-to-ones and recognitions go with them ("on delete cascade").
+  -- The sample newsletter issue goes before its project (an issue protects its project from
+  -- deletion); its items, deliveries, replies and reactions go with it. Issues a tester
+  -- started in the app have their own projects and stay.
+  delete from public.newsletter_issues i using public.projects p
+   where i.project_id = p.id and p.church_id = v_church and p.description like 'Sample data%';
+
   delete from public.projects where church_id = v_church and description like 'Sample data%';
   get diagnostics v_projects = row_count;
 
+  -- A run of show a tester wrote may name a sample person as leading a part. Deleting the
+  -- person would blank that (and a part must be led by someone), so the name is kept as text.
+  update public.service_segments s
+     set led_by_text = left(coalesce(s.led_by_text, p.first_name || ' ' || p.surname), 200), led_by_person_id = null
+    from public.people p
+   where s.led_by_person_id = p.id and p.church_id = v_church and p.email like '%@g-squad.example';
+
   delete from public.people where church_id = v_church and email like '%@g-squad.example';
   get diagnostics v_people = row_count;
+
+  -- Greatness Communities and leadership questions made by the load carry "(sample)" in their
+  -- name. Their support roles go with the community, and members a tester put in one are
+  -- simply left without a community. Answers to a sample question go with the question (an
+  -- answer cannot outlive its question), including any a tester typed.
+  delete from public.greatness_communities where church_id = v_church and name like '%(sample)';
+  delete from public.one_to_one_answers a using public.one_to_one_prompts q
+   where a.prompt_id = q.id and q.church_id = v_church and q.question like '%(sample)';
+  delete from public.one_to_one_prompts where church_id = v_church and question like '%(sample)';
 
   -- Whatever still uses a sample rota role belongs to someone else (typed in by a tester, or
   -- real). It would block the role's deletion ("restrict"), so it keeps its row and loses only
@@ -116,4 +139,10 @@ select (select count(*) from public.people where email like '%@g-squad.example')
        (select count(*) from public.projects where description like 'Sample data%') as sample_projects_left,
        (select count(*) from public.role_assignments ra
          where ra.is_active and exists (select 1 from public.audit_log l
-                                        where l.action = 'sample_data_grant' and l.record_id = ra.id)) as test_roles_left;
+                                        where l.action = 'sample_data_grant' and l.record_id = ra.id)) as test_roles_left,
+       -- SECURITY REVIEW 24 (A01): a sample person whose email a tester changed (or who was
+       -- anonymised), or a sample project whose description was edited, is no longer
+       -- recognised and stays, with its faith or safeguarding rows. These two counts are
+       -- everything left: before go-live each must be zero, or checked row by row.
+       (select count(*) from public.people) as other_people_to_check,
+       (select count(*) from public.projects) as other_projects_to_check;

@@ -134,6 +134,22 @@ describe('sample data workflow input (K01)', () => {
     expect(prepareSample({ ACTION: 'load', ROLE_SET: "all'; drop table people; --" }).status).toBe(1);
   });
 
+  // A test sign-in for every role (Paul, 13 Nov 2026): each role name is accepted as it is;
+  // anything else, including a near miss or a second value on a new line, is refused.
+  it('accepts each role by name and nothing else', () => {
+    const roles = ['purpose_head', 'gsquad_coordinator', 'operations_lead', 'teci_coordinator', 'team_lead',
+      'deputy_team_lead', 'pastoral_lead', 'newsletter_editor', 'finance'];
+    for (const role of roles) {
+      const r = prepareSample({ ACTION: 'load', TESTER_EMAIL: 'a@example.org', ROLE_SET: role });
+      expect(r.status).toBe(0);
+      expect(r.sql).toContain(`when '${role}' in`);
+      expect(r.sql).not.toContain('__ROLE_SET__');
+    }
+    for (const bad of ['unit_lead', 'Finance', 'finance ', 'finance\nall', 'service_role', '*']) {
+      expect(prepareSample({ ACTION: 'load', TESTER_EMAIL: 'a@example.org', ROLE_SET: bad }).status).toBe(1);
+    }
+  });
+
   it('leaves the placeholder (no roles) when the email is blank', () => {
     const r = prepareSample({ ACTION: 'load', TESTER_EMAIL: '' });
     expect(r.status).toBe(0);
