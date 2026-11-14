@@ -16,7 +16,7 @@
 // The service-role key is used only for the two database functions above, which accept the
 // service role alone.
 // -------------------------------------------------------------------------------------
-import { createClient } from 'npm:@supabase/supabase-js@2.118.0';
+import { createClient } from 'npm:@supabase/supabase-js@2.119.0';
 import { corsHeaders, defaultOrigins, parseOrigins } from '../invite-leader/logic.ts';
 import { isToken, readLimited } from '../_shared/newsletter.ts';
 

@@ -12,7 +12,7 @@
 // The leader's account row and roles are inserted with the CALLER's token, so the database's
 // row-level security and role-grant guard decide what is allowed, exactly as in the app.
 // -------------------------------------------------------------------------------------
-import { createClient } from 'npm:@supabase/supabase-js@2.118.0';
+import { createClient } from 'npm:@supabase/supabase-js@2.119.0';
 import {
   bodyTooLarge,
   checkGrants,

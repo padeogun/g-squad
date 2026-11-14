@@ -129,6 +129,10 @@ prep() { OUT="$work/$1.sql" RUN_BY=db-test RUN_ID=21 bash "$repo_root/scripts/sa
 ACTION=load TESTER_EMAIL=' Tester@Example.org ' prep load
 ACTION=load TESTER_EMAIL='Tester@Example.org' GIVE_RESIDENT_PASTOR=true prep load_rp
 ACTION=load TESTER_EMAIL='second@example.org' ROLE_SET=team_lead prep load_tl
+# 13 Nov 2026: a test sign-in for every role.
+for rs in purpose_head gsquad_coordinator operations_lead teci_coordinator deputy_team_lead pastoral_lead newsletter_editor finance; do
+  ACTION=load TESTER_EMAIL='third@example.org' ROLE_SET="$rs" prep "load_$rs"
+done
 ACTION=remove prep remove
 problems=()
 expect() { [[ "$2" == "$3" ]] || problems+=("$1: expected $3, got $2"); }
@@ -155,7 +159,60 @@ expect "Team Lead only" "$(sq "select string_agg(r.role::text || ':' || u.name, 
   "unit_lead:Hospitality"
 expect "and no other role" "$(sq "select count(*) from public.role_assignments where user_id = '00000000-0000-0000-0000-00000000aa02'")" 1
 
-# Someone not in the sample (as a tester would type in), serving in a sample role.
+# 13 Nov 2026: each single-role choice gives exactly its role (the two functions bring the
+# Purpose Head role they need); the roles are switched off between choices so each is seen alone.
+sq "
+  insert into auth.users (id, email) values ('00000000-0000-0000-0000-00000000aa03', 'third@example.org');
+  insert into public.app_users (id, church_id, display_name)
+  select '00000000-0000-0000-0000-00000000aa03', id, 'Third' from public.churches where slug = 'tec-manchester';" > /dev/null
+third_roles() { sq "select coalesce(string_agg(role::text, ',' order by role), '') from public.role_assignments where user_id = '00000000-0000-0000-0000-00000000aa03' and is_active"; }
+for pair in purpose_head:purpose_head gsquad_coordinator:purpose_head,gsquad_coordinator operations_lead:purpose_head,operations_lead \
+            teci_coordinator:teci_coordinator deputy_team_lead:deputy_unit_lead pastoral_lead:pastoral_lead \
+            newsletter_editor:newsletter_editor finance:finance; do
+  srun "$work/load_${pair%%:*}.sql"
+  expect "role set ${pair%%:*}" "$(third_roles)" "${pair#*:}"
+  # Functions first, so the Purpose Head role is free to go (the database's own rule).
+  sq "update public.role_assignments set is_active = false where user_id = '00000000-0000-0000-0000-00000000aa03' and role in ('gsquad_coordinator', 'operations_lead');
+      update public.role_assignments set is_active = false where user_id = '00000000-0000-0000-0000-00000000aa03';" > /dev/null
+done
+# The Deputy's team is one the sign-in does not lead (the first tester leads Ushers, not this one).
+expect "deputy team" "$(sq "select u.name from public.role_assignments r join public.units u on u.id = r.unit_id where r.user_id = '00000000-0000-0000-0000-00000000aa03' and r.role = 'deputy_unit_lead'")" "Ushers"
+# SECURITY REVIEW 24 (A02): Team Lead after Deputy goes to another team, never the same one.
+ACTION=load TESTER_EMAIL='third@example.org' ROLE_SET=team_lead prep load_third_tl
+srun "$work/load_deputy_team_lead.sql"
+srun "$work/load_third_tl.sql"
+expect "never Deputy and Team Lead of one team" "$(sq "select count(*) from (select unit_id from public.role_assignments where user_id = '00000000-0000-0000-0000-00000000aa03' and is_active and unit_id is not null group by unit_id having count(*) > 1) x")" 0
+srun "$work/load_gsquad_coordinator.sql"   # left switched on, so removal has a function and its Purpose Head to take back
+
+# The wider sample (13 Nov 2026): every area a tester needs has rows, nobody is over their
+# monthly hours, and the two serving approvals wait for the G-Squad Coordinator.
+expect "sample areas filled" "$(sq "select (select count(*) from public.person_faith) > 0 and (select count(*) from public.pastoral_notes) = 2
+  and (select count(*) from public.event_plans) = 4 and (select count(*) from public.event_safeguarding) = 2
+  and (select count(*) from public.project_inputs) >= 3 and (select count(*) from public.newsletter_issues) = 1
+  and (select count(*) from public.one_to_one_walk) = 5 and (select count(*) from public.one_to_one_prompts) = 2
+  and (select count(*) from public.greatness_communities) = 3 and (select count(*) from public.checkin_flags) >= 3
+  and (select count(*) from public.projects where status = 'done') = 9")" t
+expect "nobody over their monthly hours" "$(sq "select count(*) from (select sum(a.hours) h, min(coalesce(least(p.available_hours_month, 9), 9)) lim
+  from public.assignments a join public.people p on p.id = a.person_id where a.status in ('planned', 'served')
+  group by a.person_id, date_trunc('month', a.serve_date)) x where h > lim")" 0
+# SECURITY REVIEW 24: A03 past Sundays are approved, A04 one input is received, A05 both waiting
+# requests have their request row.
+expect "grids by status" "$(sq "select string_agg(s || '=' || n, ',' order by s) from (select status::text s, count(*) n from public.service_grids group by 1) x")" "approved=8,draft=5,finalised=1"
+expect "one input received" "$(sq "select count(*) from public.project_inputs where status = 'received' and received_at is not null")" 1
+expect "approval requests logged" "$(sq "select count(*) from public.audit_log where action = 'serving_approval_requested'")" 2
+expect "serving approvals waiting" "$(sq "select (select count(*) from public.unit_memberships where status = 'pending_approval') || ',' || (select count(*) from public.assignments where status = 'pending_approval')")" "1,1"
+
+# Someone not in the sample (as a tester would type in), serving in a sample role. A run of show
+# of theirs also names a sample person as leading a part (kept as text when the person goes).
+sq "
+  insert into public.projects (church_id, owner_user_id, name, description, level, status, starts_at, ends_at)
+  select church_id, id, 'Typed-in second event', 'A tester event', 'church', 'draft', now() + interval '20 days', now() + interval '20 days 2 hours'
+  from public.app_users where id = '00000000-0000-0000-0000-00000000aa01';
+  insert into public.service_grids (church_id, project_id, service_date)
+  select church_id, id, (now() + interval '20 days')::date from public.projects where name = 'Typed-in second event';
+  insert into public.service_segments (church_id, grid_id, position, title, starts_at, duration_minutes, led_by_person_id)
+  select g.church_id, g.id, 1, 'Opening', '10:00', 10, (select id from public.people where email = 'ife.balogun@g-squad.example')
+  from public.service_grids g join public.projects p on p.id = g.project_id where p.name = 'Typed-in second event';" > /dev/null
 sq "
   insert into public.people (church_id, first_name, surname, email)
   select id, 'Kept', 'Person', 'kept@example.org' from public.churches where slug = 'tec-manchester';
@@ -173,7 +230,10 @@ expect "sample people left" "$(sq "select count(*) from public.people where emai
 expect "sample projects left" "$(sq "select count(*) from public.projects where description like 'Sample data%'")" 0
 expect "sample rota roles left" "$(sq "select count(*) from public.church_roles where description like 'Sample data%'")" 0
 expect "test roles left switched on" "$(sq "select count(*) from public.role_assignments where is_active")" 0
-expect "role removals audited" "$(sq "select count(*) from public.audit_log where action = 'sample_data_revoke' and detail->>'github_user' = 'db-test'")" 10
+expect "sample newsletter issue, communities and questions left" "$(sq "select (select count(*) from public.newsletter_issues) + (select count(*) from public.greatness_communities) + (select count(*) from public.one_to_one_prompts)")" 0
+expect "sample faith rows, notes and flags left" "$(sq "select (select count(*) from public.person_faith) + (select count(*) from public.pastoral_notes) + (select count(*) from public.checkin_flags)")" 0
+expect "a tester's run of show keeps the leader's name as text" "$(sq "select led_by_text from public.service_segments s join public.service_grids g on g.id = s.grid_id join public.projects p on p.id = g.project_id where p.name = 'Typed-in second event'")" "Ife Balogun"
+expect "role removals audited" "$(sq "select count(*) from public.audit_log where action = 'sample_data_revoke' and detail->>'github_user' = 'db-test'")" 14
 expect "other people's serving kept" "$(sq "select count(*) from public.assignments a join public.people p on p.id = a.person_id where p.email = 'kept@example.org' and a.church_role_id is null")" 1
 
 srun "$work/load.sql"   # and it loads again after removal

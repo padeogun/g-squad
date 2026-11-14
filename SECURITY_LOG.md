@@ -1225,3 +1225,45 @@ Independent review of commits `d9a44fd` (database) and `f2a3b1f` (front end) on 
 5. **A change of event dates does not send its run of show back for approval.** The project goes back to its approver; the run of show keeps its date and approval, and cannot be changed again until its date is moved within the new dates. Check the run of show when re-approving a moved event.
 6. **Wording.** The Rota page says "two events" whatever `projects_before_approval` is set to. Cosmetic.
 7. **Sample data only** until the DPIA is signed (unchanged).
+
+## Review 24 — Test version: sample data for every function, a test sign-in for every role
+
+**Date:** 13 Nov 2026. **Scope:** `supabase/sample-data.sql` (sections 9–20 and the role choices), `supabase/sample-data-remove.sql`, `scripts/sample-data-prepare.sh`, `.github/workflows/sample-data.yml`, and their tests. **Reviewer:** an independent AI review agent that did not write the change; it read the diff and ran the load, the removal and the app's functions on a local Postgres 16. No migration, policy or screen changed.
+
+### Findings
+
+| ID | Severity | Finding | Fix or decision | File |
+|----|----------|---------|-----------------|------|
+| A01 | Medium | **Removal could report nothing left while sample rows stayed.** Sample people are found by their `@g-squad.example` email and sample projects by their description; a tester can change both, and anonymising clears the email. Such rows stayed (with their faith or safeguarding rows) and the summary still said zero. | The removal's last line now counts every person and project left (`other_people_to_check`, `other_projects_to_check`); the README says both must be zero, or checked row by row, before go-live. Recording the ids the load made was considered and left: it needs a new table, which is a migration for test-only data. | `supabase/sample-data-remove.sql`, `README.md` |
+| A02 | Medium | **One sign-in could become Deputy and Team Lead of the same team** (Deputy first, then Team Lead or "all"), a state the app forbids. | The Team Lead pick now skips a team the sign-in is Deputy of. Checked in `db-test.sh`. | `supabase/sample-data.sql` |
+| A03 | Low | **The eight past Sundays were not approved.** Each grid was inserted as approved and then given its parts, which withdraws approval, so eight past Sundays waited for the Resident Pastor. | Parts first, then approved. Checked in `db-test.sh` (8 approved, 5 draft, 1 finalised). | `supabase/sample-data.sql` |
+| A04 | Low | **The "received" input was stored as requested** (every input starts as requested) and showed as overdue. | Marked received after insert. Checked in `db-test.sh`. | `supabase/sample-data.sql` |
+| A05 | Low | **The two waiting serving approvals had no request row**, so the Coordinator's list showed no request date or overlap count. Approve and decline worked. | The load writes the two `serving_approval_requested` audit rows (ids and labels only). Checked in `db-test.sh`. | `supabase/sample-data.sql` |
+| A06 | Low | **Sending to members can be switched on while sample data is loaded**, which would put invented birthdays and wins in a live issue (to undeliverable addresses). | Go-live step, in the README: remove the sample data first. A database refusal was left for slice 7 (go-live), as it needs a migration. | `README.md` |
+| A07 | Low | **Removal deletes answers testers typed to the two sample leadership questions** (an answer cannot outlive its question) without saying so. | Accepted; stated in the README and in the removal file. | `README.md` |
+| A08 | Info | Sample records are owned by a real leader's account (the first Operations Lead), which may raise that leader's load flag while testing. The Coordinator and Operations Lead choices also give Purpose Head of the Ministry purpose. | Accepted for a test site; all of it goes on removal. | — |
+| A09 | Info | Role take-back relies on audit rows that housekeeping deletes after two years. | Not a concern for a short test period (unchanged since review 21). | — |
+
+### Checked and found sound
+
+- **Input.** `ROLE_SET` is matched against a fixed list of words; near misses, a trailing space, a line break or a quote are refused. Emails as review 21 (K01). The workflow passes inputs through `env:` only.
+- **Resident Pastor.** Given only with the box ticked, for "resident_pastor" and for "all".
+- **Functions.** The Coordinator and Operations Lead choices give exactly Purpose Head plus the function.
+- **Take-back.** Removal switched off every role the load gave, including Deputy Team Lead and the paired Purpose Head. Nobody signed in can write an audit row to mark a real role for take-back.
+- **Restricted data.** `person_faith`, `one_to_one_walk`, `event_safeguarding` and `pastoral_notes` are written by the database owner only; no policy or grant changed, so nothing is readable more widely than before.
+- **Email.** People use `.example` addresses and phones in 07700 900xxx. The sample issue is a draft; while sending to members is off, issues go only to the test list of leaders' sign-in addresses.
+- **Nightly jobs.** The flag, anonymising and housekeeping jobs ran on the loaded data without error.
+- **Removal with testers' rows attached.** Nothing a tester typed was deleted, A07 apart; a tester's run of show naming a sample person keeps the name as text.
+
+### Test results
+
+- `scripts/db-test.sh` (local Postgres 16): **908 of 908 checks passed**; the sample-data section passed with the new checks (each role choice, A02–A05, areas filled, nobody over their monthly hours, clean removal).
+- The load was also run as if on 29 different days across the past year: no error, and nobody over their monthly hours on any of them.
+- `npm run check`: lint clean, **199 of 199 unit tests pass**, build succeeds.
+
+### Residual risks and actions for TEC
+
+1. **Before go-live:** run "remove", confirm `other_people_to_check` and `other_projects_to_check` are zero (or check each row), then delete the `SAMPLE_DATA_ALLOWED` variable, the workflow, the prepare script and the two SQL files. Do this before sending to members is switched on.
+2. **The Resident Pastor role from the workflow** still needs the Resident Pastor's agreement (review 21, K02).
+3. **Sample dates are relative to the day of loading.** After about a week the "coming" Sunday has passed; run remove then load for fresh dates.
+4. **Sample data only** until the DPIA is signed (unchanged).

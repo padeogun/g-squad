@@ -11,8 +11,10 @@
 #   ACTION                load | remove
 #   TESTER_EMAIL          (load) a leader's sign-in email, or blank for no roles
 #   GIVE_RESIDENT_PASTOR  (load) "true" to include the Resident Pastor role; anything else: not
-#   ROLE_SET              (load) all | resident_pastor | team_lead (blank: all). Which roles the
-#                         tester gets: every role, or one role to see that role's view alone
+#   ROLE_SET              (load) all, or one role: resident_pastor | purpose_head |
+#                         gsquad_coordinator | operations_lead | teci_coordinator | team_lead |
+#                         deputy_team_lead | pastoral_lead | newsletter_editor | finance
+#                         (blank: all). Every role, or one role to see that role's view alone
 #   RUN_BY                who started the run (GitHub user name), for the audit log
 #   RUN_ID                the GitHub run number, for the audit log
 #   OUT                   where to write the SQL
@@ -64,9 +66,10 @@ give_rp="no"
 # else can reach the SQL; Resident Pastor alone still needs the box ticked (K02).
 role_set="${ROLE_SET:-all}"
 case "$role_set" in
-  all|team_lead) ;;
+  # 13 Nov 2026 (Paul): a test sign-in for every role. Still a fixed list of plain words.
+  all|purpose_head|gsquad_coordinator|operations_lead|teci_coordinator|team_lead|deputy_team_lead|pastoral_lead|newsletter_editor|finance) ;;
   resident_pastor) [[ "$give_rp" == "yes" ]] || fail "Tick the Resident Pastor box to give the Resident Pastor role." ;;
-  *) fail "ROLE_SET must be all, resident_pastor or team_lead." ;;
+  *) fail "ROLE_SET must be all or the name of one role." ;;
 esac
 
 # Blank email: the placeholder stays and matches no one, so no role is given.
