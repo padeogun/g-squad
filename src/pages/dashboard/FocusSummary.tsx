@@ -64,12 +64,18 @@ function markers(area: FocusArea, s: FocusSummary): Array<[string, string | numb
         ['Members in TECi', `${g.in_teci} of ${g.members}`],
         ['Water baptisms', g.water_baptisms],
         ['Holy Spirit baptisms', g.spirit_baptisms],
+        ['Discipleship courses completed', g.discipleship_courses],
+        ['Members discipling one another', g.discipling],
+        ['Leadership training completed', g.leadership_courses],
+        ['Apprentices beside a leader', g.apprentices],
       ];
     case 'assimilation':
       return [
         ['Guests contacted within 48 hours', `${o.guests_contacted_48h} of ${o.first_time_guests}`],
         ['Guests connected to a community', o.connected_to_community],
         ['Members in a Greatness Community', `${g.in_community} of ${g.members}`],
+        ['New members with a buddy', `${g.new_with_buddy} of ${g.new_members}`],
+        ['30-day and 90-day conversations held', `${g.day_30_held} and ${g.day_90_held}`],
         ['Values in Action recognitions', g.recognitions],
       ];
     case 'pastoral_care':

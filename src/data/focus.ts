@@ -303,6 +303,15 @@ export interface FocusSummary {
     in_teci: number;
     water_baptisms: number;
     spirit_baptisms: number;
+    // Migration 34.
+    new_members: number;
+    new_with_buddy: number;
+    day_30_held: number;
+    day_90_held: number;
+    discipleship_courses: number;
+    leadership_courses: number;
+    apprentices: number;
+    discipling: number;
   };
 }
 

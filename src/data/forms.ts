@@ -34,7 +34,7 @@ export interface FieldDef {
 
 export interface FormDef {
   id: string; // used in the address: /admin/forms/<id>
-  table: 'purposes' | 'units' | 'church_roles' | 'teci_stages' | 'leadership_stages' | 'community_types' | 'greatness_communities' | 'project_types';
+  table: 'purposes' | 'units' | 'church_roles' | 'teci_stages' | 'leadership_stages' | 'community_types' | 'greatness_communities' | 'project_types' | 'course_types';
   title: string; // plural, for the list
   singular: string; // for buttons: "Add a unit"
   description: string;
@@ -159,6 +159,35 @@ export const FORMS: FormDef[] = [
       NAME,
       { key: 'description', label: 'Description', type: 'textarea', maxLength: 2000 },
       { key: 'advance_criteria', label: 'What moves someone to the next stage', type: 'textarea', maxLength: 2000 },
+    ],
+  },
+  // Migration 34: courses a G-Squad member can complete (switched off, never deleted, once used).
+  {
+    id: 'courses',
+    table: 'course_types',
+    title: 'Courses',
+    singular: 'course',
+    description: 'Discipleship and leadership courses a G-Squad member can complete, such as the new converts class or the Greatness Track Program.',
+    owner: 'Operations Lead or G-Squad Coordinator',
+    editRoles: ['operations_lead', 'gsquad_coordinator'],
+    orderBy: 'sort_order',
+    hasActive: true,
+    fields: [
+      { key: 'sort_order', label: 'Order', type: 'number', required: true, min: 1, max: 50, inList: true },
+      NAME,
+      {
+        key: 'kind',
+        label: 'Kind',
+        type: 'select',
+        required: true,
+        options: [
+          { value: 'discipleship', label: 'Discipleship' },
+          { value: 'leadership', label: 'Leadership' },
+        ],
+        inList: true,
+        defaultValue: 'discipleship',
+      },
+      { key: 'description', label: 'Description', type: 'textarea', maxLength: 2000 },
     ],
   },
   {

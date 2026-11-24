@@ -29,6 +29,7 @@ import {
 } from '../../data/people';
 import { FAITH_READERS, hasRole, ledUnitIds, viewedUnitIds, useMe } from '../../auth/useMe';
 import { NotFound } from '../NotFound';
+import { MemberGrowth } from './MemberGrowth';
 
 const { SectionHeading, Card, Button, TextField, SelectField, Checkbox, Notice, RestrictedPanel, Chip, DataTable } = TEC;
 
@@ -552,6 +553,10 @@ function MemberFormInner({ person }: { person?: Person }) {
           <Link to="/members">{canSave ? 'Cancel' : 'Back to members'}</Link>
         </div>
       </form>
+      {/* Migration 34: settling in, courses completed and mentoring (saved separately). */}
+      {person && (
+        <MemberGrowth person={person} canEdit={canEditRecord} canRecordCourses={canEditRecord || hasRole(me.data, 'teci_coordinator')} />
+      )}
     </>
   );
 }
