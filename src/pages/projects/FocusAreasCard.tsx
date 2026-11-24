@@ -94,6 +94,13 @@ export function FocusAreasCard({ p, canManage }: { p: Project; canManage: boolea
               Rate each area it aimed at before closing the event. You can rate the others too if the event touched them.
             </p>
           )}
+          {/* SECURITY REVIEW 25 (S05): every leader in the church reads these stories, and the
+              event's results are counts only. Say so where they are written. */}
+          {editReview && (
+            <p className="type-caption" style={{ margin: 0 }}>
+              Every leader can read what you write here: no names of guests or members, and nothing personal.
+            </p>
+          )}
           {reviews.error && <Notice tone="danger">{friendlyError(reviews.error)}</Notice>}
           <ul className="app-focus-list">
             {/* Areas the event aimed at first (they must be rated), then the optional ones. */}

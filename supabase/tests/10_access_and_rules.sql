@@ -4210,6 +4210,77 @@ select test.login('pastoral'); set role authenticated;
 select test.lives('select public.focus_areas_summary()', 'R33: the Pastoral Lead reads the summary');
 reset role;
 
+-- SECURITY REVIEW 25 (S01): a change to the aims holds the event (FOR SHARE) until it commits,
+-- so approval cannot pass on aims that are being removed at the same moment. Shown with two
+-- sessions during the review; checked here as R05 was.
+select test.ok(pg_get_functiondef('app.project_focus_write_guard'::regproc) ~* 'for share',
+               'S01: a change to an event''s aims holds the event while it commits');
+
+-- SECURITY REVIEW 25 (S02): a draft event with aims, and a team with an earlier quarter's note,
+-- can still be deleted (their focus rows go with them); the guards still hold otherwise.
+select test.login('');
+do $$
+declare v uuid; d timestamptz := now() + interval '9 weeks';
+begin
+  insert into public.projects (church_id, level, unit_id, name, starts_at, ends_at, status, owner_user_id)
+  values (test.id('churchA'), 'unit', test.id('A1'), 'Focus to delete', d, d + interval '1 hour', 'draft', test.id('ul_a'))
+  returning id into v;
+  insert into test.ids values ('F4', v);
+  insert into public.units (church_id, purpose_id, name)
+  select test.id('churchA'), u.purpose_id, 'Focus short-lived team' from public.units u where u.id = test.id('A1')
+  returning id into v;
+  insert into test.ids values ('U33', v);
+  insert into public.unit_focus_reflections (church_id, unit_id, quarter_start, area, went_well)
+  values (test.id('churchA'), v, (date_trunc('quarter', now() at time zone 'Europe/London') - interval '9 months')::date,
+          'discipleship', 'An old note'),
+         (test.id('churchA'), test.id('A1'), (date_trunc('quarter', now() at time zone 'Europe/London') - interval '9 months')::date,
+          'discipleship', 'A1 old note');
+end $$;
+select test.login('ul_a'); set role authenticated;
+insert into public.project_focus (project_id, area, is_primary, intended_outcome)
+values (test.id('F4'), 'soul_winning', true, 'To be deleted');
+select test.lives(format('delete from public.projects where id = %L', test.id('F4')),
+                  'S02: the owner deletes a draft event that has aims');
+select test.ok(not exists (select 1 from public.projects where id = test.id('F4'))
+               and not exists (select 1 from public.project_focus where project_id = test.id('F4')),
+               'S02: ... and its aims go with it');
+select test.throws(format($q$delete from public.unit_focus_reflections where unit_id = %L and went_well = 'A1 old note'$q$, test.id('A1')),
+                   'S02: an earlier quarter''s note is still not deleted on its own');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.lives(format('delete from public.units where id = %L', test.id('U33')),
+                  'S02: a team with an earlier quarter''s note can be deleted');
+select test.ok(not exists (select 1 from public.unit_focus_reflections where unit_id = test.id('U33')),
+               'S02: ... and its notes go with it');
+reset role;
+
+-- SECURITY REVIEW 25 (S03): another church's leader learns nothing about an event from the
+-- guard (before: "part of the approval", "once the event has started").
+select test.login('b_ops'); set role authenticated;
+do $$
+declare m1 text; m2 text;
+begin
+  begin
+    insert into public.project_focus (project_id, area, intended_outcome) values (test.id('F1'), 'assimilation', 'Probe');
+  exception when others then m1 := sqlerrm; end;
+  begin
+    insert into public.project_focus_review (project_id, area, rating) values (test.id('F1'), 'assimilation', 1);
+  exception when others then m2 := sqlerrm; end;
+  perform test.ok(m1 = 'Focus areas are recorded for events' and m2 = 'Focus areas are recorded for events',
+                  'S03: another church''s event gives the same answer as no event');
+end $$;
+select test.ok(not app.is_focus_event(test.id('F1')), 'S03: the helper does not look into another church');
+reset role;
+
+-- SECURITY REVIEW 25 (S04): no TRUNCATE (which skips row-level security and the guards),
+-- REFERENCES or TRIGGER on the new tables, or on migration 26's one-to-one tables.
+select test.ok(not exists (select 1 from unnest(array['public.project_focus','public.project_focus_review','public.project_outcomes',
+                                                      'public.unit_focus_reflections','public.one_to_one_prompts',
+                                                      'public.one_to_one_answers']) t(name),
+                                         unnest(array['TRUNCATE','REFERENCES','TRIGGER']) p(priv)
+                           where has_table_privilege('authenticated', t.name, p.priv)),
+               'S04: signed-in users cannot truncate the focus or one-to-one tables');
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;

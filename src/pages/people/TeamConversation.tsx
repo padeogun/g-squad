@@ -35,6 +35,14 @@ export function TeamConversation({ unitId, canEdit }: { unitId: string; canEdit:
       <p className="type-caption" style={{ margin: 0 }}>
         Talk these through with the team once a quarter. {canEdit ? 'Write a line or two for each: what went well, and what you will do next.' : 'Written by the Team Lead.'}
       </p>
+      {/* SECURITY REVIEW 25 (S05): the notes are read beyond the team (its Purpose Head, the
+          Coordinator, the Operations Lead and the Resident Pastor); keep members' own matters out. */}
+      {canEdit && (
+        <p className="type-caption" style={{ margin: 0 }}>
+          About the team, not any one member: the Purpose Head, Coordinator, Operations Lead and Resident Pastor read these. For a member who
+          needs care, raise a check-in instead.
+        </p>
+      )}
       <Segmented label="Quarter" options={labels} value={q === thisQ ? labels[0] : labels[1]} onChange={(x) => setQ(x === labels[0] ? thisQ : lastQ)} />
       {notes.error && <Notice tone="danger">{friendlyError(notes.error)}</Notice>}
       {notes.isPending && <p style={{ margin: 0 }}>Loading…</p>}

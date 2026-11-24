@@ -133,9 +133,12 @@ begin
                            where l.action = 'sample_data_grant' and l.record_id = ra.id)) then
     raise notice 'A test Purpose Head or Resident Pastor role was kept because the same person holds a Coordinator or Operations Lead role given in the app. Sort that out in Leaders.';
   end if;
-  raise notice 'Left for a person to check: % other people, % other projects',
+  -- SECURITY REVIEW 25 (S06): team notes sit on the church's real teams, so a note a tester
+  -- typed (or a sample note with both lines rewritten) stays; it is counted here too.
+  raise notice 'Left for a person to check: % other people, % other projects, % team notes',
     (select count(*) from public.people where church_id = v_church),
-    (select count(*) from public.projects where church_id = v_church);
+    (select count(*) from public.projects where church_id = v_church),
+    (select count(*) from public.unit_focus_reflections where church_id = v_church);
 end $$;
 
 commit;
@@ -151,4 +154,6 @@ select (select count(*) from public.people where email like '%@g-squad.example')
        -- recognised and stays, with its faith or safeguarding rows. These two counts are
        -- everything left: before go-live each must be zero, or checked row by row.
        (select count(*) from public.people) as other_people_to_check,
-       (select count(*) from public.projects) as other_projects_to_check;
+       (select count(*) from public.projects) as other_projects_to_check,
+       -- SECURITY REVIEW 25 (S06): team conversation notes (migration 33) are on real teams.
+       (select count(*) from public.unit_focus_reflections) as other_team_notes_to_check;

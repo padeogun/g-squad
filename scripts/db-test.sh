@@ -232,6 +232,25 @@ sq "
   from public.people p, public.projects pr, public.church_roles r
   where p.email = 'kept@example.org' and pr.name = 'Typed-in event' and r.description = 'Sample data' limit 1;" > /dev/null
 
+# SECURITY REVIEW 25 (S06): a tester's own focus aim on their event, a sample team note a tester
+# rewrote, and a note a tester typed beside it. Removal keeps all three (it cannot tell them
+# from real ones) and counts the notes; loading again must not trip over the kept notes.
+sq "
+  insert into public.project_focus (church_id, project_id, area, is_primary, intended_outcome)
+  select church_id, id, 'soul_winning', true, 'A tester aim' from public.projects where name = 'Typed-in second event';
+  with n as (select id, unit_id, quarter_start from public.unit_focus_reflections
+             where quarter_start = date_trunc('quarter', current_date)::date order by unit_id, area limit 1)
+  update public.unit_focus_reflections r set went_well = 'A tester rewrote this', next_step = 'And this'
+  from n where r.id = n.id;
+  insert into public.unit_focus_reflections (church_id, unit_id, quarter_start, area, went_well)
+  select r.church_id, r.unit_id, r.quarter_start, a.area, 'A tester typed this'
+  from public.unit_focus_reflections r
+  cross join lateral (select x.area from unnest(enum_range(null::public.focus_area)) x(area)
+                      where not exists (select 1 from public.unit_focus_reflections o
+                                        where o.unit_id = r.unit_id and o.quarter_start = r.quarter_start and o.area = x.area)
+                      limit 1) a
+  where r.went_well = 'A tester rewrote this';" > /dev/null
+
 srun "$work/remove.sql"
 expect "sample people left" "$(sq "select count(*) from public.people where email like '%@g-squad.example'")" 0
 expect "sample projects left" "$(sq "select count(*) from public.projects where description like 'Sample data%'")" 0
@@ -240,13 +259,18 @@ expect "test roles left switched on" "$(sq "select count(*) from public.role_ass
 expect "sample newsletter issue, communities and questions left" "$(sq "select (select count(*) from public.newsletter_issues) + (select count(*) from public.greatness_communities) + (select count(*) from public.one_to_one_prompts)")" 0
 expect "sample faith rows, notes and flags left" "$(sq "select (select count(*) from public.person_faith) + (select count(*) from public.pastoral_notes) + (select count(*) from public.checkin_flags)")" 0
 expect "a tester's run of show keeps the leader's name as text" "$(sq "select led_by_text from public.service_segments s join public.service_grids g on g.id = s.grid_id join public.projects p on p.id = g.project_id where p.name = 'Typed-in second event'")" "Ife Balogun"
-expect "sample focus areas and team notes left" "$(sq "select (select count(*) from public.project_focus) + (select count(*) from public.project_focus_review)
-  + (select count(*) from public.project_outcomes) + (select count(*) from public.unit_focus_reflections)")" 0
+expect "sample focus areas and team notes left" "$(sq "select (select count(*) from public.project_focus where intended_outcome <> 'A tester aim')
+  + (select count(*) from public.project_focus_review) + (select count(*) from public.project_outcomes)
+  + (select count(*) from public.unit_focus_reflections where went_well like '%(sample)' or next_step like '%(sample)')")" 0
+# SECURITY REVIEW 25 (S06): nothing else is removed, and the team notes left are counted.
+expect "a tester's aim and team notes kept" "$(sq "select (select count(*) from public.project_focus where intended_outcome = 'A tester aim')
+  || ',' || (select count(*) from public.unit_focus_reflections where went_well like 'A tester%')")" "1,2"
 expect "role removals audited" "$(sq "select count(*) from public.audit_log where action = 'sample_data_revoke' and detail->>'github_user' = 'db-test'")" 14
 expect "other people's serving kept" "$(sq "select count(*) from public.assignments a join public.people p on p.id = a.person_id where p.email = 'kept@example.org' and a.church_role_id is null")" 1
 
 srun "$work/load.sql"   # and it loads again after removal
 expect "people reloaded" "$(sq "select count(*) from public.people where email like '%@g-squad.example'")" 30
+expect "a tester's rewritten team note kept on reload" "$(sq "select count(*) from public.unit_focus_reflections where went_well = 'A tester rewrote this'")" 1
 # K03: once sending to members is on, loading is refused.
 sq "update public.church_settings set newsletter_live = true" > /dev/null
 if psql "$SAMPLE_URL" -v ON_ERROR_STOP=1 -q -f "$work/load.sql" > /dev/null 2>&1; then

@@ -664,7 +664,10 @@ begin
     (2, 'assimilation', 'New members sat with the team at lunch after service.', 'Introduce newcomers to another team each month.'),
     (3, 'pastoral_care', 'We noticed when someone missed two Sundays and called them.', 'Celebrate birthdays at the team huddle.'),
     (4, 'soul_winning', 'Two of us invited a friend to the carol service.', 'Pray for one person each by name this quarter.')
-  ) as a(k, area, went_well, next_step) on (u.n + a.k) % 2 = 0;
+  ) as a(k, area, went_well, next_step) on (u.n + a.k) % 2 = 0
+  -- SECURITY REVIEW 25 (S06): a note a tester wrote for the same team, quarter and area (kept by
+  -- removal) is left as it is; before, it made the whole load fail.
+  on conflict (unit_id, quarter_start, area) do nothing;
 
   update public.one_to_ones o set
     growth_area = (array['discipleship','assimilation','pastoral_care','soul_winning']::public.focus_area[])[1 + (p.n::int % 4)],

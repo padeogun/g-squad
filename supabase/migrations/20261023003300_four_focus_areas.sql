@@ -29,11 +29,14 @@ create type public.growth_progress as enum ('done', 'in_progress', 'not_yet');
 
 -- An event that the four areas apply to: an event (migration 32), not a Sunday service (the
 -- Sunday grid has its own rhythm) and not a routine team activity.
+-- SECURITY REVIEW 25 (S03): limited to the caller's church, as the other helpers are, so it
+-- says nothing about another church's projects.
 create or replace function app.is_focus_event(p_project uuid) returns boolean
 language sql stable security definer set search_path = ''
 as $$
   select exists (select 1 from public.projects p
-                 where p.id = p_project and p.is_event and not p.is_sunday_service)
+                 where p.id = p_project and p.church_id = app.current_church_id()
+                   and p.is_event and not p.is_sunday_service)
 $$;
 revoke all on function app.is_focus_event(uuid) from public, anon;
 grant execute on function app.is_focus_event(uuid) to authenticated, service_role;
@@ -110,8 +113,28 @@ begin
   if tg_op = 'UPDATE' and (new.project_id <> old.project_id or new.church_id <> old.church_id) then
     raise exception 'An event''s focus record cannot be moved to another event' using errcode = '42501';
   end if;
-  select * into p from public.projects where id = v_row_project;
-  if not found or not p.is_event or p.is_sunday_service then
+  -- SECURITY REVIEW 25 (S03): only the caller's church's projects. Before, a leader of another
+  -- church who had an event's id got this guard's messages (its status, whether it had
+  -- started) before row-level security refused the row.
+  -- SECURITY REVIEW 25 (S01): FOR SHARE holds the event while this change commits. Approval
+  -- (an update of the project) waits for it and then sees the aims as they are; a change made
+  -- while approval is committing waits and then sees the event approved. Before, removing the
+  -- primary aim at the moment of approval left an approved event with no aims.
+  select * into p from public.projects
+   where id = v_row_project and church_id = (select app.current_church_id())
+   for share;
+  if not found then
+    -- SECURITY REVIEW 25 (S02): the event itself is being deleted (a draft, by its owner or the
+    -- Operations Lead under projects_delete), and its focus rows go with it ("on delete
+    -- cascade"). The project is already gone from view here; before, this refused, so a draft
+    -- event with aims could not be deleted. Outside a cascade the foreign key means the event
+    -- always exists, so this path is reached only when it is being deleted.
+    if tg_op = 'DELETE' and not exists (select 1 from public.projects where id = v_row_project) then
+      return old;
+    end if;
+    raise exception 'Focus areas are recorded for events' using errcode = '23514';
+  end if;
+  if not p.is_event or p.is_sunday_service then
     raise exception 'Focus areas are recorded for events' using errcode = '23514';
   end if;
   if not app.can_manage_project(p.id) then
@@ -155,6 +178,12 @@ alter table public.project_focus_review enable row level security;
 alter table public.project_outcomes enable row level security;
 revoke all on public.project_focus, public.project_focus_review, public.project_outcomes from public, anon;
 grant select, insert, update, delete on public.project_focus, public.project_focus_review, public.project_outcomes to authenticated;
+-- SECURITY REVIEW 25 (S04): the platform's default privileges also give new tables TRUNCATE,
+-- REFERENCES and TRIGGER; TRUNCATE skips row-level security and the guards above. Taken away
+-- as migration 7 did for every table then (and migration 11 for its own). Also for the two
+-- one-to-one tables of migration 26, which missed it.
+revoke truncate, references, trigger on public.project_focus, public.project_focus_review, public.project_outcomes,
+  public.one_to_one_prompts, public.one_to_one_answers from authenticated;
 
 create policy project_focus_read on public.project_focus for select to authenticated
   using (church_id = (select app.current_church_id()));
@@ -230,6 +259,12 @@ begin
   if app.is_system() then
     return case when tg_op = 'DELETE' then old else new end;
   end if;
+  -- SECURITY REVIEW 25 (S02): the team itself is being deleted (by the Operations Lead or the
+  -- Coordinator, under units_write) and its notes go with it ("on delete cascade"); earlier
+  -- quarters' notes would otherwise stop the delete. Outside a cascade the team always exists.
+  if tg_op = 'DELETE' and not exists (select 1 from public.units u where u.id = old.unit_id) then
+    return old;
+  end if;
   if tg_op = 'UPDATE' and (new.unit_id <> old.unit_id or new.quarter_start <> old.quarter_start
                            or new.area <> old.area or new.church_id <> old.church_id) then
     raise exception 'A note''s team, quarter and area cannot be changed' using errcode = '42501';
@@ -253,6 +288,7 @@ create trigger unit_reflection_guard before insert or update or delete on public
 alter table public.unit_focus_reflections enable row level security;
 revoke all on public.unit_focus_reflections from public, anon;
 grant select, insert, update, delete on public.unit_focus_reflections to authenticated;
+revoke truncate, references, trigger on public.unit_focus_reflections from authenticated;  -- SECURITY REVIEW 25 (S04)
 create policy unit_reflections_read on public.unit_focus_reflections for select to authenticated
   using (church_id = (select app.current_church_id()) and app.can_view_unit(unit_id));
 create policy unit_reflections_write on public.unit_focus_reflections for all to authenticated
