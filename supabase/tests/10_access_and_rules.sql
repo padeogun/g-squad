@@ -167,6 +167,27 @@ end $$;
 create trigger zz_test_auto_run_of_show after insert on public.projects
   for each row execute function test.auto_run_of_show();
 
+-- Migration 33: an event needs a primary focus area to be approved, and each aimed area rated
+-- to close. Until section 33 every event gets one at once (rated, so the earlier checks can
+-- close it), with the write guards off so the fixture can add a rating to a draft. Section 33
+-- switches both back on and checks the rules themselves.
+alter table public.project_focus disable trigger project_focus_write_guard;
+alter table public.project_focus_review disable trigger project_focus_write_guard;
+create function test.auto_focus() returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+begin
+  if new.is_event and not new.is_sunday_service then
+    insert into public.project_focus (church_id, project_id, area, is_primary, intended_outcome)
+    values (new.church_id, new.id, 'discipleship', true, 'Test fixture');
+    insert into public.project_focus_review (church_id, project_id, area, rating)
+    values (new.church_id, new.id, 'discipleship', 3);
+  end if;
+  return null;
+end $$;
+create trigger zz_test_auto_focus after insert on public.projects
+  for each row execute function test.auto_focus();
+
 -- =====================================================================================
 -- 1. Church isolation and anonymous access
 -- =====================================================================================
@@ -3964,6 +3985,301 @@ select test.throws(format('update public.church_settings set projects_before_app
 reset role;
 select test.login('');
 update public.church_settings set serving_limit_per_month = 3 where church_id = test.id('churchA');
+
+-- =====================================================================================
+-- 33. The four focus areas (migration 33, decision of 24 Nov 2026)
+-- =====================================================================================
+-- From here the rules themselves are checked: no automatic focus areas, guards back on.
+drop trigger zz_test_auto_focus on public.projects;
+alter table public.project_focus enable trigger project_focus_write_guard;
+alter table public.project_focus_review enable trigger project_focus_write_guard;
+
+-- Fixtures (system): F1 a draft team event in eight weeks (run of show started), F2 an approved
+-- team event that started a minute ago, F3 a routine team activity, all A1's, owned by its lead.
+select test.login('');
+do $$
+declare v uuid; d timestamptz := now() + interval '8 weeks';
+begin
+  insert into public.projects (church_id, level, unit_id, name, starts_at, ends_at, status, owner_user_id)
+  values (test.id('churchA'), 'unit', test.id('A1'), 'Focus draft', d, d + interval '3 hours', 'draft', test.id('ul_a'))
+  returning id into v;
+  insert into test.ids values ('F1', v);
+  insert into public.service_grids (church_id, project_id, service_date)
+  values (test.id('churchA'), v, (d at time zone 'Europe/London')::date);
+  insert into public.projects (church_id, level, unit_id, name, starts_at, ends_at, status, owner_user_id, approved_at)
+  values (test.id('churchA'), 'unit', test.id('A1'), 'Focus started', now() - interval '1 minute', now() + interval '2 hours',
+          'approved', test.id('ul_a'), now() - interval '7 days')
+  returning id into v;
+  insert into test.ids values ('F2', v);
+  insert into public.project_focus (church_id, project_id, area, is_primary, intended_outcome, target_count)
+  values (test.id('churchA'), v, 'soul_winning', true, 'Guests hear the gospel', 20),
+         (test.id('churchA'), v, 'assimilation', false, 'Every guest contacted within 48 hours', null);
+  insert into public.projects (church_id, level, unit_id, name, starts_at, ends_at, status, owner_user_id, is_event)
+  values (test.id('churchA'), 'unit', test.id('A1'), 'Focus rehearsal', d, d + interval '2 hours', 'draft', test.id('ul_a'), false)
+  returning id into v;
+  insert into test.ids values ('F3', v);
+  -- A member of A1 for the one-to-one checks.
+  insert into public.people (church_id, first_name, surname, email, date_joined)
+  values (test.id('churchA'), 'Gina', 'Grow', 'gina.grow@example.org', current_date - 100) returning id into v;
+  insert into test.ids values ('pG', v);
+  insert into public.unit_memberships (church_id, person_id, unit_id) values (test.id('churchA'), v, test.id('A1'));
+end $$;
+
+-- Naming the aims: the owner, while a draft or waiting.
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$insert into public.project_focus (church_id, project_id, area, is_primary, intended_outcome)
+                            values (%L, %L, 'discipleship', true, 'Ten people sign up for the next course')$q$,
+                         test.id('churchA'), test.id('F1')),
+                  'R33: the owner names a primary focus area');
+select test.throws(format($q$insert into public.project_focus (church_id, project_id, area, is_primary, intended_outcome)
+                             values (%L, %L, 'pastoral_care', true, 'Second primary')$q$, test.id('churchA'), test.id('F1')),
+                   'R33: only one focus area is primary');
+select test.lives(format($q$insert into public.project_focus (church_id, project_id, area, intended_outcome)
+                            values (%L, %L, 'pastoral_care', 'Prayer offered to everyone who asks')$q$, test.id('churchA'), test.id('F1')),
+                  'R33: ... and supporting areas beside it');
+select test.throws(format($q$insert into public.project_focus (church_id, project_id, area, intended_outcome)
+                             values (%L, %L, 'assimilation', '   ')$q$, test.id('churchA'), test.id('F1')),
+                   'R33: an aim needs an intended outcome');
+select test.throws(format($q$insert into public.project_focus (church_id, project_id, area, is_primary, intended_outcome)
+                             values (%L, %L, 'discipleship', true, 'Not an event')$q$, test.id('churchA'), test.id('F3')),
+                   'R33: a routine team activity has no focus areas');
+select test.ok((select updated_by from public.project_focus where project_id = test.id('F1') and area = 'discipleship') = test.id('ul_a'),
+               'R33: the database records who named it');
+reset role;
+select test.login('ul_b'); set role authenticated;
+select test.throws(format($q$insert into public.project_focus (church_id, project_id, area, intended_outcome)
+                             values (%L, %L, 'soul_winning', 'Not mine')$q$, test.id('churchA'), test.id('F1')),
+                   'R33: another team''s lead cannot add an aim');
+select test.ok((select count(*) from public.project_focus where project_id = test.id('F1')) = 2,
+               'R33: other leaders read the aims');
+reset role;
+select test.login('ph'); set role authenticated;
+-- Row-level security skips the rows (no error); the check below shows nothing changed.
+update public.project_focus set intended_outcome = 'Changed by the approver' where project_id = test.id('F1');
+select test.ok((select intended_outcome from public.project_focus where project_id = test.id('F1') and area = 'discipleship')
+               = 'Ten people sign up for the next course', 'R33: ... and they are unchanged');
+reset role;
+select test.login('b_ops'); set role authenticated;
+select test.ok((select count(*) from public.project_focus) = 0, 'R33: another church sees no aims');
+reset role;
+
+-- Approval needs a primary area.
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$update public.projects set status = 'submitted' where id = %L$q$, test.id('F1')), 'R33 (setup): submitted');
+select test.lives(format($q$update public.project_focus set is_primary = false where project_id = %L and area = 'discipleship'$q$, test.id('F1')),
+                  'R33: the aims can still change while it waits');
+reset role;
+select test.login('ph'); set role authenticated;
+select test.throws(format($q$update public.projects set status = 'approved' where id = %L$q$, test.id('F1')),
+                   'R33: an event without a primary focus area is not approved');
+reset role;
+select test.login('ul_a'); set role authenticated;
+update public.project_focus set is_primary = true where project_id = test.id('F1') and area = 'discipleship';
+reset role;
+select test.login('ph'); set role authenticated;
+select test.lives(format($q$update public.projects set status = 'approved' where id = %L$q$, test.id('F1')),
+                  'R33: with its primary area named, it is approved');
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$update public.project_focus set intended_outcome = 'Moved the goalposts' where project_id = %L$q$, test.id('F1')),
+                   'R33: once approved, the aims are fixed');
+select test.throws(format($q$delete from public.project_focus where project_id = %L$q$, test.id('F1')),
+                   'R33: ... and cannot be removed');
+select test.ok((public.project_readiness(test.id('F1')) -> 'focus' ->> 'ok')::boolean
+               and (public.project_readiness(test.id('F1')) -> 'focus' ->> 'named')::int = 2,
+               'R33: the checks show the focus areas');
+-- The review waits for the event.
+select test.throws(format($q$insert into public.project_focus_review (church_id, project_id, area, rating)
+                             values (%L, %L, 'discipleship', 3)$q$, test.id('churchA'), test.id('F1')),
+                   'R33: an event is not rated before it starts');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.throws(format($q$update public.project_focus set intended_outcome = 'Ops change' where project_id = %L$q$, test.id('F1')),
+                   'R33: not even the Operations Lead changes approved aims');
+reset role;
+
+-- After the event: ratings, counts, and closing.
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$insert into public.project_focus_review (church_id, project_id, area, rating, story, reviewed_by)
+                            values (%L, %L, 'soul_winning', 3, 'Two guests prayed with us', %L)$q$,
+                         test.id('churchA'), test.id('F2'), test.id('ph')),
+                  'R33: the owner rates an area once the event has started');
+select test.ok((select reviewed_by from public.project_focus_review where project_id = test.id('F2') and area = 'soul_winning') = test.id('ul_a'),
+               'R33: ... recorded as the person who rated it, whatever the request said');
+select test.throws(format($q$insert into public.project_focus_review (church_id, project_id, area, rating)
+                             values (%L, %L, 'pastoral_care', 5)$q$, test.id('churchA'), test.id('F2')),
+                   'R33: ratings run from 0 to 4');
+select test.throws(format($q$insert into public.project_outcomes (church_id, project_id, first_time_guests, guests_contacted_48h)
+                             values (%L, %L, 5, 6)$q$, test.id('churchA'), test.id('F2')),
+                   'R33: no more guests followed up than came');
+select test.lives(format($q$insert into public.project_outcomes (church_id, project_id, first_time_guests, decisions_for_christ, guests_contacted_48h)
+                            values (%L, %L, 12, 2, 9)$q$, test.id('churchA'), test.id('F2')),
+                  'R33: the event''s counts are recorded');
+select test.throws(format($q$update public.projects set status = 'done' where id = %L$q$, test.id('F2')),
+                   'R33: an event is not closed while an aimed area is unrated');
+select test.lives(format($q$insert into public.project_focus_review (church_id, project_id, area, rating)
+                            values (%L, %L, 'assimilation', 2)$q$, test.id('churchA'), test.id('F2')),
+                  'R33 (setup): the second area rated');
+select test.lives(format($q$update public.projects set status = 'done' where id = %L$q$, test.id('F2')),
+                  'R33: with every aimed area rated, it closes');
+select test.throws(format($q$update public.project_focus_review set rating = 4 where project_id = %L$q$, test.id('F2')),
+                   'R33: a closed event''s ratings are kept as they were');
+select test.throws(format($q$update public.project_outcomes set decisions_for_christ = 20 where project_id = %L$q$, test.id('F2')),
+                   'R33: ... and its counts');
+reset role;
+select test.login('ph'); set role authenticated;
+select test.throws(format($q$insert into public.project_focus_review (church_id, project_id, area, rating)
+                             values (%L, %L, 'pastoral_care', 1)$q$, test.id('churchA'), test.id('F2')),
+                   'R33: only the owner or the Operations Lead rates an event');
+reset role;
+
+-- Teams: the quarterly conversation.
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$insert into public.unit_focus_reflections (church_id, unit_id, quarter_start, area, went_well, next_step)
+                            values (%L, %L, date_trunc('quarter', now() at time zone 'Europe/London')::date, 'assimilation',
+                                    'New members paired with a buddy', 'Lunch together after service')$q$,
+                         test.id('churchA'), test.id('A1')),
+                  'R33: the Team Lead records the team''s conversation');
+select test.throws(format($q$insert into public.unit_focus_reflections (church_id, unit_id, quarter_start, area, went_well)
+                             values (%L, %L, date_trunc('quarter', now() at time zone 'Europe/London')::date, 'assimilation', 'Not my team')$q$,
+                          test.id('churchA'), test.id('A2')),
+                   'R33: ... for their own team only');
+select test.throws(format($q$insert into public.unit_focus_reflections (church_id, unit_id, quarter_start, area, went_well)
+                             values (%L, %L, (date_trunc('quarter', now() at time zone 'Europe/London') - interval '6 months')::date,
+                                     'soul_winning', 'Old news')$q$, test.id('churchA'), test.id('A1')),
+                   'R33: notes are for this quarter or the last');
+select test.throws(format($q$insert into public.unit_focus_reflections (church_id, unit_id, quarter_start, area, went_well, next_step)
+                             values (%L, %L, date_trunc('quarter', now() at time zone 'Europe/London')::date, 'soul_winning', ' ', null)$q$,
+                          test.id('churchA'), test.id('A1')),
+                   'R33: an empty note is not saved');
+select test.throws(format($q$update public.unit_focus_reflections set area = 'soul_winning' where unit_id = %L$q$, test.id('A1')),
+                   'R33: a note''s area does not change');
+reset role;
+select test.login('ph'); set role authenticated;
+select test.ok((select count(*) from public.unit_focus_reflections where unit_id = test.id('A1')) = 1,
+               'R33: the team''s Purpose Head reads it');
+reset role;
+select test.login('editor'); set role authenticated;
+select test.ok((select count(*) from public.unit_focus_reflections where unit_id = test.id('A1')) = 0,
+               'R33: a leader who does not see the team does not');
+reset role;
+
+-- Members: a growth area and step in the one-to-one.
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$insert into public.one_to_ones (church_id, person_id, unit_id, quarter_start, held_on, feeling, growth_step)
+                             values (%L, %L, %L, date_trunc('quarter', now() at time zone 'Europe/London')::date,
+                                     (now() at time zone 'Europe/London')::date, 'doing_well', 'A step with no area')$q$,
+                          test.id('churchA'), test.id('pG'), test.id('A1')),
+                   'R33: a next step belongs to a chosen area');
+select test.lives(format($q$insert into public.one_to_ones (church_id, person_id, unit_id, quarter_start, held_on, feeling,
+                                                            growth_area, growth_step, last_step)
+                            values (%L, %L, %L, date_trunc('quarter', now() at time zone 'Europe/London')::date,
+                                    (now() at time zone 'Europe/London')::date, 'doing_well', 'soul_winning',
+                                    'Invite one friend to the carol service', 'done')$q$,
+                         test.id('churchA'), test.id('pG'), test.id('A1')),
+                  'R33: the member chooses an area and a next step');
+reset role;
+select test.login('ph'); set role authenticated;
+select test.ok((select growth_area from public.one_to_ones where person_id = test.id('pG') and unit_id = test.id('A1')
+                and quarter_start = date_trunc('quarter', now() at time zone 'Europe/London')::date) = 'soul_winning',
+               'R33: those who read the one-to-one read the step');
+reset role;
+
+-- The quarter at a glance: counts only, for the roles that read the monthly report.
+select test.login('ul_a'); set role authenticated;
+select test.throws('select public.focus_areas_summary()', 'R33: a Team Lead does not read the church summary');
+reset role;
+select test.login('editor'); set role authenticated;
+select test.throws('select public.focus_areas_summary()', 'R33: nor does an editor');
+reset role;
+select test.login('coord'); set role authenticated;
+select test.ok(jsonb_array_length(public.focus_areas_summary() -> 'areas') = 4, 'R33: the summary covers the four areas');
+select test.ok((public.focus_areas_summary() -> 'outcomes' ->> 'first_time_guests')::int >= 12
+               and (public.focus_areas_summary() -> 'outcomes' ->> 'decisions_for_christ')::int >= 2,
+               'R33: ... with the events'' counts');
+select test.ok((select (a ->> 'members_growing')::int >= 1 and (a ->> 'events_rated')::int >= 1
+                from jsonb_array_elements(public.focus_areas_summary() -> 'areas') a where a ->> 'area' = 'soul_winning'),
+               'R33: ... members growing and events rated, per area');
+select test.ok((select (a ->> 'teams_talked')::int >= 1
+                from jsonb_array_elements(public.focus_areas_summary() -> 'areas') a where a ->> 'area' = 'assimilation'),
+               'R33: ... and teams that talked it through');
+select test.ok(not (public.focus_areas_summary()::text ~* 'gina|@example'),
+               'R33: no names or addresses in the summary');
+reset role;
+select test.login('pastoral'); set role authenticated;
+select test.lives('select public.focus_areas_summary()', 'R33: the Pastoral Lead reads the summary');
+reset role;
+
+-- SECURITY REVIEW 25 (S01): a change to the aims holds the event (FOR SHARE) until it commits,
+-- so approval cannot pass on aims that are being removed at the same moment. Shown with two
+-- sessions during the review; checked here as R05 was.
+select test.ok(pg_get_functiondef('app.project_focus_write_guard'::regproc) ~* 'for share',
+               'S01: a change to an event''s aims holds the event while it commits');
+
+-- SECURITY REVIEW 25 (S02): a draft event with aims, and a team with an earlier quarter's note,
+-- can still be deleted (their focus rows go with them); the guards still hold otherwise.
+select test.login('');
+do $$
+declare v uuid; d timestamptz := now() + interval '9 weeks';
+begin
+  insert into public.projects (church_id, level, unit_id, name, starts_at, ends_at, status, owner_user_id)
+  values (test.id('churchA'), 'unit', test.id('A1'), 'Focus to delete', d, d + interval '1 hour', 'draft', test.id('ul_a'))
+  returning id into v;
+  insert into test.ids values ('F4', v);
+  insert into public.units (church_id, purpose_id, name)
+  select test.id('churchA'), u.purpose_id, 'Focus short-lived team' from public.units u where u.id = test.id('A1')
+  returning id into v;
+  insert into test.ids values ('U33', v);
+  insert into public.unit_focus_reflections (church_id, unit_id, quarter_start, area, went_well)
+  values (test.id('churchA'), v, (date_trunc('quarter', now() at time zone 'Europe/London') - interval '9 months')::date,
+          'discipleship', 'An old note'),
+         (test.id('churchA'), test.id('A1'), (date_trunc('quarter', now() at time zone 'Europe/London') - interval '9 months')::date,
+          'discipleship', 'A1 old note');
+end $$;
+select test.login('ul_a'); set role authenticated;
+insert into public.project_focus (project_id, area, is_primary, intended_outcome)
+values (test.id('F4'), 'soul_winning', true, 'To be deleted');
+select test.lives(format('delete from public.projects where id = %L', test.id('F4')),
+                  'S02: the owner deletes a draft event that has aims');
+select test.ok(not exists (select 1 from public.projects where id = test.id('F4'))
+               and not exists (select 1 from public.project_focus where project_id = test.id('F4')),
+               'S02: ... and its aims go with it');
+select test.throws(format($q$delete from public.unit_focus_reflections where unit_id = %L and went_well = 'A1 old note'$q$, test.id('A1')),
+                   'S02: an earlier quarter''s note is still not deleted on its own');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.lives(format('delete from public.units where id = %L', test.id('U33')),
+                  'S02: a team with an earlier quarter''s note can be deleted');
+select test.ok(not exists (select 1 from public.unit_focus_reflections where unit_id = test.id('U33')),
+               'S02: ... and its notes go with it');
+reset role;
+
+-- SECURITY REVIEW 25 (S03): another church's leader learns nothing about an event from the
+-- guard (before: "part of the approval", "once the event has started").
+select test.login('b_ops'); set role authenticated;
+do $$
+declare m1 text; m2 text;
+begin
+  begin
+    insert into public.project_focus (project_id, area, intended_outcome) values (test.id('F1'), 'assimilation', 'Probe');
+  exception when others then m1 := sqlerrm; end;
+  begin
+    insert into public.project_focus_review (project_id, area, rating) values (test.id('F1'), 'assimilation', 1);
+  exception when others then m2 := sqlerrm; end;
+  perform test.ok(m1 = 'Focus areas are recorded for events' and m2 = 'Focus areas are recorded for events',
+                  'S03: another church''s event gives the same answer as no event');
+end $$;
+select test.ok(not app.is_focus_event(test.id('F1')), 'S03: the helper does not look into another church');
+reset role;
+
+-- SECURITY REVIEW 25 (S04): no TRUNCATE (which skips row-level security and the guards),
+-- REFERENCES or TRIGGER on the new tables, or on migration 26's one-to-one tables.
+select test.ok(not exists (select 1 from unnest(array['public.project_focus','public.project_focus_review','public.project_outcomes',
+                                                      'public.unit_focus_reflections','public.one_to_one_prompts',
+                                                      'public.one_to_one_answers']) t(name),
+                                         unnest(array['TRUNCATE','REFERENCES','TRIGGER']) p(priv)
+                           where has_table_privilege('authenticated', t.name, p.priv)),
+               'S04: signed-in users cannot truncate the focus or one-to-one tables');
 
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
