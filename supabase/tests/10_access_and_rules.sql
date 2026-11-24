@@ -4439,6 +4439,102 @@ select test.ok((public.focus_areas_summary() -> 'gsquad' ->> 'new_members')::int
                'R34: the summary counts new members with a buddy and courses completed');
 reset role;
 
+-- ---------- Security review 26 ----------
+-- T01: discipleship courses are read only by those who may see the member's faith.
+select test.login('');
+insert into test.ids select 'cLead', id from public.course_types where church_id = test.id('churchA') and name = 'Leadership training';
+insert into public.course_completions (church_id, person_id, course_type_id, completed_on)
+values (test.id('churchA'), test.id('pN'), test.id('cLead'), current_date - 1);
+select test.login('ph'); set role authenticated;
+select test.ok((select array_agg(course_type_id) from public.course_completions where person_id = test.id('pN')) = array[test.id('cLead')],
+               'T01: the Purpose Head (no faith sight) reads the leadership course only');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.ok((select count(*) from public.course_completions where person_id = test.id('pN')) = 1,
+               'T01: ... as does the Operations Lead');
+select test.ok((select jsonb_array_length(public.export_person(test.id('pN')) -> 'courses')) = 1,
+               'T01: the Operations Lead''s export leaves out discipleship courses (as it leaves out faith)');
+reset role;
+select test.login('pastoral'); set role authenticated;
+select test.ok((select count(*) from public.course_completions where person_id = test.id('pN')) = 1,
+               'T01: ... as does the Pastoral Lead');
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.ok((select count(*) from public.course_completions where person_id = test.id('pN')) = 3,
+               'T01: the Team Lead (who sees faith) reads all three');
+reset role;
+select test.login('rp'); set role authenticated;
+select test.ok((select jsonb_array_length(public.export_person(test.id('pN')) -> 'courses')) = 3,
+               'T01: the Resident Pastor''s export includes every course');
+reset role;
+
+-- T02: the person named must be someone the namer may read.
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$insert into public.member_mentors (person_id, mentor_person_id, kind) values (%L, %L, 'discipleship')$q$,
+                          test.id('pN'), test.id('pX')),
+                   'T02: a Team Lead cannot name a member of a team they do not see');
+reset role;
+select test.login('coord'); set role authenticated;
+select test.lives(format($q$insert into public.member_mentors (person_id, mentor_person_id, kind) values (%L, %L, 'discipleship')$q$,
+                         test.id('pN'), test.id('pX')),
+                  'T02: the Coordinator (who reads every member) can');
+reset role;
+
+-- T03: the anonymising setting no longer opens the guard; the record decides.
+select test.login('');
+do $$
+begin
+  perform set_config('gsquad.anonymising', 'on', true);
+  perform test.ok(not app.person_gone(test.id('pN')), 'T03: setting gsquad.anonymising does not make a member "gone"');
+  perform set_config('gsquad.anonymising', 'off', true);
+end $$;
+select test.ok(app.person_gone(test.id('pZ')) and app.person_gone(gen_random_uuid()),
+               'T03: an anonymised or deleted member is gone');
+-- Anonymising on request (a signed-in Operations Lead, not a system job) still removes all three.
+do $$
+declare v uuid;
+begin
+  insert into public.people (church_id, first_name, surname, email, date_joined)
+  values (test.id('churchA'), 'Yan', 'Request', 'yan.request@example.org', current_date - 60) returning id into v;
+  insert into test.ids values ('pY', v);
+  insert into public.unit_memberships (church_id, person_id, unit_id) values (test.id('churchA'), v, test.id('A1'));
+  insert into public.assimilation_steps (church_id, person_id, step) values (test.id('churchA'), v, 'welcomed');
+  insert into public.course_completions (church_id, person_id, course_type_id, completed_on) values (test.id('churchA'), v, test.id('cDisc'), current_date);
+  insert into public.member_mentors (church_id, person_id, mentor_person_id, kind) values (test.id('churchA'), test.id('pM'), v, 'discipleship');
+  insert into public.member_mentors (church_id, person_id, mentor_person_id, kind) values (test.id('churchA'), v, test.id('pM'), 'buddy');
+end $$;
+select test.login('ops'); set role authenticated;
+select test.lives(format('select public.anonymise_person(%L)', test.id('pY')), 'T03: the Operations Lead anonymises a member on request');
+reset role;
+select test.login('');
+select test.ok((select count(*) from public.assimilation_steps where person_id = test.id('pY')) = 0
+               and (select count(*) from public.course_completions where person_id = test.id('pY')) = 0
+               and (select count(*) from public.member_mentors where person_id = test.id('pY') or mentor_person_id = test.id('pY')) = 0,
+               'T03: ... and their steps, courses and pairings on both sides go');
+
+-- T04: a pairing is ended, not deleted (a slip may be taken back the same day).
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$delete from public.member_mentors where person_id = %L and kind = 'buddy' and ended_on is not null$q$, test.id('pN')),
+                   'T04: an ended pairing is not deleted');
+select test.ok((select count(*) from public.member_mentors where person_id = test.id('pN') and kind = 'buddy' and ended_on is not null) = 1,
+               'T04: ... and is still there');
+select test.lives(format($q$insert into public.member_mentors (person_id, mentor_person_id, kind) values (%L, %L, 'apprentice')$q$,
+                         test.id('pN'), test.id('pM')),
+                  'T04: the Team Lead names a leader');
+select test.throws(format($q$update public.member_mentors set id = gen_random_uuid() where person_id = %L and kind = 'apprentice'$q$, test.id('pN')),
+                   'T04: a pairing''s id does not change');
+reset role;
+select test.login('');
+update public.member_mentors set created_at = now() - interval '2 days' where person_id = test.id('pN') and kind = 'discipleship';
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$delete from public.member_mentors where person_id = %L and kind = 'discipleship'$q$, test.id('pN')),
+                   'T04: an open pairing named on an earlier day is ended, not deleted');
+select test.lives(format($q$delete from public.member_mentors where person_id = %L and kind = 'apprentice'$q$, test.id('pN')),
+                  'T04: one named today can be taken back');
+select test.ok((select count(*) from public.member_mentors where person_id = test.id('pN') and kind = 'apprentice') = 0,
+               'T04: ... and is gone');
+reset role;
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;

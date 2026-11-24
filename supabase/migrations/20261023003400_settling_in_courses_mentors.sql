@@ -15,7 +15,8 @@
 --    per member; a pairing is ended, not rewritten.
 -- Written by those who edit the member's record (their Team Lead and the G-Squad Coordinator,
 -- app.can_edit_person); the TECi Coordinator may also record courses. Read by those who can
--- read the member. Anonymising a member removes all three (R8); export_person includes them.
+-- read the member (discipleship courses: only those who may see their faith, review 26 T01).
+-- Anonymising a member removes all three (R8); export_person includes them.
 -- =====================================================================================
 
 create type public.assimilation_step as enum
@@ -23,13 +24,17 @@ create type public.assimilation_step as enum
 create type public.course_kind as enum ('discipleship', 'leadership');
 create type public.mentor_kind as enum ('buddy', 'apprentice', 'discipleship');
 
--- Is the row's member gone (being deleted in this statement)? Then a cascade or the
--- anonymising job is removing it, and the guards below let the delete through.
+-- Is the row's member gone? Then a cascade or the anonymising job is removing it, and the
+-- guards below let the delete through.
+-- SECURITY REVIEW 26 (T03): this used to trust the gsquad.anonymising setting, which any
+-- database session can set for itself with set_config(). It now asks the record instead:
+-- deleted (the cascade: outside it the foreign key means the person exists), or already
+-- anonymised (app.anonymise sets anonymised_at before it deletes, and people_guard lets only
+-- app.anonymise set it). Neither can be faked by a caller.
 create or replace function app.person_gone(p_person uuid) returns boolean
 language sql stable security definer set search_path = ''
 as $$
-  select not exists (select 1 from public.people p where p.id = p_person)
-      or current_setting('gsquad.anonymising', true) = 'on'
+  select not exists (select 1 from public.people p where p.id = p_person and p.anonymised_at is null)
 $$;
 revoke all on function app.person_gone(uuid) from public, anon, authenticated;
 grant execute on function app.person_gone(uuid) to service_role;
@@ -141,9 +146,19 @@ begin
           or (tg_table_name = 'course_completions' and app.has_role('teci_coordinator'))) then
     raise exception 'Only the member''s Team Lead or the G-Squad Coordinator can change this' using errcode = '42501';
   end if;
-  if tg_op = 'DELETE' then return old; end if;
+  if tg_op = 'DELETE' then
+    -- SECURITY REVIEW 26 (T04): a pairing is ended, never rewritten, so it is not deleted
+    -- either (delete and re-add would rewrite its history). A slip may be taken back on
+    -- the day it was recorded while it is still open; after that, end it.
+    if tg_table_name = 'member_mentors'
+       and (old.ended_on is not null or (old.created_at at time zone 'Europe/London')::date <> v_today) then
+      raise exception 'End this pairing instead; only a pairing named today can be taken back' using errcode = '42501';
+    end if;
+    return old;
+  end if;
 
-  if tg_op = 'UPDATE' and (new.person_id <> old.person_id or new.church_id <> old.church_id) then
+  -- SECURITY REVIEW 26 (T04): the row's own id does not change either.
+  if tg_op = 'UPDATE' and (new.id <> old.id or new.person_id <> old.person_id or new.church_id <> old.church_id) then
     raise exception 'A record cannot be moved to another member' using errcode = '42501';
   end if;
 
@@ -186,7 +201,11 @@ begin
       return new;
     end if;
     -- A new pairing: the person beside them is a current member of this church, not themselves.
-    if not exists (select 1 from public.people m
+    -- SECURITY REVIEW 26 (T02): and someone the person naming them may read. Otherwise a Team
+    -- Lead could name (and so learn the status of) anyone in the church by id, beyond the
+    -- people the page offers them. Same answer whichever way it fails.
+    if not app.can_read_person(new.mentor_person_id)
+       or not exists (select 1 from public.people m
                    where m.id = new.mentor_person_id and m.church_id = new.church_id
                      and m.status = 'active' and m.anonymised_at is null) then
       raise exception 'Choose an active G-Squad member' using errcode = '23514';
@@ -240,8 +259,23 @@ create policy course_types_write on public.course_types for all to authenticated
 create trigger course_types_audit after insert or update or delete on public.course_types
   for each row execute function app.audit_row_change();
 
+-- SECURITY REVIEW 26 (T01): a discipleship course (the new converts class, the water baptism
+-- class...) tells of the member's faith journey as surely as the faith fields do, so it is
+-- read only by those who may see their faith (app.can_see_faith). Leadership courses are
+-- read by everyone who can read the member. Counts in the summary are unaffected.
+create or replace function app.can_read_course(p_person uuid, p_course uuid) returns boolean
+language sql stable security definer set search_path = ''
+as $$
+  select app.can_read_person(p_person)
+     and (app.can_see_faith(p_person)
+          or exists (select 1 from public.course_types t
+                     where t.id = p_course and t.church_id = app.current_church_id() and t.kind = 'leadership'))
+$$;
+revoke all on function app.can_read_course(uuid, uuid) from public, anon;
+grant execute on function app.can_read_course(uuid, uuid) to authenticated, service_role;
+
 create policy course_completions_read on public.course_completions for select to authenticated
-  using (church_id = (select app.current_church_id()) and app.can_read_person(person_id));
+  using (church_id = (select app.current_church_id()) and app.can_read_course(person_id, course_type_id));
 create policy course_completions_write on public.course_completions for all to authenticated
   using (church_id = (select app.current_church_id())
          and (app.can_edit_person(person_id)
@@ -371,7 +405,11 @@ begin
     'settling_in',      (select coalesce(jsonb_agg(jsonb_build_object('step', s.step, 'done_on', s.done_on) order by s.done_on), '[]')
                          from public.assimilation_steps s where s.person_id = p_person),
     'courses',          (select coalesce(jsonb_agg(jsonb_build_object('course', t.name, 'completed_on', c.completed_on) order by c.completed_on), '[]')
-                         from public.course_completions c join public.course_types t on t.id = c.course_type_id where c.person_id = p_person),
+                         from public.course_completions c join public.course_types t on t.id = c.course_type_id
+                         where c.person_id = p_person
+                           -- SECURITY REVIEW 26 (T01): discipleship courses only for a caller who may
+                           -- see the member's faith, as for 'faith' above.
+                           and (t.kind = 'leadership' or app.can_see_faith(p_person))),
     'pairings',         (select coalesce(jsonb_agg(jsonb_build_object(
                            'kind', mm.kind, 'role', case when mm.person_id = p_person then 'supported by' else 'supporting' end,
                            'other_person', (select o.first_name || ' ' || o.surname from public.people o

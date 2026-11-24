@@ -112,7 +112,12 @@ function Courses({ person, canEdit }: { person: Person; canEdit: boolean }) {
   const open = (types.data ?? []).filter((t) => t.is_active && !doneIds.has(t.id));
   return (
     <Card title="Courses completed">
-      <p className="type-caption" style={{ margin: 0 }}>Discipleship and leadership courses this member has completed. Completion only.</p>
+      {/* SECURITY REVIEW 26 (T01): the database shows discipleship courses only to those who may
+          see this member's faith details; say so, so an empty list is not read as "none taken". */}
+      <p className="type-caption" style={{ margin: 0 }}>
+        Discipleship and leadership courses this member has completed. Completion only. Discipleship courses are shown only to those who may see
+        this member's faith details.
+      </p>
       {done.error && <Notice tone="danger">{friendlyError(done.error)}</Notice>}
       {done.data && done.data.length === 0 && <p style={{ margin: 0 }}>None recorded yet.</p>}
       {done.data && done.data.length > 0 && (
