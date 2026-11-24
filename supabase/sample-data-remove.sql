@@ -48,6 +48,12 @@ begin
 
   delete from public.projects where church_id = v_church and description like 'Sample data%';
   get diagnostics v_projects = row_count;
+  -- (Their focus areas, ratings and counts, migration 33, go with them: "on delete cascade".)
+
+  -- Sample team conversations on the four focus areas (migration 33) sit on the church's own
+  -- teams, so they are found by their "(sample)" ending rather than by the team.
+  delete from public.unit_focus_reflections
+   where church_id = v_church and (went_well like '%(sample)' or next_step like '%(sample)');
 
   -- A run of show a tester wrote may name a sample person as leading a part. Deleting the
   -- person would blank that (and a part must be led by someone), so the name is kept as text.

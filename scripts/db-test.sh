@@ -198,6 +198,13 @@ expect "nobody over their monthly hours" "$(sq "select count(*) from (select sum
 # SECURITY REVIEW 24: A03 past Sundays are approved, A04 one input is received, A05 both waiting
 # requests have their request row.
 expect "grids by status" "$(sq "select string_agg(s || '=' || n, ',' order by s) from (select status::text s, count(*) n from public.service_grids group by 1) x")" "approved=8,draft=5,finalised=1"
+# Migration 33: the four focus areas in the sample (aims, a rated finished event with counts,
+# team conversations this quarter and last, growth steps on one-to-ones).
+expect "focus areas in the sample" "$(sq "select (select count(*) from public.project_focus) = 12
+  and (select count(*) from public.project_focus where is_primary) = 6
+  and (select count(*) from public.project_focus_review) = 2 and (select count(*) from public.project_outcomes) = 1
+  and (select count(*) from public.unit_focus_reflections) > 0
+  and (select count(*) from public.one_to_ones where growth_area is not null) > 0")" t
 expect "one input received" "$(sq "select count(*) from public.project_inputs where status = 'received' and received_at is not null")" 1
 expect "approval requests logged" "$(sq "select count(*) from public.audit_log where action = 'serving_approval_requested'")" 2
 expect "serving approvals waiting" "$(sq "select (select count(*) from public.unit_memberships where status = 'pending_approval') || ',' || (select count(*) from public.assignments where status = 'pending_approval')")" "1,1"
@@ -233,6 +240,8 @@ expect "test roles left switched on" "$(sq "select count(*) from public.role_ass
 expect "sample newsletter issue, communities and questions left" "$(sq "select (select count(*) from public.newsletter_issues) + (select count(*) from public.greatness_communities) + (select count(*) from public.one_to_one_prompts)")" 0
 expect "sample faith rows, notes and flags left" "$(sq "select (select count(*) from public.person_faith) + (select count(*) from public.pastoral_notes) + (select count(*) from public.checkin_flags)")" 0
 expect "a tester's run of show keeps the leader's name as text" "$(sq "select led_by_text from public.service_segments s join public.service_grids g on g.id = s.grid_id join public.projects p on p.id = g.project_id where p.name = 'Typed-in second event'")" "Ife Balogun"
+expect "sample focus areas and team notes left" "$(sq "select (select count(*) from public.project_focus) + (select count(*) from public.project_focus_review)
+  + (select count(*) from public.project_outcomes) + (select count(*) from public.unit_focus_reflections)")" 0
 expect "role removals audited" "$(sq "select count(*) from public.audit_log where action = 'sample_data_revoke' and detail->>'github_user' = 'db-test'")" 14
 expect "other people's serving kept" "$(sq "select count(*) from public.assignments a join public.people p on p.id = a.person_id where p.email = 'kept@example.org' and a.church_role_id is null")" 1
 

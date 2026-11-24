@@ -622,6 +622,61 @@ begin
     where u.church_id = v_church and u.is_active;
   end if;
 
+  -- 21. The four focus areas (migration 33). Aims for the events at every stage (the draft
+  --     "Youth worship night" is left without, to name them when testing), the finished
+  --     prayer breakfast rated with its counts, each team's conversation this quarter and
+  --     last, and a growth area and next step on this quarter's one-to-ones. Team notes end
+  --     in "(sample)" so removal finds them; the rest hangs off sample projects and people.
+  insert into public.project_focus (church_id, project_id, area, is_primary, intended_outcome, target_count)
+  select v_church, p.id, f.area::public.focus_area, f.is_primary, f.outcome, f.target
+  from public.projects p
+  join (values
+    ('Community fun day', 'soul_winning', true, 'Neighbours hear the gospel and are invited to Sunday', 60),
+    ('Community fun day', 'assimilation', false, 'Every first-time guest contacted within 48 hours', null),
+    ('Community fun day', 'pastoral_care', false, 'Prayer offered at the welcome tent', null),
+    ('Christmas carol service', 'soul_winning', true, 'Guests respond to the Christmas message', 25),
+    ('Christmas carol service', 'assimilation', false, 'Guests connected to a Greatness Community in January', 10),
+    ('Ushers training evening', 'assimilation', true, 'Every usher can welcome a guest and introduce them to a host', null),
+    ('Ushers training evening', 'pastoral_care', false, 'The team prays for one another', null),
+    ('Winter coat drive', 'pastoral_care', true, 'Families in need are served with dignity', 80),
+    ('Winter coat drive', 'soul_winning', false, 'Every family invited to the carol service', null),
+    ('Missions prayer walk', 'discipleship', true, 'Members grow in praying for their streets', null),
+    ('Prayer breakfast', 'discipleship', true, 'Members commit to a weekly prayer habit', 30),
+    ('Prayer breakfast', 'assimilation', false, 'First-time guests leave knowing a host by name', null)
+  ) as f(name, area, is_primary, outcome, target) on f.name = p.name
+  where p.church_id = v_church and p.description like 'Sample data%';
+
+  select id into v_project from public.projects where church_id = v_church and name = 'Prayer breakfast' and description like 'Sample data%';
+  insert into public.project_focus_review (church_id, project_id, area, rating, story, reviewed_by, reviewed_at)
+  values (v_church, v_project, 'discipleship', 3, '31 people signed up for the Wednesday prayer line.', v_owner, now() - interval '30 days'),
+         (v_church, v_project, 'assimilation', 2, 'Four of six guests were contacted within 48 hours; two have come back.', v_owner, now() - interval '30 days');
+  insert into public.project_outcomes (church_id, project_id, first_time_guests, decisions_for_christ, guests_contacted_48h,
+                                       connected_to_community, next_step_signups, care_followups, updated_by)
+  values (v_church, v_project, 6, 1, 4, 2, 31, 3, v_owner);
+
+  insert into public.unit_focus_reflections (church_id, unit_id, quarter_start, area, went_well, next_step, updated_by)
+  select v_church, u.id, q.quarter_start, a.area::public.focus_area,
+         a.went_well || ' (sample)', a.next_step || ' (sample)', v_owner
+  from unnest(v_unit_ids) with ordinality u(id, n)
+  cross join (values (date_trunc('quarter', current_date)::date), ((date_trunc('quarter', current_date) - interval '3 months')::date)) q(quarter_start)
+  join (values
+    (1, 'discipleship', 'Three of us started the Greatness Track.', 'Pair each new member with someone further on.'),
+    (2, 'assimilation', 'New members sat with the team at lunch after service.', 'Introduce newcomers to another team each month.'),
+    (3, 'pastoral_care', 'We noticed when someone missed two Sundays and called them.', 'Celebrate birthdays at the team huddle.'),
+    (4, 'soul_winning', 'Two of us invited a friend to the carol service.', 'Pray for one person each by name this quarter.')
+  ) as a(k, area, went_well, next_step) on (u.n + a.k) % 2 = 0;
+
+  update public.one_to_ones o set
+    growth_area = (array['discipleship','assimilation','pastoral_care','soul_winning']::public.focus_area[])[1 + (p.n::int % 4)],
+    growth_step = (array['Join the Wednesday prayer line',
+                         'Have lunch with someone from another team',
+                         'Check in on a teammate who has been away',
+                         'Invite one friend to the carol service'])[1 + (p.n::int % 4)],
+    last_step = case when p.n in (1, 2, 6, 7, 11, 12)
+                     then (array['done','in_progress','not_yet']::public.growth_progress[])[1 + (p.n::int % 3)] end
+  from unnest(v_people) with ordinality p(id, n)
+  where o.person_id = p.id and o.quarter_start = date_trunc('quarter', current_date)::date;
+
   raise notice 'Sample data loaded: % people, % Sundays ahead, 8 Sundays past', array_length(v_people, 1), array_length(v_sundays, 1);
 end $$;
 
