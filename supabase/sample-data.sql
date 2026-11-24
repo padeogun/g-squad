@@ -680,6 +680,38 @@ begin
   from unnest(v_people) with ordinality p(id, n)
   where o.person_id = p.id and o.quarter_start = date_trunc('quarter', current_date)::date;
 
+  -- 22. Settling in, courses and mentors (migration 34). People 29 and 30 joined a month ago:
+  --     29 is well on the way (welcomed, values session, first serve with a buddy, 30-day
+  --     conversation; buddy is their Team Lead, person 26); 30 has only been welcomed and has
+  --     no buddy yet, so My Unit shows what is outstanding. (28 is new too, but taking a
+  --     break.) Courses completed across the team, leadership training for the Team Leads, an
+  --     apprentice beside the Ushers' Team Lead, and one "each one disciples one" pairing.
+  --     All of it hangs off sample people, so removal takes it with them.
+  insert into public.assimilation_steps (church_id, person_id, step, done_on, recorded_by)
+  select v_church, v_people[x.n], x.step::public.assimilation_step, current_date - x.days_ago, v_owner
+  from (values (29, 'welcomed', 28), (29, 'values_session', 21), (29, 'first_serve_with_buddy', 14),
+               (29, 'day_30_conversation', 1), (30, 'welcomed', 27)) as x(n, step, days_ago)
+  on conflict do nothing;
+  insert into public.member_mentors (church_id, person_id, mentor_person_id, kind, started_on, set_by)
+  values (v_church, v_people[29], v_people[26], 'buddy', current_date - 28, v_owner),
+         (v_church, v_people[2], v_people[1], 'apprentice', current_date - 90, v_owner),
+         (v_church, v_people[7], v_people[5], 'discipleship', current_date - 60, v_owner)
+  on conflict do nothing;
+  insert into public.course_completions (church_id, person_id, course_type_id, completed_on, recorded_by)
+  select v_church, v_people[p.n], t.id, current_date - (400 - p.n * 7 - t.sort_order * 3), v_owner
+  from generate_series(1, 27) as p(n)
+  join public.course_types t on t.church_id = v_church and t.is_active
+  where (t.name = 'New converts class' and p.n <= 22)
+     or (t.name = 'Discipleship class' and p.n <= 16)
+     or (t.name = 'Greatness Track Program' and p.n % 3 = 1)
+     or (t.name = 'Leadership training' and p.n in (1, 6, 11, 16, 21, 26))
+  on conflict do nothing;
+  -- One completed this quarter, so the dashboard has a course to count.
+  insert into public.course_completions (church_id, person_id, course_type_id, completed_on, recorded_by)
+  select v_church, v_people[29], t.id, current_date - 3, v_owner
+  from public.course_types t where t.church_id = v_church and t.name = 'Discipleship class'
+  on conflict do nothing;
+
   raise notice 'Sample data loaded: % people, % Sundays ahead, 8 Sundays past', array_length(v_people, 1), array_length(v_sundays, 1);
 end $$;
 

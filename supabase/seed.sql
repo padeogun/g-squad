@@ -36,6 +36,15 @@ begin
     (v_church, 1, 'Spotted'), (v_church, 2, 'Developing'), (v_church, 3, 'Ready'), (v_church, 4, 'Leading')
   on conflict do nothing;
 
+  -- Courses a G-Squad member can complete (migration 34): the starting list.
+  insert into public.course_types (church_id, sort_order, name, kind, description) values
+    (v_church, 1, 'New converts class', 'discipleship', 'Foundations for someone new to faith.'),
+    (v_church, 2, 'Discipleship class', 'discipleship', 'Growing as a follower of Jesus.'),
+    (v_church, 3, 'Greatness Track Program', 'discipleship', 'TEC''s discipleship track.'),
+    (v_church, 4, 'Water baptism class', 'discipleship', 'Preparation for water baptism.'),
+    (v_church, 5, 'Leadership training', 'leadership', 'Training for those leading or about to lead a team.')
+  on conflict do nothing;
+
   -- Greatness Community Types from the spec: six interest-based and one location-based.
   insert into public.community_types (church_id, name, category) values
     (v_church, 'Business and Career',        'interest'),
