@@ -848,7 +848,7 @@ isOneToOne: false
                   }
                   ComputedFields: never
                   Insert: {
-                    "area": Database["public"]['Enums']["focus_area"],"church_id": string,"id"?: string,"intended_outcome": string,"is_primary"?: boolean,"project_id": string,"target_count"?: number | null,"updated_at"?: string,"updated_by"?: string | null
+                    "area": Database["public"]['Enums']["focus_area"],"church_id"?: string,"id"?: string,"intended_outcome": string,"is_primary"?: boolean,"project_id": string,"target_count"?: number | null,"updated_at"?: string,"updated_by"?: string | null
                   }
                   Update: {
                     "area"?: Database["public"]['Enums']["focus_area"],"church_id"?: string,"id"?: string,"intended_outcome"?: string,"is_primary"?: boolean,"project_id"?: string,"target_count"?: number | null,"updated_at"?: string,"updated_by"?: string | null
@@ -868,7 +868,7 @@ isOneToOne: false
                   }
                   ComputedFields: never
                   Insert: {
-                    "area": Database["public"]['Enums']["focus_area"],"church_id": string,"id"?: string,"project_id": string,"rating": number,"reviewed_at"?: string,"reviewed_by"?: string | null,"story"?: string | null
+                    "area": Database["public"]['Enums']["focus_area"],"church_id"?: string,"id"?: string,"project_id": string,"rating": number,"reviewed_at"?: string,"reviewed_by"?: string | null,"story"?: string | null
                   }
                   Update: {
                     "area"?: Database["public"]['Enums']["focus_area"],"church_id"?: string,"id"?: string,"project_id"?: string,"rating"?: number,"reviewed_at"?: string,"reviewed_by"?: string | null,"story"?: string | null
@@ -920,7 +920,7 @@ isOneToOne: false
                   }
                   ComputedFields: never
                   Insert: {
-                    "care_followups"?: number | null,"church_id": string,"connected_to_community"?: number | null,"decisions_for_christ"?: number | null,"first_time_guests"?: number | null,"guests_contacted_48h"?: number | null,"next_step_signups"?: number | null,"project_id": string,"updated_at"?: string,"updated_by"?: string | null
+                    "care_followups"?: number | null,"church_id"?: string,"connected_to_community"?: number | null,"decisions_for_christ"?: number | null,"first_time_guests"?: number | null,"guests_contacted_48h"?: number | null,"next_step_signups"?: number | null,"project_id": string,"updated_at"?: string,"updated_by"?: string | null
                   }
                   Update: {
                     "care_followups"?: number | null,"church_id"?: string,"connected_to_community"?: number | null,"decisions_for_christ"?: number | null,"first_time_guests"?: number | null,"guests_contacted_48h"?: number | null,"next_step_signups"?: number | null,"project_id"?: string,"updated_at"?: string,"updated_by"?: string | null
@@ -1276,7 +1276,7 @@ isOneToOne: false
                   }
                   ComputedFields: never
                   Insert: {
-                    "area": Database["public"]['Enums']["focus_area"],"church_id": string,"id"?: string,"next_step"?: string | null,"quarter_start": string,"unit_id": string,"updated_at"?: string,"updated_by"?: string | null,"went_well"?: string | null
+                    "area": Database["public"]['Enums']["focus_area"],"church_id"?: string,"id"?: string,"next_step"?: string | null,"quarter_start": string,"unit_id": string,"updated_at"?: string,"updated_by"?: string | null,"went_well"?: string | null
                   }
                   Update: {
                     "area"?: Database["public"]['Enums']["focus_area"],"church_id"?: string,"id"?: string,"next_step"?: string | null,"quarter_start"?: string,"unit_id"?: string,"updated_at"?: string,"updated_by"?: string | null,"went_well"?: string | null

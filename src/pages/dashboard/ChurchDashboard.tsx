@@ -16,6 +16,7 @@ import { EngagementBar } from './EngagementBar';
 import { ShortfallsCard } from './Shortfalls';
 import { FairShareCard, ServingRulesCard } from './FairShare';
 import { ServingApprovalsCard } from './ServingApprovals';
+import { FocusSummaryCard } from './FocusSummary';
 
 const { SectionHeading, Card, Notice, StatTile, DataTable, Chip } = TEC;
 
@@ -59,6 +60,8 @@ export function ChurchDashboard() {
 
       {/* Migration 32: what waits for the G-Squad Coordinator (others see it read-only). */}
       <ServingApprovalsCard />
+      {/* Migration 33: the four focus areas this quarter (counts only). */}
+      <FocusSummaryCard />
 
       <Card title="Engagement mix">
         <EngagementBar mix={d.engagement} />

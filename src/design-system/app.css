@@ -241,3 +241,20 @@
 @media (max-width: 560px) { .app-approvals li { grid-template-columns: minmax(0, 1fr); } }
 .app-approvals li:last-child { border-bottom: 0; }
 .app-approvals li > * { min-width: 0; overflow-wrap: anywhere; }
+
+/* Migration 33: the four focus areas (project card, team conversation, dashboard). */
+.app-focus-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.app-focus-list li { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3) 0; border-bottom: 1px solid var(--line); min-width: 0; overflow-wrap: anywhere; }
+.app-focus-list li:last-child { border-bottom: 0; }
+.app-focus-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.app-focus-edit { display: flex; flex-direction: column; gap: var(--space-3); padding-left: var(--space-4); border-left: 2px solid var(--line); }
+.app-focus-help dl { margin: var(--space-2) 0 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.app-focus-help dt { font-weight: 600; }
+.app-focus-help dd { margin: 0; }
+.app-focus-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--space-4); }
+.app-focus-area { border: 1px solid var(--line); border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); min-width: 0; }
+.app-focus-area h4 { margin: 0 0 var(--space-2); }
+.app-focus-counts { margin: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.app-focus-counts > div { display: flex; justify-content: space-between; gap: var(--space-3); font-size: 14px; line-height: 20px; }
+.app-focus-counts dt { color: var(--ink-muted); min-width: 0; }
+.app-focus-counts dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }

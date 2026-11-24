@@ -9,13 +9,15 @@
 //   5. ASHLIE values: one lived out and one to grow in, with a note. Never scored (R20).
 //   6. Leadership questions being asked when it was held.
 //   7. A development goal and serving notes.
+//   8. Growing in the four focus areas (migration 33): one area to grow in this quarter, a
+//      next step, and how the step agreed last time went. A commitment, never a score.
 // Recording also offers a Values in Action recognition (shared only with their agreement,
 // R19) and a pastoral check-in flag (pastoral matters are not written in the one-to-one).
 // Only the Team Lead who wrote it edits it; others who may read it see it read-only.
 // -------------------------------------------------------------------------------------
 import { useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { TEC } from '../../design-system';
 import { supabase } from '../../lib/supabase';
 import { friendlyError } from '../../data/errors';
@@ -40,6 +42,7 @@ import {
 } from '../../data/oneToOnes';
 import { hasRole, ledUnitIds, useMe } from '../../auth/useMe';
 import { NotFound } from '../NotFound';
+import { FOCUS_AREAS, focusName, GROWTH_PROGRESS, previousQuarter, type FocusArea, type GrowthProgress } from '../../data/focus';
 
 const { SectionHeading, Card, Notice, Button, TextField, SelectField, Checkbox } = TEC;
 
@@ -68,6 +71,9 @@ type Vals = {
   value_to_grow_note: string;
   development_goal: string;
   notes: string;
+  growth_area: string;
+  growth_step: string;
+  last_step: string;
 };
 
 function Form({ oto, unitId, personId }: { oto: OneToOne | null; unitId: string; personId: string }) {
@@ -100,9 +106,27 @@ function Form({ oto, unitId, personId }: { oto: OneToOne | null; unitId: string;
     value_to_grow_note: s(oto?.value_to_grow_note),
     development_goal: s(oto?.development_goal),
     notes: s(oto?.notes),
+    growth_area: s(oto?.growth_area),
+    growth_step: s(oto?.growth_step),
+    last_step: s(oto?.last_step),
   });
   const set = (k: keyof Vals, x: string) => setV((cur) => ({ ...cur, [k]: x }));
   const q = quarterStart(v.held_on || today);
+  // The step agreed at last quarter's one-to-one in this team (read under the same rules).
+  const lastTime = useQuery({
+    queryKey: ['one_to_one_last_step', personId, unitId, q],
+    queryFn: async () => {
+      const { data, error: e } = await supabase
+        .from('one_to_ones')
+        .select('growth_area, growth_step')
+        .eq('person_id', personId)
+        .eq('unit_id', unitId)
+        .eq('quarter_start', previousQuarter(q))
+        .maybeSingle();
+      if (e) throw e;
+      return data;
+    },
+  });
   const asked = promptsFor(prompts.data ?? [], v.held_on || today);
   // Answers typed this visit, by question; saved answers fill in until changed.
   const [typed, setTyped] = useState<Record<string, string>>({});
@@ -134,6 +158,9 @@ function Form({ oto, unitId, personId }: { oto: OneToOne | null; unitId: string;
         value_to_grow_note: v.value_to_grow_id ? t(v.value_to_grow_note) : null,
         development_goal: t(v.development_goal),
         notes: t(v.notes),
+        growth_area: (t(v.growth_area) as FocusArea | null),
+        growth_step: v.growth_area ? t(v.growth_step) : null,
+        last_step: (t(v.last_step) as GrowthProgress | null),
       };
       setSavedFirst(false);
       let otoId = savedId.current;
@@ -280,6 +307,26 @@ function Form({ oto, unitId, personId }: { oto: OneToOne | null; unitId: string;
               itself is not shared with them.
             </p>
           )}
+        </Card>
+
+        <Card title="Growing in the four focus areas">
+          <p className="type-caption" style={{ margin: 0 }}>
+            One area they would like to grow in this quarter, and one next step. A commitment between you, never a score. Keep anything
+            personal about their faith in Personal walk with God.
+          </p>
+          {lastTime.data?.growth_step && (
+            <p style={{ margin: 0 }}>
+              <span className="type-caption">Last time ({focusName(lastTime.data.growth_area)}): </span>
+              {lastTime.data.growth_step}
+            </p>
+          )}
+          <fieldset className="app-fieldset tec-fields" disabled={ro}>
+            {(lastTime.data?.growth_step || v.last_step) && (
+              <SelectField id="o-last-step" label="How did last time's step go?" value={v.last_step} onChange={(e) => set('last_step', e.target.value)} options={[{ value: '', label: 'Choose' }, ...GROWTH_PROGRESS]} />
+            )}
+            <SelectField id="o-growth-area" label="Area to grow in" value={v.growth_area} onChange={(e) => set('growth_area', e.target.value)} options={[{ value: '', label: 'Choose an area' }, ...FOCUS_AREAS.map((a) => ({ value: a.key, label: `${a.name}: ${a.short}` }))]} />
+            <TextField id="o-growth-step" label="Next step" hint={v.growth_area ? 'e.g. invite one friend to the carol service' : 'Choose an area first'} maxLength={500} disabled={!v.growth_area} value={v.growth_step} onChange={(e) => set('growth_step', e.target.value)} />
+          </fieldset>
         </Card>
 
         {(error || save.error) && (

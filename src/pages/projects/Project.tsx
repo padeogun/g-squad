@@ -31,6 +31,7 @@ import { NotFound } from '../NotFound';
 import { EventPlanCard } from './EventPlanCard';
 import { DemandCard, InputsCard, ReadinessCard } from './ProjectSide';
 import { RunOfShowCard } from './RunOfShowCard';
+import { FocusAreasCard } from './FocusAreasCard';
 
 const { SectionHeading, Card, Notice, Button, TextField, SelectField } = TEC;
 
@@ -105,6 +106,8 @@ function ProjectPage({ p }: { p: ProjectRow }) {
         <div className="app-project-main">
           {/* Migration 32: every event has a run of show (not routine team activities or the Brief). */}
           {p.is_event && <RunOfShowCard p={p} canManage={canManage} />}
+          {/* Migration 33: events (not Sundays) name and rate the four focus areas. */}
+          {p.is_event && !p.is_sunday_service && <FocusAreasCard p={p} canManage={canManage} />}
           {plan.isPending && <p>Loading the event plan…</p>}
           {plan.error && <Notice tone="danger">{friendlyError(plan.error)}</Notice>}
           {plan.data && <EventPlanCard plan={plan.data} projectId={p.id} canManage={canManage} canApprove={canApprove} status={p.status} />}

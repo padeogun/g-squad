@@ -21,6 +21,7 @@ import { useUnitDashboard } from '../../data/dashboards';
 import { shortDate } from '../../data/sundays';
 import { EngagementBar } from '../dashboard/EngagementBar';
 import { ShortfallsCard } from '../dashboard/Shortfalls';
+import { TeamConversation } from './TeamConversation';
 
 const { SectionHeading, Card, SelectField, Notice, DataTable, StatTile, Chip } = TEC;
 
@@ -166,6 +167,8 @@ function Team({ unitId, target, canEdit }: { unitId: string; target: number | nu
           </div>
         </>
       )}
+      {/* Migration 33: the team's quarterly conversation on the four focus areas. */}
+      <TeamConversation key={unitId} unitId={unitId} canEdit={canEdit} />
       {update.isError && (
         <Notice tone="danger" title="That change wasn't made">
           {friendlyError(update.error)}

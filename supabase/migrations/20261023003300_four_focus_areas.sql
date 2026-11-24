@@ -43,7 +43,7 @@ grant execute on function app.is_focus_event(uuid) to authenticated, service_rol
 -- -------------------------------------------------------------------------------------
 create table public.project_focus (
   id                uuid primary key default gen_random_uuid(),
-  church_id         uuid not null,
+  church_id         uuid not null default app.current_church_id(),
   project_id        uuid not null,
   area              public.focus_area not null,
   is_primary        boolean not null default false,
@@ -62,7 +62,7 @@ comment on table public.project_focus is
 -- ... how it went, per area (rated after the event) ...
 create table public.project_focus_review (
   id           uuid primary key default gen_random_uuid(),
-  church_id    uuid not null,
+  church_id    uuid not null default app.current_church_id(),
   project_id   uuid not null,
   area         public.focus_area not null,
   rating       smallint not null check (rating between 0 and 4),  -- 0 not achieved, 1 a little, 2 partly, 3 mostly, 4 fully
@@ -78,7 +78,7 @@ comment on table public.project_focus_review is
 -- ... and the event's counts. Counts only: no names, so nothing here identifies a guest.
 create table public.project_outcomes (
   project_id              uuid primary key,
-  church_id               uuid not null,
+  church_id               uuid not null default app.current_church_id(),
   first_time_guests       integer check (first_time_guests between 0 and 100000),
   decisions_for_christ    integer check (decisions_for_christ between 0 and 100000),
   guests_contacted_48h    integer check (guests_contacted_48h between 0 and 100000),
@@ -203,7 +203,7 @@ create trigger project_outcome_guard before update on public.projects
 -- -------------------------------------------------------------------------------------
 create table public.unit_focus_reflections (
   id             uuid primary key default gen_random_uuid(),
-  church_id      uuid not null,
+  church_id      uuid not null default app.current_church_id(),
   unit_id        uuid not null,
   quarter_start  date not null check (extract(day from quarter_start) = 1 and extract(month from quarter_start) in (1, 4, 7, 10)),
   area           public.focus_area not null,

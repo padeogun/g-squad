@@ -49,10 +49,19 @@ export function ReadinessCard({ r }: { r: Readiness }) {
         : { tone: 'warn', tag: 'Action', text: `${r.shortfall} is short of volunteers. Record: move, scale down, borrow or recruit (when approving).` },
     );
   else checks.push({ tone: 'ok', tag: 'Pass', text: 'No unit is short of volunteers for the days needed.' });
+  // Migration 33: an event names its focus areas (one primary) before approval.
+  if (r.focus && (r.status === 'draft' || r.status === 'submitted'))
+    checks.push(
+      r.focus.ok
+        ? { tone: 'ok', tag: 'Pass', text: `Focus areas named (${r.focus.named}), one primary.` }
+        : { tone: 'danger', tag: 'Block', text: 'Name the event\u2019s focus areas and choose the primary one (Four focus areas).' },
+    );
   if (r.status === 'approved' || r.status === 'in_progress') {
     if (r.inputs_outstanding > 0)
       checks.push({ tone: 'warn', tag: 'To close', text: `${r.inputs_outstanding} required input${r.inputs_outstanding > 1 ? 's' : ''} still to come.` });
     if (r.review_done === false) checks.push({ tone: 'warn', tag: 'To close', text: 'Complete the event review (section 12).' });
+    if (r.focus && r.focus.unrated > 0)
+      checks.push({ tone: 'warn', tag: 'To close', text: `Rate ${r.focus.unrated} focus area${r.focus.unrated > 1 ? 's' : ''} the event aimed at (Four focus areas).` });
   }
   const title = r.status === 'draft' || r.status === 'submitted' ? 'Before approval' : 'Checks';
   return (
