@@ -132,8 +132,12 @@ begin
   -- as left may not edit the other person in the pairing, so this one change (an end date,
   -- today or earlier, nothing else) is let through when either person has left.
   -- (Nested: PL/pgSQL looks up old.ended_on even when an earlier test is false.)
+  -- SECURITY REVIEW 27 (P04): or on the day it starts, for a pairing dated to start later
+  -- (only the system can write one). app.end_pairings_on_leaving never ends a pairing before
+  -- it starts, so without this a future-dated pairing stopped the member being marked as
+  -- left, and stopped an erasure request (anonymise_person) for them.
   if tg_op = 'UPDATE' and tg_table_name = 'member_mentors' then
-    if old.ended_on is null and new.ended_on is not null and new.ended_on <= v_today
+    if old.ended_on is null and new.ended_on is not null and new.ended_on <= greatest(v_today, old.started_on)
      and new.id = old.id and new.church_id = old.church_id and new.person_id = old.person_id
      and new.mentor_person_id = old.mentor_person_id and new.kind = old.kind
      and new.started_on = old.started_on and new.set_by is not distinct from old.set_by
@@ -177,6 +181,14 @@ begin
     if tg_table_name = 'member_mentors' and not app.has_role('gsquad_coordinator')
        and (old.ended_on is not null or (old.created_at at time zone 'Europe/London')::date <> v_today) then
       raise exception 'End this pairing instead; only a pairing named today can be taken back' using errcode = '42501';
+    end if;
+    -- SECURITY REVIEW 27 (P02): the Coordinator may now remove any pairing, history and all,
+    -- so every removal by a leader is logged (who, which member, which pairing). Cascades
+    -- and anonymising returned above and are not logged here.
+    if tg_table_name = 'member_mentors' then
+      perform app.audit('remove_pairing', 'member_mentors', old.person_id,
+                        jsonb_build_object('pairing', old.id, 'kind', old.kind, 'mentor', old.mentor_person_id,
+                                           'started_on', old.started_on, 'ended_on', old.ended_on));
     end if;
     return old;
   end if;
