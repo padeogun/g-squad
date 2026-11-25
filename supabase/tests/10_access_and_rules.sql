@@ -4446,18 +4446,18 @@ insert into test.ids select 'cLead', id from public.course_types where church_id
 insert into public.course_completions (church_id, person_id, course_type_id, completed_on)
 values (test.id('churchA'), test.id('pN'), test.id('cLead'), current_date - 1);
 select test.login('ph'); set role authenticated;
-select test.ok((select array_agg(course_type_id) from public.course_completions where person_id = test.id('pN')) = array[test.id('cLead')],
-               'T01: the Purpose Head (no faith sight) reads the leadership course only');
+select test.ok((select count(*) from public.course_completions where person_id = test.id('pN')) = 0,
+               'T01 (all courses the same): the Purpose Head (no faith sight) reads no course, leadership included');
 reset role;
 select test.login('ops'); set role authenticated;
-select test.ok((select count(*) from public.course_completions where person_id = test.id('pN')) = 1,
-               'T01: ... as does the Operations Lead');
-select test.ok((select jsonb_array_length(public.export_person(test.id('pN')) -> 'courses')) = 1,
-               'T01: the Operations Lead''s export leaves out discipleship courses (as it leaves out faith)');
+select test.ok((select count(*) from public.course_completions where person_id = test.id('pN')) = 0,
+               'T01: ... nor does the Operations Lead');
+select test.ok((select jsonb_array_length(public.export_person(test.id('pN')) -> 'courses')) = 0,
+               'T01: the Operations Lead''s export leaves out courses (as it leaves out faith)');
 reset role;
 select test.login('pastoral'); set role authenticated;
-select test.ok((select count(*) from public.course_completions where person_id = test.id('pN')) = 1,
-               'T01: ... as does the Pastoral Lead');
+select test.ok((select count(*) from public.course_completions where person_id = test.id('pN')) = 0,
+               'T01: ... nor the Pastoral Lead');
 reset role;
 select test.login('ul_a'); set role authenticated;
 select test.ok((select count(*) from public.course_completions where person_id = test.id('pN')) = 3,
@@ -4533,6 +4533,65 @@ select test.lives(format($q$delete from public.member_mentors where person_id = 
                   'T04: one named today can be taken back');
 select test.ok((select count(*) from public.member_mentors where person_id = test.id('pN') and kind = 'apprentice') = 0,
                'T04: ... and is gone');
+reset role;
+
+-- ---------- Decisions of 25 Nov 2026 ----------
+-- Courses are written only by those who may see the member's faith, and a writer does not
+-- read them through the write policy.
+select test.login('ul_b'); set role authenticated;   -- Deputy of A1: reads the member, no faith sight
+select test.throws(format($q$insert into public.course_completions (person_id, course_type_id, completed_on) values (%L, %L, current_date)$q$,
+                          test.id('pM'), test.id('cLead')),
+                   'D25: a reader without faith sight records no course');
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$insert into public.course_completions (person_id, course_type_id, completed_on) values (%L, %L, current_date)$q$,
+                         test.id('pM'), test.id('cLead')),
+                  'D25: the Team Lead (who sees faith) records leadership training');
+reset role;
+select test.ok((select count(*) from pg_policies where tablename = 'course_completions' and cmd = 'ALL') = 0,
+               'D25: no FOR ALL policy on courses (reading stays with the read policy)');
+
+-- The G-Squad Coordinator may remove a pairing at any time; a Team Lead may not.
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$delete from public.member_mentors where person_id = %L and kind = 'discipleship'$q$, test.id('pN')),
+                   'D25: a Team Lead still ends an older pairing rather than removing it');
+reset role;
+select test.login('coord'); set role authenticated;
+select test.lives(format($q$delete from public.member_mentors where person_id = %L and kind = 'discipleship'$q$, test.id('pN')),
+                  'D25: the Coordinator removes an older open pairing');
+select test.lives(format($q$delete from public.member_mentors where person_id = %L and kind = 'buddy' and ended_on is not null$q$, test.id('pN')),
+                  'D25: ... and an ended one');
+select test.ok((select count(*) from public.member_mentors where person_id = test.id('pN') and (kind = 'discipleship' or ended_on is not null)) = 0,
+               'D25: ... and they are gone');
+reset role;
+
+-- A member's open pairings end when they leave, on both sides.
+select test.login('');
+do $$
+declare v uuid; w uuid;
+begin
+  insert into public.people (church_id, first_name, surname, email, date_joined)
+  values (test.id('churchA'), 'Kai', 'Leaving', 'kai.leaving@example.org', current_date - 90) returning id into v;
+  insert into test.ids values ('pK', v);
+  insert into public.unit_memberships (church_id, person_id, unit_id) values (test.id('churchA'), v, test.id('A1'));
+  insert into public.member_mentors (church_id, person_id, mentor_person_id, kind, started_on) values (test.id('churchA'), v, test.id('pM'), 'apprentice', current_date - 20);
+  insert into public.people (church_id, first_name, surname, email, date_joined)
+  values (test.id('churchA'), 'Jo', 'Staying', 'jo.staying@example.org', current_date - 90) returning id into w;
+  insert into public.unit_memberships (church_id, person_id, unit_id) values (test.id('churchA'), w, test.id('A1'));
+  insert into public.member_mentors (church_id, person_id, mentor_person_id, kind, started_on) values (test.id('churchA'), w, v, 'discipleship', current_date - 20);
+end $$;
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$update public.people set status = 'left', date_left = current_date - 1 where id = %L$q$, test.id('pK')),
+                  'D25: the Team Lead marks a member as left');
+reset role;
+select test.login('');
+select test.ok((select count(*) from public.member_mentors where (person_id = test.id('pK') or mentor_person_id = test.id('pK')) and ended_on is null) = 0
+               and (select count(*) from public.member_mentors where (person_id = test.id('pK') or mentor_person_id = test.id('pK')) and ended_on = current_date - 1) = 2,
+               'D25: ... and both their pairings end on the day they left');
+-- The allowance is only for setting the end date: nothing else about a leaver's pairing changes.
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$update public.member_mentors set kind = 'buddy' where person_id = %L$q$, test.id('pK')),
+                   'D25: a leaver''s pairing is not otherwise rewritten');
 reset role;
 
 -- ---------- report ---------------------------------------------------------------------

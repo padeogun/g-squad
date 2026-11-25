@@ -1,7 +1,9 @@
 // -------------------------------------------------------------------------------------
 // On a member's record: settling in, courses completed, and mentoring (migration 34).
 // Their Team Lead and the G-Squad Coordinator change these; the TECi Coordinator may also
-// record courses; others who can read the record see them read-only. The database checks
+// record courses; others who can read the record see them read-only. Courses are shown only
+// to those who may see the member's faith (all courses the same, 25 Nov 2026), and the
+// G-Squad Coordinator may remove a pairing at any time. The database checks
 // every change (app.growth_record_guard); this page shows its message when it says no.
 // -------------------------------------------------------------------------------------
 import { useState } from 'react';
@@ -21,6 +23,7 @@ import {
   usePairings,
   useRecordCourse,
   useRemoveCourse,
+  useRemovePairing,
   useStartPairing,
   useSteps,
   useSupporting,
@@ -32,7 +35,19 @@ import {
 
 const { Card, Button, Chip, Notice, SelectField, TextField, Checkbox } = TEC;
 
-export function MemberGrowth({ person, canEdit, canRecordCourses }: { person: Person; canEdit: boolean; canRecordCourses: boolean }) {
+export function MemberGrowth({
+  person,
+  canEdit,
+  canSeeCourses,
+  canRecordCourses,
+  canRemovePairings,
+}: {
+  person: Person;
+  canEdit: boolean;
+  canSeeCourses: boolean;
+  canRecordCourses: boolean;
+  canRemovePairings: boolean;
+}) {
   const names = usePeopleNames();
   const nameOf = (id: string) => {
     const p = names.data?.find((x) => x.id === id);
@@ -41,8 +56,8 @@ export function MemberGrowth({ person, canEdit, canRecordCourses }: { person: Pe
   return (
     <>
       <SettlingIn person={person} canEdit={canEdit} nameOf={nameOf} />
-      <Courses person={person} canEdit={canRecordCourses} />
-      <Mentoring person={person} canEdit={canEdit} nameOf={nameOf} options={(names.data ?? []).filter((n) => n.id !== person.id)} />
+      {canSeeCourses && <Courses person={person} canEdit={canRecordCourses} />}
+      <Mentoring person={person} canEdit={canEdit} canRemove={canRemovePairings} nameOf={nameOf} options={(names.data ?? []).filter((n) => n.id !== person.id)} />
     </>
   );
 }
@@ -112,11 +127,10 @@ function Courses({ person, canEdit }: { person: Person; canEdit: boolean }) {
   const open = (types.data ?? []).filter((t) => t.is_active && !doneIds.has(t.id));
   return (
     <Card title="Courses completed">
-      {/* SECURITY REVIEW 26 (T01): the database shows discipleship courses only to those who may
-          see this member's faith details; say so, so an empty list is not read as "none taken". */}
+      {/* SECURITY REVIEW 26 (T01), all courses the same (25 Nov 2026): the database shows courses
+          only to those who may see this member's faith details, so the card is offered only to them. */}
       <p className="type-caption" style={{ margin: 0 }}>
-        Discipleship and leadership courses this member has completed. Completion only. Discipleship courses are shown only to those who may see
-        this member's faith details.
+        Discipleship and leadership courses this member has completed. Completion only. Like faith details, shown only to those who may see them.
       </p>
       {done.error && <Notice tone="danger">{friendlyError(done.error)}</Notice>}
       {done.data && done.data.length === 0 && <p style={{ margin: 0 }}>None recorded yet.</p>}
@@ -164,11 +178,13 @@ function Courses({ person, canEdit }: { person: Person; canEdit: boolean }) {
 function Mentoring({
   person,
   canEdit,
+  canRemove,
   nameOf,
   options,
 }: {
   person: Person;
   canEdit: boolean;
+  canRemove: boolean;
   nameOf: (id: string) => string;
   options: Array<{ id: string; first_name: string; surname: string }>;
 }) {
@@ -177,6 +193,7 @@ function Mentoring({
   const supporting = useSupporting(person.id);
   const start = useStartPairing(person.id);
   const end = useEndPairing(person.id);
+  const removePairing = useRemovePairing(person.id);
   const [kind, setKind] = useState<MentorKind | ''>('');
   const [mentor, setMentor] = useState('');
   const live = (pairings.data ?? []).filter((p) => !p.ended_on);
@@ -204,6 +221,11 @@ function Mentoring({
                     End
                   </Button>
                 )}
+                {canRemove && (
+                  <Button size="sm" variant="quiet" disabled={removePairing.isPending} aria-label={`Remove pairing with ${nameOf(p.mentor_person_id)}`} onClick={() => removePairing.mutate(p.id)}>
+                    Remove
+                  </Button>
+                )}
               </span>
             </li>
           ))}
@@ -223,7 +245,7 @@ function Mentoring({
           </span>
         </div>
       )}
-      {(start.error || end.error) && <Notice tone="danger">{friendlyError(start.error ?? end.error)}</Notice>}
+      {(start.error || end.error || removePairing.error) && <Notice tone="danger">{friendlyError(start.error ?? end.error ?? removePairing.error)}</Notice>}
       {(supporting.data ?? []).length > 0 && (
         <>
           <h4 className="app-subhead">Supporting</h4>
@@ -248,8 +270,15 @@ function Mentoring({
                 <span>
                   {mentorKind(p.kind).label}: {nameOf(p.mentor_person_id)}
                 </span>
-                <span className="type-caption">
-                  {shortDate(p.started_on)} to {shortDate(p.ended_on!)}
+                <span className="app-journey-state">
+                  <span className="type-caption">
+                    {shortDate(p.started_on)} to {shortDate(p.ended_on!)}
+                  </span>
+                  {canRemove && (
+                    <Button size="sm" variant="quiet" disabled={removePairing.isPending} aria-label={`Remove earlier pairing with ${nameOf(p.mentor_person_id)}`} onClick={() => removePairing.mutate(p.id)}>
+                      Remove
+                    </Button>
+                  )}
                 </span>
               </li>
             ))}

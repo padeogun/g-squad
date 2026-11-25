@@ -199,6 +199,19 @@ export function useStartPairing(personId: string) {
   });
 }
 
+// Decision of 25 Nov 2026: the G-Squad Coordinator may remove a pairing at any time (the
+// database lets others take one back only on the day it was named, while still open).
+export function useRemovePairing(personId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from('member_mentors').delete().eq('id', id).eq('person_id', personId);
+      if (error) throw error;
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['growth'] }),
+  });
+}
+
 export function useEndPairing(personId: string) {
   const qc = useQueryClient();
   return useMutation({

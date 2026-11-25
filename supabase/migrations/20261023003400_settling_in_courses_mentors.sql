@@ -15,7 +15,9 @@
 --    per member; a pairing is ended, not rewritten.
 -- Written by those who edit the member's record (their Team Lead and the G-Squad Coordinator,
 -- app.can_edit_person); the TECi Coordinator may also record courses. Read by those who can
--- read the member (discipleship courses: only those who may see their faith, review 26 T01).
+-- read the member; courses only by those who may see their faith (review 26 T01; all
+-- courses the same, decision of 25 Nov 2026). Pairings end when a member leaves; the
+-- G-Squad Coordinator may remove a pairing at any time (decisions of 25 Nov 2026).
 -- Anonymising a member removes all three (R8); export_person includes them.
 -- =====================================================================================
 
@@ -125,6 +127,22 @@ begin
   if app.is_system() then
     return case when tg_op = 'DELETE' then old else new end;
   end if;
+  -- Decision of 25 Nov 2026: a member's open pairings end when they leave (people.status
+  -- becomes 'left'). app.end_pairings_on_leaving sets the end date; whoever marked the member
+  -- as left may not edit the other person in the pairing, so this one change (an end date,
+  -- today or earlier, nothing else) is let through when either person has left.
+  -- (Nested: PL/pgSQL looks up old.ended_on even when an earlier test is false.)
+  if tg_op = 'UPDATE' and tg_table_name = 'member_mentors' then
+    if old.ended_on is null and new.ended_on is not null and new.ended_on <= v_today
+     and new.id = old.id and new.church_id = old.church_id and new.person_id = old.person_id
+     and new.mentor_person_id = old.mentor_person_id and new.kind = old.kind
+     and new.started_on = old.started_on and new.set_by is not distinct from old.set_by
+     and new.created_at = old.created_at
+     and exists (select 1 from public.people x
+                 where x.id in (old.person_id, old.mentor_person_id) and x.status = 'left') then
+      return new;
+    end if;
+  end if;
   if tg_op = 'DELETE' then
     if app.person_gone(old.person_id) then
       return old;
@@ -146,11 +164,17 @@ begin
           or (tg_table_name = 'course_completions' and app.has_role('teci_coordinator'))) then
     raise exception 'Only the member''s Team Lead or the G-Squad Coordinator can change this' using errcode = '42501';
   end if;
+  -- Decision of 25 Nov 2026 (all courses the same): every course completion is treated like
+  -- the faith fields, so only someone who may see this member's faith records one.
+  if tg_table_name = 'course_completions' and not app.can_see_faith(v_person) then
+    raise exception 'Only the member''s Team Lead or the G-Squad Coordinator can change this' using errcode = '42501';
+  end if;
   if tg_op = 'DELETE' then
     -- SECURITY REVIEW 26 (T04): a pairing is ended, never rewritten, so it is not deleted
     -- either (delete and re-add would rewrite its history). A slip may be taken back on
     -- the day it was recorded while it is still open; after that, end it.
-    if tg_table_name = 'member_mentors'
+    -- Decision of 25 Nov 2026: the G-Squad Coordinator may remove a pairing at any time.
+    if tg_table_name = 'member_mentors' and not app.has_role('gsquad_coordinator')
        and (old.ended_on is not null or (old.created_at at time zone 'Europe/London')::date <> v_today) then
       raise exception 'End this pairing instead; only a pairing named today can be taken back' using errcode = '42501';
     end if;
@@ -260,29 +284,33 @@ create trigger course_types_audit after insert or update or delete on public.cou
   for each row execute function app.audit_row_change();
 
 -- SECURITY REVIEW 26 (T01): a discipleship course (the new converts class, the water baptism
--- class...) tells of the member's faith journey as surely as the faith fields do, so it is
--- read only by those who may see their faith (app.can_see_faith). Leadership courses are
--- read by everyone who can read the member. Counts in the summary are unaffected.
+-- class...) tells of the member's faith journey as surely as the faith fields do. Decision of
+-- 25 Nov 2026: all courses the same, leadership training included, so every completion is
+-- read only by those who may see the member's faith (app.can_see_faith). p_course is kept so
+-- the policy and export need not change. Counts in the summary are unaffected.
 create or replace function app.can_read_course(p_person uuid, p_course uuid) returns boolean
 language sql stable security definer set search_path = ''
 as $$
-  select app.can_read_person(p_person)
-     and (app.can_see_faith(p_person)
-          or exists (select 1 from public.course_types t
-                     where t.id = p_course and t.church_id = app.current_church_id() and t.kind = 'leadership'))
+  select app.can_read_person(p_person) and app.can_see_faith(p_person)
 $$;
 revoke all on function app.can_read_course(uuid, uuid) from public, anon;
 grant execute on function app.can_read_course(uuid, uuid) to authenticated, service_role;
 
 create policy course_completions_read on public.course_completions for select to authenticated
   using (church_id = (select app.current_church_id()) and app.can_read_course(person_id, course_type_id));
-create policy course_completions_write on public.course_completions for all to authenticated
-  using (church_id = (select app.current_church_id())
-         and (app.can_edit_person(person_id)
-              or ((select app.has_role('teci_coordinator')) and app.can_read_person(person_id))))
-  with check (church_id = (select app.current_church_id())
-         and (app.can_edit_person(person_id)
-              or ((select app.has_role('teci_coordinator')) and app.can_read_person(person_id))));
+-- Writes are split by command (not FOR ALL), so reading stays with the read policy alone: a
+-- FOR ALL policy would also let every writer read. Writers must see the member's faith too.
+create policy course_completions_insert on public.course_completions for insert to authenticated
+  with check (church_id = (select app.current_church_id()) and app.can_see_faith(person_id)
+         and (app.can_edit_person(person_id) or (select app.has_role('teci_coordinator'))));
+create policy course_completions_update on public.course_completions for update to authenticated
+  using (church_id = (select app.current_church_id()) and app.can_see_faith(person_id)
+         and (app.can_edit_person(person_id) or (select app.has_role('teci_coordinator'))))
+  with check (church_id = (select app.current_church_id()) and app.can_see_faith(person_id)
+         and (app.can_edit_person(person_id) or (select app.has_role('teci_coordinator'))));
+create policy course_completions_delete on public.course_completions for delete to authenticated
+  using (church_id = (select app.current_church_id()) and app.can_see_faith(person_id)
+         and (app.can_edit_person(person_id) or (select app.has_role('teci_coordinator'))));
 
 -- A pairing is read by those who can read the member being helped; the mentor's name is
 -- shown with it (they are a G-Squad member too).
@@ -291,6 +319,28 @@ create policy member_mentors_read on public.member_mentors for select to authent
 create policy member_mentors_write on public.member_mentors for all to authenticated
   using (church_id = (select app.current_church_id()) and app.can_edit_person(person_id))
   with check (church_id = (select app.current_church_id()) and app.can_edit_person(person_id));
+
+-- Decision of 25 Nov 2026: when a member leaves (status becomes 'left'), their open pairings
+-- end, on both sides: as the member helped and as the person beside someone. The end date is
+-- the day they left (never before the pairing started, never in the future).
+create or replace function app.end_pairings_on_leaving() returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  v_today date := (now() at time zone 'Europe/London')::date;
+begin
+  update public.member_mentors mm
+     set ended_on = greatest(mm.started_on, least(v_today, coalesce(new.date_left, v_today)))
+   where mm.church_id = new.church_id
+     and mm.ended_on is null
+     and (mm.person_id = new.id or mm.mentor_person_id = new.id);
+  return null;
+end $$;
+revoke all on function app.end_pairings_on_leaving() from public, anon, authenticated;
+grant execute on function app.end_pairings_on_leaving() to service_role;
+create trigger people_end_pairings_on_leaving after update of status on public.people
+  for each row when (new.status = 'left' and old.status is distinct from 'left')
+  execute function app.end_pairings_on_leaving();
 
 -- The starting course list for each church (seed.sql adds it for a new one).
 insert into public.course_types (church_id, sort_order, name, kind, description)
@@ -407,9 +457,9 @@ begin
     'courses',          (select coalesce(jsonb_agg(jsonb_build_object('course', t.name, 'completed_on', c.completed_on) order by c.completed_on), '[]')
                          from public.course_completions c join public.course_types t on t.id = c.course_type_id
                          where c.person_id = p_person
-                           -- SECURITY REVIEW 26 (T01): discipleship courses only for a caller who may
-                           -- see the member's faith, as for 'faith' above.
-                           and (t.kind = 'leadership' or app.can_see_faith(p_person))),
+                           -- SECURITY REVIEW 26 (T01), all courses the same (25 Nov 2026): only for
+                           -- a caller who may see the member's faith, as for 'faith' above.
+                           and app.can_see_faith(p_person)),
     'pairings',         (select coalesce(jsonb_agg(jsonb_build_object(
                            'kind', mm.kind, 'role', case when mm.person_id = p_person then 'supported by' else 'supporting' end,
                            'other_person', (select o.first_name || ' ' || o.surname from public.people o
