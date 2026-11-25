@@ -45,6 +45,16 @@ begin
     (v_church, 5, 'Leadership training', 'leadership', 'Training for those leading or about to lead a team.')
   on conflict do nothing;
 
+  -- The discipleship pathway (migration 35): the Maturity Team's five stages; the December
+  -- 2026 retreat may rename or reword them on the Reference forms page.
+  insert into public.pathway_stages (church_id, stage_no, name, description) values
+    (v_church, 1, 'Encounter', 'Meeting Jesus and the church for the first time.'),
+    (v_church, 2, 'Foundation', 'Laying the foundations of faith: the new converts class and water baptism.'),
+    (v_church, 3, 'Community', 'Belonging: in a Greatness Community and growing with others.'),
+    (v_church, 4, 'Depth', 'Growing deeper: the discipleship class, the Greatness Track Program and daily habits.'),
+    (v_church, 5, 'Sending', 'Serving and leading others: the G-Squad.')
+  on conflict do nothing;
+
   -- Greatness Community Types from the spec: six interest-based and one location-based.
   insert into public.community_types (church_id, name, category) values
     (v_church, 'Business and Career',        'interest'),

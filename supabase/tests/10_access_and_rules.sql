@@ -4594,6 +4594,143 @@ select test.throws(format($q$update public.member_mentors set kind = 'buddy' whe
                    'D25: a leaver''s pairing is not otherwise rewritten');
 reset role;
 
+-- ---------- 35. Leadership stage history, pathway stage, Maturity report ----------
+select test.login('');
+insert into test.ids select 'lsSpot', id from public.leadership_stages where church_id = test.id('churchA') and name = 'Spotted';
+insert into test.ids select 'lsDev', id from public.leadership_stages where church_id = test.id('churchA') and name = 'Developing';
+insert into test.ids select 'psEnc', id from public.pathway_stages where church_id = test.id('churchA') and name = 'Encounter';
+insert into test.ids select 'psFound', id from public.pathway_stages where church_id = test.id('churchA') and name = 'Foundation';
+insert into test.ids select 'psDepth', id from public.pathway_stages where church_id = test.id('churchA') and name = 'Depth';
+select test.ok((select count(*) from public.pathway_stages where church_id = test.id('churchA')) = 5,
+               'R35: each church starts with the five pathway stages');
+
+-- Leadership stage history: written by the database when a stage is set or changed.
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$update public.unit_memberships set leadership_stage_id = %L where person_id = %L and unit_id = %L$q$,
+                         test.id('lsSpot'), test.id('pN'), test.id('A1')),
+                  'R35: the Team Lead sets a member''s leadership stage');
+select test.lives(format($q$update public.unit_memberships set leadership_stage_id = %L where person_id = %L and unit_id = %L$q$,
+                         test.id('lsDev'), test.id('pN'), test.id('A1')),
+                  'R35: ... and moves them on');
+select test.ok((select count(*) from public.leadership_stage_changes where person_id = test.id('pN')) = 2
+               and exists (select 1 from public.leadership_stage_changes where person_id = test.id('pN')
+                           and from_stage_id = test.id('lsSpot') and to_stage_id = test.id('lsDev') and changed_by = test.id('ul_a')),
+               'R35: ... and both are written down, with who made the change');
+select test.throws(format($q$insert into public.leadership_stage_changes (person_id, membership_id, unit_id, to_stage_id) select person_id, id, unit_id, %L from public.unit_memberships where person_id = %L limit 1$q$,
+                          test.id('lsSpot'), test.id('pN')),
+                   'R35: the history is not written directly');
+select test.throws(format($q$delete from public.leadership_stage_changes where person_id = %L$q$, test.id('pN')),
+                   'R35: ... nor deleted');
+reset role;
+select test.login('coord'); set role authenticated;
+select test.throws(format($q$update public.leadership_stage_changes set changed_on = current_date - 400 where person_id = %L$q$, test.id('pN')),
+                   'R35: ... nor rewritten, even by the Coordinator');
+reset role;
+select test.login('ph'); set role authenticated;
+select test.ok((select count(*) from public.leadership_stage_changes where person_id = test.id('pN')) = 2,
+               'R35: the team''s Purpose Head reads the history');
+reset role;
+select test.login('editor'); set role authenticated;
+select test.ok((select count(*) from public.leadership_stage_changes where person_id = test.id('pN')) = 0,
+               'R35: an editor does not');
+reset role;
+
+-- Pathway stage: like the faith fields.
+select test.login('ul_a'); set role authenticated;
+select test.lives(format('select public.set_person_pathway(%L, %L, current_date - 40)', test.id('pN'), test.id('psEnc')),
+                  'R35: the Team Lead records a pathway stage');
+select test.lives(format('select public.set_person_pathway(%L, %L, current_date)', test.id('pN'), test.id('psFound')),
+                  'R35: ... and the next');
+select test.throws(format('select public.set_person_pathway(%L, %L, current_date + 1)', test.id('pN'), test.id('psDepth')),
+                   'R35: a stage is recorded once it is reached');
+select test.throws(format('select public.set_person_pathway(%L, %L)', test.id('pX'), test.id('psEnc')),
+                   'R35: not for a member of another team');
+select test.ok((select count(*) from public.get_person_pathway(test.id('pN'))) = 2, 'R35: the Team Lead reads the pathway');
+select test.throws('select count(*) from public.person_pathway', 'R35: the table itself is not reachable');
+reset role;
+select test.ok(exists (select 1 from public.audit_log where action = 'view_pathway' and record_id = test.id('pN'))
+               and exists (select 1 from public.audit_log where action = 'set_pathway' and record_id = test.id('pN')),
+               'R35: every view and change of the pathway is logged');
+select test.login('ul_b'); set role authenticated;   -- Deputy of A1
+select test.throws(format('select public.set_person_pathway(%L, %L)', test.id('pN'), test.id('psDepth')),
+                   'R35: the Deputy does not record the pathway');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.throws(format('select * from public.get_person_pathway(%L)', test.id('pN')), 'R35: the Operations Lead does not read it (as for faith)');
+select test.throws(format('select public.set_person_pathway(%L, %L)', test.id('pN'), test.id('psDepth')), 'R35: ... nor record it');
+select test.ok((public.export_person(test.id('pN')) -> 'pathway') = 'null'::jsonb
+               and jsonb_array_length(public.export_person(test.id('pN')) -> 'leadership_stages') = 2,
+               'R35: the Operations Lead''s export has the stage history but not the pathway');
+reset role;
+select test.login('pastoral'); set role authenticated;
+select test.throws(format('select * from public.get_person_pathway(%L)', test.id('pN')), 'R35: nor the Pastoral Lead');
+reset role;
+select test.login('ph'); set role authenticated;
+select test.throws(format('select * from public.get_person_pathway(%L)', test.id('pN')), 'R35: nor the Purpose Head');
+reset role;
+select test.login('teci'); set role authenticated;
+select test.ok((select count(*) from public.get_person_pathway(test.id('pN'))) = 2, 'R35: the TECi Coordinator reads it (a faith reader)');
+select test.throws(format('select public.set_person_pathway(%L, %L)', test.id('pN'), test.id('psDepth')), 'R35: ... but does not record it');
+reset role;
+select test.login('rp'); set role authenticated;
+select test.ok(jsonb_array_length(public.export_person(test.id('pN')) -> 'pathway') = 2, 'R35: the Resident Pastor''s export includes the pathway');
+reset role;
+select test.login('ops'); set role authenticated;
+select test.lives(format($q$update public.pathway_stages set is_active = false where id = %L$q$, test.id('psDepth')),
+                  'R35: the Operations Lead switches a pathway stage off');
+reset role;
+select test.login('ul_a'); set role authenticated;
+update public.pathway_stages set name = 'Renamed' where id = test.id('psEnc');
+select test.ok((select name from public.pathway_stages where id = test.id('psEnc')) = 'Encounter', 'R35: a Team Lead does not change the pathway list');
+select test.throws(format('select public.set_person_pathway(%L, %L)', test.id('pN'), test.id('psDepth')),
+                   'R35: a switched-off stage is not recorded');
+select test.throws(format('select public.remove_person_pathway(%L)', gen_random_uuid()), 'R35: an unknown entry is refused like any other');
+reset role;
+select test.login('coord'); set role authenticated;
+select test.lives(format($q$select public.remove_person_pathway((select id from public.get_person_pathway(%L) where stage_no = 2))$q$, test.id('pN')),
+                  'R35: the Coordinator takes back an entry made in error');
+select test.ok((select count(*) from public.get_person_pathway(test.id('pN'))) = 1, 'R35: ... and it is gone');
+select test.lives(format('select public.set_person_pathway(%L, %L, current_date)', test.id('pN'), test.id('psFound')),
+                  'R35: ... and records it again');
+reset role;
+
+-- The quarterly Maturity report: counts only, for the monthly-report roles.
+select test.login('coord'); set role authenticated;
+select test.ok((public.maturity_report() -> 'leadership' ->> 'moves_up')::int >= 1
+               and (public.maturity_report() -> 'pathway' ->> 'moved_on')::int >= 1
+               and (public.maturity_report() -> 'pathway' ->> 'first_recorded')::int >= 0
+               and jsonb_array_length(public.maturity_report() -> 'pathway' -> 'stages') = 5,
+               'R35: the report counts leadership moves and pathway moves');
+select test.ok(position(test.id('pN')::text in public.maturity_report()::text) = 0
+               and position('Nia' in public.maturity_report()::text) = 0,
+               'R35: ... and names no one');
+reset role;
+select test.login('pastoral'); set role authenticated;
+select test.lives('select public.maturity_report()', 'R35: the Pastoral Lead reads the report');
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.throws('select public.maturity_report()', 'R35: a Team Lead does not');
+reset role;
+select test.login('editor'); set role authenticated;
+select test.throws('select public.maturity_report()', 'R35: nor an editor');
+reset role;
+
+-- Anonymising removes the pathway and stage history.
+select test.login('');
+do $$
+declare v uuid;
+begin
+  insert into public.people (church_id, first_name, surname, email, date_joined)
+  values (test.id('churchA'), 'Quin', 'Anon', 'quin.anon@example.org', current_date - 60) returning id into v;
+  insert into test.ids values ('pQ', v);
+  insert into public.unit_memberships (church_id, person_id, unit_id, leadership_stage_id) values (test.id('churchA'), v, test.id('A1'), test.id('lsSpot'));
+  insert into public.person_pathway (church_id, person_id, stage_id, reached_on) values (test.id('churchA'), v, test.id('psEnc'), current_date);
+end $$;
+select app.anonymise(test.id('pQ'));
+select test.ok((select count(*) from public.person_pathway where person_id = test.id('pQ')) = 0
+               and (select count(*) from public.leadership_stage_changes where person_id = test.id('pQ')) = 0,
+               'R35: anonymising removes their pathway and stage history');
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;

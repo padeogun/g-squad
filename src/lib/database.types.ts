@@ -506,6 +506,62 @@ isOneToOne: false
       referencedColumns: ["church_id","person_id"]
     }
                   ]
+                },"leadership_stage_changes": {
+                  Row: {
+                    "changed_at": string,"changed_by": string | null,"changed_on": string,"church_id": string,"from_stage_id": string | null,"id": string,"membership_id": string,"person_id": string,"to_stage_id": string | null,"unit_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "changed_at"?: string,"changed_by"?: string | null,"changed_on"?: string,"church_id"?: string,"from_stage_id"?: string | null,"id"?: string,"membership_id": string,"person_id": string,"to_stage_id"?: string | null,"unit_id": string
+                  }
+                  Update: {
+                    "changed_at"?: string,"changed_by"?: string | null,"changed_on"?: string,"church_id"?: string,"from_stage_id"?: string | null,"id"?: string,"membership_id"?: string,"person_id"?: string,"to_stage_id"?: string | null,"unit_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "leadership_stage_changes_church_id_fkey"
+      columns: ["church_id"]
+isOneToOne: false
+      referencedRelation: "churches"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "leadership_stage_changes_church_id_from_stage_id_fkey"
+      columns: ["church_id","from_stage_id"]
+isOneToOne: false
+      referencedRelation: "leadership_stages"
+      referencedColumns: ["church_id","id"]
+    },{
+      foreignKeyName: "leadership_stage_changes_church_id_membership_id_fkey"
+      columns: ["church_id","membership_id"]
+isOneToOne: false
+      referencedRelation: "unit_memberships"
+      referencedColumns: ["church_id","id"]
+    },{
+      foreignKeyName: "leadership_stage_changes_church_id_person_id_fkey"
+      columns: ["church_id","person_id"]
+isOneToOne: false
+      referencedRelation: "people"
+      referencedColumns: ["church_id","id"]
+    },{
+      foreignKeyName: "leadership_stage_changes_church_id_person_id_fkey"
+      columns: ["church_id","person_id"]
+isOneToOne: false
+      referencedRelation: "v_engagement"
+      referencedColumns: ["church_id","person_id"]
+    },{
+      foreignKeyName: "leadership_stage_changes_church_id_to_stage_id_fkey"
+      columns: ["church_id","to_stage_id"]
+isOneToOne: false
+      referencedRelation: "leadership_stages"
+      referencedColumns: ["church_id","id"]
+    },{
+      foreignKeyName: "leadership_stage_changes_church_id_unit_id_fkey"
+      columns: ["church_id","unit_id"]
+isOneToOne: false
+      referencedRelation: "units"
+      referencedColumns: ["church_id","id"]
+    }
+                  ]
                 },"leadership_stages": {
                   Row: {
                     "advance_criteria": string | null,"church_id": string,"created_at": string,"description": string | null,"id": string,"name": string,"sort_order": number
@@ -900,6 +956,26 @@ isOneToOne: false
       referencedColumns: ["church_id","person_id"]
     }
                   ]
+                },"pathway_stages": {
+                  Row: {
+                    "church_id": string,"created_at": string,"description": string | null,"id": string,"is_active": boolean,"marker": string | null,"name": string,"stage_no": number
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "church_id"?: string,"created_at"?: string,"description"?: string | null,"id"?: string,"is_active"?: boolean,"marker"?: string | null,"name": string,"stage_no": number
+                  }
+                  Update: {
+                    "church_id"?: string,"created_at"?: string,"description"?: string | null,"id"?: string,"is_active"?: boolean,"marker"?: string | null,"name"?: string,"stage_no"?: number
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "pathway_stages_church_id_fkey"
+      columns: ["church_id"]
+isOneToOne: false
+      referencedRelation: "churches"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"people": {
                   Row: {
                     "anniversary_day": number | null,"anniversary_month": number | null,"anonymised_at": string | null,"area": string | null,"available_hours_month": number | null,"birth_day": number | null,"birth_month": number | null,"celebration_opt_in": boolean,"church_id": string,"consent_at": string | null,"consent_notice_version": string | null,"created_at": string,"created_by": string | null,"date_joined": string,"date_left": string | null,"email": string | null,"first_name": string,"greatness_community_id": string | null,"id": string,"marital_status": Database["public"]['Enums']["marital_status"] | null,"newsletter_subscribed": boolean,"other_emails": (string)[],"other_names": string | null,"phones": (string)[],"preferred_times": (string)[],"status": Database["public"]['Enums']["person_status"],"surname": string,"teci_stage_id": string | null,"teci_verified_at": string | null,"teci_verified_by": string | null,"updated_at": string
@@ -956,6 +1032,44 @@ isOneToOne: false
 isOneToOne: false
       referencedRelation: "v_engagement"
       referencedColumns: ["church_id","person_id"]
+    }
+                  ]
+                },"person_pathway": {
+                  Row: {
+                    "church_id": string,"id": string,"person_id": string,"reached_on": string,"recorded_at": string,"recorded_by": string | null,"stage_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "church_id": string,"id"?: string,"person_id": string,"reached_on": string,"recorded_at"?: string,"recorded_by"?: string | null,"stage_id": string
+                  }
+                  Update: {
+                    "church_id"?: string,"id"?: string,"person_id"?: string,"reached_on"?: string,"recorded_at"?: string,"recorded_by"?: string | null,"stage_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "person_pathway_church_id_fkey"
+      columns: ["church_id"]
+isOneToOne: false
+      referencedRelation: "churches"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "person_pathway_church_id_person_id_fkey"
+      columns: ["church_id","person_id"]
+isOneToOne: false
+      referencedRelation: "people"
+      referencedColumns: ["church_id","id"]
+    },{
+      foreignKeyName: "person_pathway_church_id_person_id_fkey"
+      columns: ["church_id","person_id"]
+isOneToOne: false
+      referencedRelation: "v_engagement"
+      referencedColumns: ["church_id","person_id"]
+    },{
+      foreignKeyName: "person_pathway_church_id_stage_id_fkey"
+      columns: ["church_id","stage_id"]
+isOneToOne: false
+      referencedRelation: "pathway_stages"
+      referencedColumns: ["church_id","id"]
     }
                   ]
                 },"project_focus": {
@@ -1642,6 +1756,11 @@ isOneToOne: false
         isOneToOne: false
         isSetofReturn: true
       } },
+"get_person_pathway":
+{ Args: { "p_person": string }; Returns: {
+              "id": string,"reached_on": string,"recorded_at": string,"stage_id": string,"stage_name": string,"stage_no": number
+            }[]
+                           },
 "import_members":
 { Args: { "p_rows": Json,"p_skip_existing"?: boolean }; Returns: Json
                            },
@@ -1652,6 +1771,9 @@ isOneToOne: false
                            },
 "log_export":
 { Args: { "p_row_count": number,"p_scope": string }; Returns: undefined
+                           },
+"maturity_report":
+{ Args: { "p_quarter"?: string }; Returns: Json
                            },
 "monthly_report_figures":
 { Args: { "p_month": string }; Returns: {
@@ -1713,6 +1835,9 @@ isOneToOne: false
 "redeem_email_link":
 { Args: { "p_token": string }; Returns: string
                            },
+"remove_person_pathway":
+{ Args: { "p_entry": string }; Returns: undefined
+                           },
 "reorder_segments":
 { Args: { "p_grid": string,"p_segments": (string)[] }; Returns: undefined
                            },
@@ -1739,6 +1864,9 @@ isOneToOne: false
                            },
 "set_person_faith":
 { Args: { "p_holy_spirit_baptism": boolean,"p_holy_spirit_baptism_date": string,"p_person": string,"p_salvation_date": string,"p_speaks_in_tongues": boolean,"p_speaks_in_tongues_date": string,"p_water_baptism": boolean,"p_water_baptism_date": string }; Returns: undefined
+                           },
+"set_person_pathway":
+{ Args: { "p_person": string,"p_reached_on"?: string,"p_stage": string }; Returns: string
                            },
 "start_newsletter_issue":
 { Args: { "p_month": string }; Returns: string
