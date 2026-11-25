@@ -55,6 +55,13 @@ begin
     end if;
   elsif new.leadership_stage_id is not distinct from old.leadership_stage_id then
     return null;
+  -- SECURITY REVIEW 27 (P03): a stage taken off the reference list clears it from every
+  -- membership (on delete set null). That is not a leader's change, and writing it down named
+  -- the stage being deleted, so the foreign key refused and no in-use stage could be deleted.
+  -- The history keeps its earlier entries (their stage set to null by the foreign key).
+  elsif new.leadership_stage_id is null
+        and not exists (select 1 from public.leadership_stages s where s.id = old.leadership_stage_id) then
+    return null;
   end if;
   insert into public.leadership_stage_changes (church_id, membership_id, person_id, unit_id, from_stage_id, to_stage_id, changed_by)
   values (new.church_id, new.id, new.person_id, new.unit_id,
@@ -221,6 +228,20 @@ begin
 end $$;
 revoke all on function public.remove_person_pathway(uuid) from public, anon;
 grant execute on function public.remove_person_pathway(uuid) to authenticated, service_role;
+
+-- SECURITY REVIEW 27 (P01): the three functions above log to the audit log under the table
+-- 'person_pathway', and 'set_pathway' carries the stage and the date reached. The Operations
+-- Lead reads the audit log apart from the faith and pastoral entries, so they could read every
+-- member's pathway there, and who looked at whose. Pathway entries are now kept from them as
+-- faith entries are (F04, W01): the Resident Pastor alone reads them. audit_read is re-created
+-- whole from migration 26 with 'person_pathway' and the three pathway actions added.
+drop policy audit_read on public.audit_log;
+create policy audit_read on public.audit_log for select to authenticated
+  using (church_id = (select app.current_church_id())
+         and ((select app.has_role('resident_pastor'))
+              or ((select app.has_role('operations_lead'))
+                  and coalesce(table_name, '') not in ('person_faith', 'pastoral_notes', 'one_to_ones', 'one_to_one_walk', 'person_pathway')
+                  and action not in ('view_faith', 'view_pastoral', 'view_walk', 'view_pathway', 'set_pathway', 'remove_pathway'))));
 
 -- -------------------------------------------------------------------------------------
 -- Anonymising (R8) removes both; re-created whole from migration 34 with the marked lines.

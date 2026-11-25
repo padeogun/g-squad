@@ -119,30 +119,35 @@ function StageBars({
   total: number;
   caption: string;
 }) {
+  // The caption sits above as plain text (the design system styles <caption> as a heading).
   return (
-    <table className="tec-table app-maturity-bars">
-      <caption className="type-caption">{caption}</caption>
-      <thead>
-        <tr>
-          <th scope="col">Stage</th>
-          <th scope="col">Members</th>
-          <th scope="col">Share</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r) => (
-          <tr key={r.stage}>
-            <th scope="row">{r.stage}</th>
-            <td>{r.members}</td>
-            <td>
-              <span className="app-maturity-bar" aria-hidden="true">
-                <span style={{ width: `${share(r.members, total)}%` }} />
-              </span>
-            </td>
+    <>
+      <p className="type-caption" style={{ margin: 0 }}>
+        {caption}
+      </p>
+      <table className="tec-table app-maturity-bars" aria-label={caption}>
+        <thead>
+          <tr>
+            <th scope="col">Stage</th>
+            <th scope="col">Members</th>
+            <th scope="col">Share</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.stage}>
+              <td>{r.stage}</td>
+              <td>{r.members}</td>
+              <td>
+                <span className="app-maturity-bar" aria-hidden="true">
+                  <span style={{ width: `${share(r.members, total)}%` }} />
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
   );
 }
 

@@ -4731,6 +4731,75 @@ select test.ok((select count(*) from public.person_pathway where person_id = tes
                and (select count(*) from public.leadership_stage_changes where person_id = test.id('pQ')) = 0,
                'R35: anonymising removes their pathway and stage history');
 
+-- ---------- Security review 27 ----------
+-- P01: the audit log's pathway entries (stage and date, who looked) are for the Resident
+-- Pastor alone, as faith entries are; the Operations Lead reads the rest of the log.
+select test.login('ops'); set role authenticated;
+select test.ok((select count(*) from public.audit_log where table_name = 'person_pathway'
+                  or action in ('view_pathway', 'set_pathway', 'remove_pathway')) = 0,
+               'P01: the Operations Lead does not read pathway entries in the audit log');
+select test.ok((select count(*) from public.audit_log where action = 'export_person') > 0,
+               'P01: ... but still reads the rest of it');
+reset role;
+select test.login('rp'); set role authenticated;
+select test.ok((select count(*) from public.audit_log where action = 'set_pathway') > 0,
+               'P01: the Resident Pastor reads them');
+reset role;
+
+-- P02: the Coordinator's removal of a pairing (allowed at any time) is logged.
+select test.login('');
+select test.ok((select count(*) from public.audit_log where action = 'remove_pairing' and record_id = test.id('pN')
+                  and actor_id = test.id('coord') and detail ? 'started_on') >= 2,
+               'P02: removing a pairing is logged, with who removed it and the pairing');
+select test.ok(not exists (select 1 from public.audit_log where action = 'remove_pairing'
+                          and (record_id = test.id('pY') or detail ->> 'mentor' = test.id('pY')::text)),
+               'P02: ... but not the pairings anonymising on request removes (T03)');
+
+-- P03: a leadership stage in use can still be taken off the reference list.
+select test.login('');
+insert into public.leadership_stages (church_id, sort_order, name) select test.id('churchA'), max(sort_order) + 1, 'Review 27 stage' from public.leadership_stages where church_id = test.id('churchA');
+insert into test.ids select 'ls27', id from public.leadership_stages where church_id = test.id('churchA') and name = 'Review 27 stage';
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$update public.unit_memberships set leadership_stage_id = %L where person_id = %L and unit_id = %L$q$,
+                         test.id('ls27'), test.id('pN'), test.id('A1')),
+                  'P03: the Team Lead moves a member to a new stage');
+reset role;
+select test.login('');
+create temp table t_p03 as select count(*) as n from public.leadership_stage_changes where person_id = test.id('pN');
+select test.login('ops'); set role authenticated;
+select test.lives(format('delete from public.leadership_stages where id = %L', test.id('ls27')),
+                  'P03: the Operations Lead deletes a stage that is in use');
+reset role;
+select test.login('');
+select test.ok((select leadership_stage_id from public.unit_memberships where person_id = test.id('pN') and unit_id = test.id('A1')) is null
+               and (select count(*) from public.leadership_stage_changes where person_id = test.id('pN')) = (select n from t_p03)
+               and exists (select 1 from public.leadership_stage_changes where person_id = test.id('pN')
+                           and from_stage_id = test.id('lsDev') and to_stage_id is null),
+               'P03: ... the membership loses it, and the history keeps its entries (that stage now blank) without a new one');
+drop table t_p03;
+
+-- P04: a pairing dated to start later does not stop its member being marked as left.
+select test.login('');
+do $$
+declare v uuid;
+begin
+  insert into public.people (church_id, first_name, surname, email, date_joined)
+  values (test.id('churchA'), 'Fen', 'Future', 'fen.future@example.org', current_date - 90) returning id into v;
+  insert into test.ids values ('pF', v);
+  insert into public.unit_memberships (church_id, person_id, unit_id) values (test.id('churchA'), v, test.id('A1'));
+  insert into public.member_mentors (church_id, person_id, mentor_person_id, kind, started_on)
+  values (test.id('churchA'), v, test.id('pM'), 'buddy', current_date + 5);
+end $$;
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$update public.member_mentors set ended_on = current_date + 5 where person_id = %L$q$, test.id('pF')),
+                   'P04: a Team Lead still cannot end a pairing in the future while both are members');
+select test.lives(format($q$update public.people set status = 'left', date_left = current_date where id = %L$q$, test.id('pF')),
+                  'P04: the Team Lead marks the member with a future pairing as left');
+reset role;
+select test.login('');
+select test.ok((select ended_on from public.member_mentors where person_id = test.id('pF')) = current_date + 5,
+               'P04: ... and that pairing ends the day it would have started');
+
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail
 from test.results order by n;
