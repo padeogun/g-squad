@@ -17,7 +17,7 @@
 //                    verified in Resend
 //   APP_URL          optional; the app's address for links (defaults to the live app)
 //   ALLOWED_ORIGINS  optional; as invite-leader
-// Until the DPIA is signed only the test list receives email (church_settings.newsletter_live).
+// Until sending to members is switched on at go-live, only the test list receives email (church_settings.newsletter_live).
 // -------------------------------------------------------------------------------------
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.119.0';
 import { corsHeaders, defaultOrigins, parseOrigins, PRODUCTION_ORIGINS } from '../invite-leader/logic.ts';

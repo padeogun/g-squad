@@ -1,8 +1,9 @@
 // -------------------------------------------------------------------------------------
 // Two cards on an event's page (migration 36, decisions of 27 Nov 2026):
-//   Who attended   check-in for each day of the event that has come, like Sunday check-in.
-//                  The event's owner (or the Operations Lead) ticks anyone they can see; a
-//                  Team Lead or the Coordinator ticks the members they look after. Members who
+//   Who attended   check-in for each day of the event that has come, while the event is live
+//                  (approved or under way), like Sunday check-in. The event's owner, the
+//                  Operations Lead or the Coordinator tick anyone they can see; a Team Lead
+//                  ticks the members they look after (decisions of 27 Nov 2026). Members who
 //                  RSVP'd through the Brief are listed first. Attending a prayer, Bible study or
 //                  discipleship event counts as a maturity habit: a fact, never a score.
 //   Planning committee   the G-Squad members on the event's committee. Seats on live events
@@ -33,7 +34,8 @@ export function AttendanceCard({ p, maturity }: { p: ProjectRow; maturity: boole
   const [day, setDay] = useState(() => defaultAttendanceDay(days, today));
   // SECURITY REVIEW 28 (Ann A02): the database opens the list only for a day of an approved
   // event, so it is not asked for otherwise.
-  const open = ['approved', 'in_progress', 'done'].includes(p.status);
+  // Decision of 27 Nov 2026: attendance only while the event is live (approved or under way).
+  const open = ['approved', 'in_progress'].includes(p.status);
   const list = useCandidates(p.id, day, open && days.length > 0);
   const mark = useMarkAttendance(p.id, day);
   const [filter, setFilter] = useState('');
@@ -48,7 +50,8 @@ export function AttendanceCard({ p, maturity }: { p: ProjectRow; maturity: boole
       <p className="type-caption" style={{ margin: 0 }}>
         Tick the G-Squad members who came.{' '}
         {maturity ? 'This is a prayer, Bible study or discipleship event, so attending counts as a maturity habit. ' : ''}
-        You can tick members you look after; the event's owner can tick anyone they can see. Those who replied to the Brief come first.
+        Team Leads tick the members they look after; the event's owner, the Operations Lead and the Coordinator can tick anyone they can see. Attendance
+        is taken while the event is live; those who replied to the Brief come first.
       </p>
       <div className="tec-fields">
         {days.length > 1 && (

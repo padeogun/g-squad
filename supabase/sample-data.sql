@@ -1,8 +1,8 @@
 -- =====================================================================================
 -- G-Squad Planner: made-up sample data for trying every function before go-live.
 --
--- Why this file exists: until the DPIA is signed the database may hold fictional data only
--- (CLAUDE.md), yet most screens are empty without members, Sundays and projects. This fills
+-- Why this file exists: until go-live (CLAUDE.md: privacy notice given, supplier terms filed)
+-- the database may hold fictional data only, yet most screens are empty without members, Sundays and projects. This fills
 -- them with invented people so each role's screens have something to work on.
 --
 -- How it runs: by hand only, from GitHub > Actions > "Sample data" > Run workflow (never by
@@ -74,9 +74,18 @@ begin
     raise exception 'Run supabase/seed.sql first: the church is missing';
   end if;
   -- SECURITY REVIEW 21 (K03): once the Resident Pastor has switched on sending to members
-  -- (after the DPIA), this is a live church: invented people must never be mixed in again.
+  -- (at go-live), this is a live church: invented people must never be mixed in again.
   if exists (select 1 from public.church_settings where church_id = v_church and newsletter_live) then
     raise exception 'Sending to members is switched on, so this church is live: sample data is not loaded';
+  end if;
+  -- SECURITY REVIEW 29 (R05): go-live is now the checklist, not the newsletter switch, so real
+  -- members may be imported before sending is switched on. More than 10 people who are neither
+  -- sample people nor leaders means a real import has begun: refuse rather than mix them.
+  if (select count(*) from public.people p
+       where p.church_id = v_church
+         and (p.email is null or p.email not like '%@g-squad.example')
+         and not exists (select 1 from public.app_users u where u.person_id = p.id)) > 10 then
+    raise exception 'Real members are in this church, so it is live: sample data is not loaded';
   end if;
   if exists (select 1 from public.people where email like '%@g-squad.example') then
     raise notice 'Sample data is already loaded; nothing changed';

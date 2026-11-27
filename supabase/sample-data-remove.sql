@@ -1,7 +1,7 @@
 -- =====================================================================================
 -- G-Squad Planner: removes the made-up sample data loaded by supabase/sample-data.sql.
 --
--- Why: real member data may go in only after the DPIA is signed, and it must not sit beside
+-- Why: real member data may go in only at go-live (CLAUDE.md), and it must not sit beside
 -- invented people. Run this before go-live (slice 7) from GitHub > Actions > "Sample data"
 -- > Run workflow, choosing "remove".
 --

@@ -8,7 +8,7 @@
 //      decides every row as it does for one member: the G-Squad Coordinator and Operations
 //      Lead add to any team, a Team Lead to their own; faith fields only from the Coordinator
 //      or the team's Team Lead, through the logged faith function.
-// Sample data only until the DPIA is signed (CLAUDE.md).
+// Sample data only until the go-live checklist is done (CLAUDE.md; decision of 27 Nov 2026).
 // -------------------------------------------------------------------------------------
 import { useState, type ChangeEvent } from 'react';
 import { Link } from 'react-router-dom';
@@ -133,7 +133,7 @@ export function ImportMembers() {
         <Link to="/members">All members</Link>
       </p>
       <Notice tone="warn" title="Sample data only">
-        Use made-up members until the data protection impact assessment (DPIA) is signed.
+        Use made-up members until go-live: the privacy notice has gone to members and the suppliers' data terms are filed.
       </Notice>
 
       <Card title="1. Prepare the file">

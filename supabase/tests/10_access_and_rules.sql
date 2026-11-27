@@ -4945,28 +4945,27 @@ end $$;
 select test.ok(app.is_maturity_event(test.id('evDisc')) and app.is_maturity_event(test.id('evBible')) and not app.is_maturity_event(test.id('evPicnic')),
                'SECURITY REVIEW 28 (Ann A01): a maturity event is one of a marked type or with Discipleship as its primary aim');
 
--- A01: attendance at a maturity event is not read by roles that cannot see the member's faith.
+-- A01, widened by Paul's decision of 27 Nov 2026: the Operations Lead records and reads
+-- attendance at every event, maturity events included.
 select test.login('ops'); set role authenticated;
-select test.ok((select count(*) from public.event_attendance where project_id = test.id('evBible')) = 0,
-               'SECURITY REVIEW 28 (Ann A01): the Operations Lead does not read who came to a Bible study');
-select test.throws(format($q$insert into public.event_attendance (project_id, person_id, attended_on) values (%L, %L, (now() - interval '1 day')::date)$q$,
-                          test.id('evDisc'), test.id('pM')),
-                   'SECURITY REVIEW 28 (Ann A01): ... nor records anyone at a maturity event they do not own');
-select test.ok((public.person_engagement(test.id('pN')) -> 'maturity_attended') = 'null'::jsonb
-               and (public.person_engagement(test.id('pN')) ->> 'events_attended')::int = 0,
-               'SECURITY REVIEW 28 (Ann A01): ... a member''s facts leave maturity events out for them');
-select test.ok((public.team_engagement(test.id('A1')) -> 'attended_maturity') = 'null'::jsonb,
-               'SECURITY REVIEW 28 (Ann A01): ... and so does a team''s engagement');
-select test.ok(not exists (select 1 from jsonb_array_elements(public.maturity_report() -> 'teams') t where t -> 'attended_maturity' <> 'null'::jsonb)
-               and (public.maturity_report() -> 'habits' ->> 'members_attending')::int >= 1,
-               'SECURITY REVIEW 28 (Ann A01): ... the Maturity report gives them church-wide habit totals but no maturity counts per team');
+select test.ok((select count(*) from public.event_attendance where project_id = test.id('evBible')) >= 1,
+               'D27: the Operations Lead reads who came to a Bible study');
+select test.lives(format($q$insert into public.event_attendance (project_id, person_id, attended_on) values (%L, %L, (now() - interval '1 day')::date)$q$,
+                         test.id('evDisc'), test.id('pM')),
+                  'D27: ... and records a member at a maturity event they do not own');
+select test.ok((public.person_engagement(test.id('pN')) ->> 'maturity_attended')::int >= 1,
+               'D27: ... a member''s facts include maturity events for them');
+select test.ok((public.team_engagement(test.id('A1')) -> 'attended_maturity') <> 'null'::jsonb,
+               'D27: ... and so does a team''s engagement');
+select test.ok(exists (select 1 from jsonb_array_elements(public.maturity_report() -> 'teams') t where t -> 'attended_maturity' <> 'null'::jsonb),
+               'D27: ... and the Maturity report gives them maturity counts per team');
 select test.lives(format($q$insert into public.event_attendance (project_id, person_id, attended_on) values (%L, %L, (now() - interval '1 day')::date)$q$,
                          test.id('evPicnic'), test.id('pM')),
-                  'SECURITY REVIEW 28 (Ann A01): the Operations Lead still records anyone at an event that is not a maturity event');
+                  'SECURITY REVIEW 28 (Ann A01): the Operations Lead records anyone at an event that is not a maturity event');
 select test.ok((select count(*) from public.event_attendance where project_id = test.id('evPicnic')) = 1,
                'SECURITY REVIEW 28 (Ann A01): ... and reads it');
-select test.ok(not (public.export_person(test.id('pN'))::text like '%Tuesday Bible study%'),
-               'SECURITY REVIEW 28 (Ann A01): the Operations Lead''s export leaves out maturity events');
+select test.ok(public.export_person(test.id('pN'))::text like '%Tuesday Bible study%',
+               'D27: the Operations Lead''s export includes maturity events');
 reset role;
 select test.login('pastoral'); set role authenticated;
 select test.ok((select count(*) from public.event_attendance where project_id = test.id('evBible')) = 0
@@ -5009,6 +5008,74 @@ select test.ok((select count(*) from public.event_attendance_candidates(test.id(
                'SECURITY REVIEW 28 (Ann A02): ... and still for a day of the event that has come');
 reset role;
 select test.login('');
+
+-- ---------- Decisions of 27 Nov 2026: attendance only while an event is live ----------
+select test.login('');
+do $$
+declare v uuid;
+begin
+  insert into public.projects (church_id, level, unit_id, name, starts_at, ends_at, status, is_event, owner_user_id)
+  values (test.id('churchA'), 'unit', test.id('A1'), 'Autumn walk', now() - interval '3 days', now() - interval '1 day', 'in_progress', true, test.id('ul_a')) returning id into v;
+  insert into test.ids values ('evWalk', v);
+end $$;
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$insert into public.event_attendance (project_id, person_id, attended_on) values (%L, %L, (now() - interval '3 days')::date), (%L, %L, (now() - interval '1 day')::date)$q$,
+                         test.id('evWalk'), test.id('pN'), test.id('evWalk'), test.id('pN')),
+                  'D27: attendance is taken while an event is under way');
+update public.projects set starts_at = now() - interval '2 days' where id = test.id('evWalk');
+select test.ok((select count(*) from public.event_attendance where project_id = test.id('evWalk')) = 1,
+               'D27: moving an event removes entries for days no longer in it');
+reset role;
+select test.login('');
+update public.projects set status = 'done' where id = test.id('evWalk');
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$insert into public.event_attendance (project_id, person_id, attended_on) values (%L, %L, (now() - interval '2 days')::date)$q$,
+                          test.id('evWalk'), test.id('pM')),
+                   'D27: no attendance once an event is done');
+select test.throws(format('select * from public.event_attendance_candidates(%L, (now() - interval ''2 days'')::date)', test.id('evWalk')),
+                   'D27: ... nor a check-in list');
+-- SECURITY REVIEW 29 (R04): once done, a tick can't be taken off (it couldn't be put back).
+select test.throws(format('delete from public.event_attendance where project_id = %L', test.id('evWalk')),
+                   'R29: attendance at a finished event is not removed by hand');
+reset role;
+-- SECURITY REVIEW 29 (R01): changing a finished event's dates keeps its record.
+select test.login('');
+update public.projects set starts_at = now() - interval '6 days', ends_at = now() - interval '5 days' where id = test.id('evWalk');
+select test.ok((select count(*) from public.event_attendance where project_id = test.id('evWalk')) = 1,
+               'R29: moving a finished event keeps its attendance');
+update public.projects set status = 'cancelled' where id = test.id('evWalk');
+select test.ok((select count(*) from public.event_attendance where project_id = test.id('evWalk')) = 1,
+               'R29: ... and so does cancelling it afterwards');
+-- Cancelling a live event, as its owner through the guards, removes its attendance and logs it (R02).
+do $$
+declare v uuid;
+begin
+  insert into public.projects (church_id, level, unit_id, name, starts_at, ends_at, status, is_event, owner_user_id)
+  values (test.id('churchA'), 'unit', test.id('A1'), 'Winter walk', now() - interval '1 day', now() + interval '1 day', 'in_progress', true, test.id('ul_a')) returning id into v;
+  insert into test.ids values ('evWalk2', v);
+end $$;
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$insert into public.event_attendance (project_id, person_id, attended_on) values (%L, %L, (now() - interval '1 day')::date)$q$,
+                         test.id('evWalk2'), test.id('pN')),
+                  'R29: attendance taken at a live event');
+select test.lives(format($q$update public.projects set status = 'cancelled' where id = %L$q$, test.id('evWalk2')),
+                  'R29: the owner cancels the live event');
+reset role;
+select test.login('');
+select test.ok((select count(*) from public.event_attendance where project_id = test.id('evWalk2')) = 0,
+               'D27: cancelling a live event removes its attendance');
+select test.ok(exists (select 1 from public.audit_log where action = 'attendance_removed_by_event_change'
+                         and record_id = test.id('evWalk2') and (detail ->> 'removed')::int = 1
+                         and detail ->> 'reason' = 'cancelled' and actor_id = test.id('ul_a')),
+               'R29: the removal is logged with who, how many and why');
+-- SECURITY REVIEW 29 (R03): a member's engagement read with maturity counts is logged.
+select test.login('ops'); set role authenticated;
+select public.person_engagement(test.id('pN'));
+reset role;
+select test.login('');
+select test.ok(exists (select 1 from public.audit_log where action = 'view_engagement' and record_id = test.id('pN')
+                         and actor_id = test.id('ops')),
+               'R29: reading a member''s maturity attendance is logged');
 
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail

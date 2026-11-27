@@ -3,9 +3,12 @@
 -- in leaders' load (decisions of 27 Nov 2026, Paul).
 --
 -- 1. Event attendance (event_attendance): who attended an event, recorded by check-in like a
---    Sunday. The event's owner (or the Operations Lead) records anyone they can see; a Team
---    Lead or the G-Squad Coordinator records members they look after. Members who RSVP'd
---    through The Greatness Brief are listed first (event_attendance_candidates).
+--    Sunday. The event's owner, the Operations Lead or the G-Squad Coordinator records anyone
+--    they can see; a Team Lead records members they look after. Members who RSVP'd through
+--    The Greatness Brief are listed first (event_attendance_candidates). Decisions of 27 Nov
+--    2026: this holds at every event, maturity events included; attendance is taken only while
+--    an event is live (approved or under way); cancelling a live event removes its entries and
+--    moving its dates removes days outside them (logged; a finished event's record is kept).
 -- 2. Maturity habits: prayer can't be tracked, but attending maturity events can. A maturity
 --    event is one whose event type is marked "counts as a maturity habit" (Prayer and the new
 --    Bible study type to start) or whose primary aim is Discipleship & Maturity
@@ -20,9 +23,14 @@
 --    over either limit flags a pastoral check-in as before (flag, never block).
 -- Anonymising removes attendance and committee seats; export_person includes them.
 -- SECURITY REVIEW 28 (Ann): attendance at maturity events is read (and counted per person or
--- per team) only by those who may see the member's faith, and by the event's own owner (A01);
+-- per team) only by those who may see the member's faith, the event's own owner and (decision of
+-- 27 Nov 2026) the Operations Lead (A01);
 -- the check-in list opens only for a day of an approved event (A02); committee seats count in
 -- leaders' load once the event is approved (A03).
+-- SECURITY REVIEW 29: a finished event's attendance is never removed by a later change (R01);
+-- removals caused by cancelling or moving an event are logged (R02); a member's engagement read
+-- with maturity counts is logged, as faith reads are (R03); entries can be removed by hand only
+-- while the event is live (R04).
 -- =====================================================================================
 
 -- -------------------------------------------------------------------------------------
@@ -70,34 +78,35 @@ comment on table public.event_attendance is
   'Who attended an event, by check-in (migration 36). Facts only, never a score.';
 
 -- Who may record a member's attendance at an event: the event's manager, for anyone they can
--- see; or the member's Team Lead or the G-Squad Coordinator (app.can_edit_person).
--- SECURITY REVIEW 28 (Ann A01): attending a prayer, Bible study or discipleship event (a
--- maturity event) tells of a member's faith practice, so it is handled as courses and the
--- pathway are (decisions of 25 Nov 2026): the Operations Lead records it only at events they
--- own. Before, the Operations Lead could record, and so read, anyone at any maturity event.
+-- see; the Operations Lead, for anyone they can see; or the member's Team Lead or the G-Squad
+-- Coordinator (app.can_edit_person). SECURITY REVIEW 28 (A01) first limited the Operations Lead
+-- to their own maturity events; Paul's decision of 27 Nov 2026 restored them at every event.
 create or replace function app.can_record_attendance(p_project uuid, p_person uuid) returns boolean
 language sql stable security definer set search_path = ''
 as $$
+  -- Decision of 27 Nov 2026 (Paul): the Operations Lead, the G-Squad Coordinator and the
+  -- member's Team Lead record attendance at every event, maturity events included (the
+  -- Coordinator and Team Lead through app.can_edit_person). This widens review 28's A01.
   select (app.can_read_person(p_person)
-          and (app.owns_project(p_project)
-               or (app.has_role('operations_lead') and not app.is_maturity_event(p_project))))
+          and (app.owns_project(p_project) or app.has_role('operations_lead')))
       or app.can_edit_person(p_person)
 $$;
 revoke all on function app.can_record_attendance(uuid, uuid) from public, anon;
 grant execute on function app.can_record_attendance(uuid, uuid) to authenticated, service_role;
 
 -- SECURITY REVIEW 28 (Ann A01): who may read an entry. The event's owner, for their own event
--- (they ran it); the Operations Lead, for events that are not maturity events; and those who
+-- (they ran it); the Operations Lead, at every event (decision of 27 Nov 2026); and those who
 -- can read the member, except that an entry at a maturity event needs someone who may see the
 -- member's faith (Team Lead, Deputy, Coordinator, Resident Pastor, TECi Coordinator) or edit
--- the member. Before, anyone who could read the member (Pastoral Lead, Purpose Heads, owners
--- of projects the member served on) and the Operations Lead read who came to prayer meetings.
+-- the member. So the Pastoral Lead, Purpose Heads and owners of other projects do not read who
+-- came to prayer meetings.
 create or replace function app.can_read_attendance(p_project uuid, p_person uuid) returns boolean
 language sql stable security definer set search_path = ''
 as $$
+  -- Decision of 27 Nov 2026: the Operations Lead records at every event, so reads every entry.
   select app.owns_project(p_project)
-      or (not app.is_maturity_event(p_project)
-          and (app.has_role('operations_lead') or app.can_read_person(p_person)))
+      or app.has_role('operations_lead')
+      or (not app.is_maturity_event(p_project) and app.can_read_person(p_person))
       or (app.is_maturity_event(p_project)
           and app.can_read_person(p_person)
           and (app.can_see_faith(p_person) or app.can_edit_person(p_person)))
@@ -120,9 +129,23 @@ begin
     if not exists (select 1 from public.projects p where p.id = old.project_id) or app.person_gone(old.person_id) then
       return old;
     end if;
+    -- Decision of 27 Nov 2026: entries go when their event is cancelled, or moved so that the
+    -- day is no longer one of its days (app.attendance_follows_event, below, which logs them).
+    -- SECURITY REVIEW 29 (R01): never for a finished event, whose record is kept.
+    if exists (select 1 from public.projects p where p.id = old.project_id and p.status <> 'done'
+               and (p.status = 'cancelled'
+                    or old.attended_on < (p.starts_at at time zone 'Europe/London')::date
+                    or old.attended_on > (p.ends_at at time zone 'Europe/London')::date)) then
+      return old;
+    end if;
     if not app.can_record_attendance(old.project_id, old.person_id) then
-      raise exception 'Only the event''s owner, or the member''s Team Lead or the G-Squad Coordinator, can change attendance'
+      raise exception 'Only the event''s owner, the Operations Lead, or the member''s Team Lead or the G-Squad Coordinator, can change attendance'
         using errcode = '42501';
+    end if;
+    -- SECURITY REVIEW 29 (R04): ticks are taken off only while they can be put back, that is
+    -- while the event is live; a finished event's attendance stays as recorded.
+    if not exists (select 1 from public.projects p where p.id = old.project_id and p.status in ('approved', 'in_progress')) then
+      raise exception 'Attendance is changed while an event is live (approved or under way)' using errcode = '23514';
     end if;
     return old;
   end if;
@@ -132,14 +155,16 @@ begin
     into v_p
     from public.projects p where p.id = new.project_id and p.church_id = app.current_church_id();
   if v_p is null or not app.can_record_attendance(new.project_id, new.person_id) then
-    raise exception 'Only the event''s owner, or the member''s Team Lead or the G-Squad Coordinator, can record attendance'
+    raise exception 'Only the event''s owner, the Operations Lead, or the member''s Team Lead or the G-Squad Coordinator, can record attendance'
       using errcode = '42501';
   end if;
   if not v_p.is_event or app.is_sunday_project(new.project_id) then
     raise exception 'Attendance is recorded for events (Sundays have their own check-in)' using errcode = '23514';
   end if;
-  if v_p.status not in ('approved', 'in_progress', 'done') then
-    raise exception 'Attendance is recorded once an event is approved' using errcode = '23514';
+  -- Decision of 27 Nov 2026: attendance is taken only while the event is live (approved or
+  -- under way), never once it is done or cancelled.
+  if v_p.status not in ('approved', 'in_progress') then
+    raise exception 'Attendance is taken while an event is live (approved or under way)' using errcode = '23514';
   end if;
   if new.attended_on > v_today or new.attended_on < v_p.d0 or new.attended_on > v_p.d1 then
     raise exception 'Choose a day of the event that has come' using errcode = '23514';
@@ -169,6 +194,46 @@ create policy event_attendance_insert on public.event_attendance for insert to a
 create policy event_attendance_delete on public.event_attendance for delete to authenticated
   using (church_id = (select app.current_church_id()) and app.can_record_attendance(project_id, person_id));
 
+-- Decision of 27 Nov 2026: attendance counts only for a live event. When an event is cancelled
+-- its entries are removed; when its dates move, entries for days no longer in it are removed.
+-- SECURITY REVIEW 29 (R01): a finished event (done before or after the change) keeps its record,
+-- so a later edit can't erase maturity history. (R02): each removal is logged with the count
+-- and the reason, so the owner can't erase entries others recorded without a trace.
+create or replace function app.attendance_follows_event() returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  v_n integer := 0;
+  v_why text;
+begin
+  if old.status = 'done' or new.status = 'done' then
+    return null;
+  end if;
+  if new.status = 'cancelled' then
+    delete from public.event_attendance a where a.project_id = new.id;
+    get diagnostics v_n = row_count;
+    v_why := 'cancelled';
+  elsif new.starts_at is distinct from old.starts_at or new.ends_at is distinct from old.ends_at then
+    delete from public.event_attendance a
+     where a.project_id = new.id
+       and (a.attended_on < (new.starts_at at time zone 'Europe/London')::date
+            or a.attended_on > (new.ends_at at time zone 'Europe/London')::date);
+    get diagnostics v_n = row_count;
+    v_why := 'dates_moved';
+  end if;
+  if v_n > 0 then
+    perform app.audit('attendance_removed_by_event_change', 'event_attendance', new.id,
+                      jsonb_build_object('removed', v_n, 'reason', v_why));
+  end if;
+  return null;
+end $$;
+revoke all on function app.attendance_follows_event() from public, anon, authenticated;
+grant execute on function app.attendance_follows_event() to service_role;
+create trigger projects_attendance_follows_event after update of status, starts_at, ends_at on public.projects
+  for each row when (new.status is distinct from old.status or new.starts_at is distinct from old.starts_at
+                     or new.ends_at is distinct from old.ends_at)
+  execute function app.attendance_follows_event();
+
 -- The check-in list for one day of an event: the members this leader may record, those who
 -- RSVP'd first, with whether they are already marked. Names only for members the caller can
 -- read anyway.
@@ -186,11 +251,11 @@ begin
   -- guard checks). RSVPs are otherwise read by no signed-in user (only counts, migration 6);
   -- before, any leader could list their members' RSVPs to any project, draft or not, at any time.
   if not exists (select 1 from public.projects p
-                 where p.id = p_project and p.is_event and p.status in ('approved', 'in_progress', 'done')
+                 where p.id = p_project and p.is_event and p.status in ('approved', 'in_progress')   -- live only (27 Nov 2026)
                    and p_on <= v_today
                    and p_on between (p.starts_at at time zone 'Europe/London')::date and (p.ends_at at time zone 'Europe/London')::date)
      or app.is_sunday_project(p_project) then
-    raise exception 'Choose a day of an approved event that has come' using errcode = '23514';
+    raise exception 'Choose a day that has come of an event that is live' using errcode = '23514';
   end if;
   return query
     select x.id, (x.first_name || ' ' || x.surname)::text,
@@ -349,7 +414,7 @@ grant execute on function public.leaders_carrying_too_much() to authenticated, s
 -- -------------------------------------------------------------------------------------
 create or replace function public.person_engagement(p_person uuid, p_quarter date default null)
 returns jsonb
-language plpgsql stable security definer set search_path = ''
+language plpgsql volatile security definer set search_path = ''   -- volatile: it logs (review 29 R03)
 as $$
 declare
   v_q date := date_trunc('quarter', coalesce(p_quarter, (now() at time zone 'Europe/London')::date))::date;
@@ -362,7 +427,12 @@ begin
   -- SECURITY REVIEW 28 (Ann A01): maturity events are counted only for a caller who may see
   -- the member's faith (or edit the member); for others maturity_attended is null and
   -- events_attended leaves maturity events out, so the one can't be worked out from the other.
-  v_faith := app.can_see_faith(p_person) or app.can_edit_person(p_person);
+  -- Decision of 27 Nov 2026: the Operations Lead, who records at every event, sees them too.
+  v_faith := app.can_see_faith(p_person) or app.can_edit_person(p_person) or app.has_role('operations_lead');
+  -- SECURITY REVIEW 29 (R03): a read that includes maturity attendance is logged, as faith reads are.
+  if v_faith then
+    perform app.audit('view_engagement', 'event_attendance', p_person, jsonb_build_object('quarter', v_q));
+  end if;
   return jsonb_build_object(
     'quarter_start', v_q,
     'events_attended', (select count(*) from public.event_attendance a
@@ -399,9 +469,9 @@ begin
   end if;
   -- SECURITY REVIEW 28 (Ann A01): in a small team a count is a person. Maturity events are
   -- counted only for those who may see these members' faith: the team's Lead or Deputy, the
-  -- Coordinator, the Resident Pastor. For the Operations Lead and Purpose Heads,
-  -- attended_maturity is null and "attended" leaves maturity events out.
-  v_faith := app.sees_unit(p_unit) or app.has_any_role(array['resident_pastor','gsquad_coordinator']::public.app_role[]);
+  -- Coordinator, the Resident Pastor and (decision of 27 Nov 2026) the Operations Lead. For
+  -- Purpose Heads, attended_maturity is null and "attended" leaves maturity events out.
+  v_faith := app.sees_unit(p_unit) or app.has_any_role(array['resident_pastor','gsquad_coordinator','operations_lead']::public.app_role[]);   -- Ops Lead: decision of 27 Nov 2026
   select jsonb_build_object(
            'quarter_start', v_q,
            'members', count(distinct m.person_id),
@@ -558,12 +628,13 @@ begin
                      end,
     -- Migration 36: events attended and planning committee seats.
     -- SECURITY REVIEW 28 (Ann A01): maturity events only for a caller who may see the
-    -- member's faith (the Resident Pastor), as courses and the pathway above.
+    -- member's faith (the Resident Pastor) and the Operations Lead (decision of 27 Nov 2026).
     'events_attended', (select coalesce(jsonb_agg(jsonb_build_object('event', p.name, 'attended_on', ea.attended_on)
                                                   order by ea.attended_on), '[]')
                         from public.event_attendance ea join public.projects p on p.id = ea.project_id
                         where ea.person_id = p_person
-                          and (app.can_see_faith(p_person) or not app.is_maturity_event(ea.project_id))),
+                          and (app.can_see_faith(p_person) or app.has_role('operations_lead')   -- Ops Lead: decision of 27 Nov 2026
+                               or not app.is_maturity_event(ea.project_id))),
     'committees',      (select coalesce(jsonb_agg(jsonb_build_object('event', p.name, 'role', cm.role) order by p.starts_at), '[]')
                         from public.project_committee_members cm join public.projects p on p.id = cm.project_id
                         where cm.person_id = p_person)
@@ -598,10 +669,10 @@ begin
   end if;
   -- SECURITY REVIEW 28 (Ann A01): team by team, a count in a small team is a person, so
   -- maturity events are counted per team only for the Coordinator and the Resident Pastor (who
-  -- may see every member's faith). For the others the team's attended_maturity is null and
+  -- may see every member's faith) and the Operations Lead (decision of 27 Nov 2026). For the others the team's attended_maturity is null and
   -- took_part leaves maturity events out. Church-wide habit totals stay for all five roles,
   -- as the pathway counts do (review 27, P05).
-  v_faith := app.has_any_role(array['gsquad_coordinator','resident_pastor']::public.app_role[]);
+  v_faith := app.has_any_role(array['gsquad_coordinator','resident_pastor','operations_lead']::public.app_role[]);   -- Ops Lead: decision of 27 Nov 2026
 
   -- Leadership: members at each stage now (active members in a live team place, counted once
   -- per stage), and moves to a later stage during the quarter.

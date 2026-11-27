@@ -1,8 +1,9 @@
 // -------------------------------------------------------------------------------------
 // The Greatness Brief: every issue, newest first, and starting the next one. Below, the
 // sending settings: the test list (the G-Squad Coordinator or Operations Lead) and the switch
-// that starts sending to members, which only the Resident Pastor may turn on, once the DPIA
-// is signed (decision of 25 Oct 2026; church_settings_guard, migration 27).
+// that starts sending to members, which only the Resident Pastor may turn on, at go-live
+// (decision of 25 Oct 2026; church_settings_guard, migration 27). Go-live waits for the
+// privacy notice, not the signed DPIA (decision of 27 Nov 2026).
 // Readers: editors, the Coordinator, the Resident Pastor and the Operations Lead (RLS).
 // -------------------------------------------------------------------------------------
 import { useState } from 'react';
@@ -150,7 +151,7 @@ function SendingSettings() {
         </Notice>
       ) : (
         <Notice tone="warn" title="Test list only">
-          Until the DPIA is signed, approved issues go only to the test list below, marked TEST. Members receive nothing.
+          Until sending to members is switched on at go-live, approved issues go only to the test list below, marked TEST. Members receive nothing.
         </Notice>
       )}
       <label className="tec-field" htmlFor="ns-tests">
@@ -187,7 +188,7 @@ function SendingSettings() {
         <div className="app-form">
           <Checkbox
             id="ns-dpia"
-            label="The DPIA for the newsletter is signed and members' real details are in the app."
+            label="Members have had the privacy notice and their real details are in the app."
             checked={dpia}
             onChange={(e) => setDpia(e.target.checked)}
           />

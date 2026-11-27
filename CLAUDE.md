@@ -9,7 +9,7 @@ Guidance for anyone (people or AI assistants) changing this codebase. See README
 - **Database changes are new migration files only.** Never edit an applied migration; add a new one. Regenerate types with `npm run db:types` and commit them.
 - **Only the publishable key in the browser.** No secret or service-role key in any `VITE_*` variable or in `src/`. Server-side work goes in Supabase Edge Functions.
 - **ASHLIE values are recognised, never scored** (business rule R20). No ratings, rankings or league tables of values.
-- **Sample data only** until the DPIA is signed.
+- **Sample data only** until the go-live checklist is done (privacy notice given, supplier data processing terms filed, open data decisions recorded). The DPIA is good practice, kept up to date with each new kind of data, but does not hold up go-live (decision of 27 Nov 2026). Never mix sample and real members.
 
 ## Conventions
 

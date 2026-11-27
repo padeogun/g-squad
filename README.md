@@ -56,7 +56,7 @@ Database changes are **always new migration files** in `supabase/migrations/`, n
 
 ## Data
 
-Until the data protection impact assessment (DPIA) is signed, the database holds **fictional sample data only**. No real member, faith or pastoral information goes in before then.
+Until go-live, the database holds **fictional sample data only**. Real member, faith and pastoral information goes in once the go-live checklist is done: the privacy notice has gone to members, the suppliers' data processing terms (Supabase, Netlify, Resend) are filed, and the open data decisions are recorded. The data protection impact assessment (DPIA) is good practice, completed alongside; it does not hold up go-live (leadership decision, 27 November 2026). Remove the sample data before real members go in.
 
 ### Test version: made-up data for every function
 

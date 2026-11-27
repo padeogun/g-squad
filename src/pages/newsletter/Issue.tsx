@@ -83,7 +83,7 @@ export function Issue() {
   const mode = i.send_live ?? live;
   const audience = mode
     ? `Goes to ${recipients.data ?? '…'} G-Squad members`
-    : `Test list only (${settings.data?.newsletter_test_recipients.length ?? 0} addresses) until the DPIA is signed`;
+    : `Test list only (${settings.data?.newsletter_test_recipients.length ?? 0} addresses) until sending to members is switched on`;
 
   return (
     <>
