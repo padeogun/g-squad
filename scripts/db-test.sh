@@ -209,6 +209,13 @@ expect "focus areas in the sample" "$(sq "select (select count(*) from public.pr
 expect "settling in, mentors and courses in the sample" "$(sq "select (select count(*) from public.assimilation_steps) = 5
   and (select count(*) from public.member_mentors where ended_on is null) = 3
   and (select count(*) from public.course_completions) > 30")" t
+# Migration 35: leadership stage history with moves this quarter and last, and pathway stages.
+# Migration 36: attendance at the prayer breakfast and the Bible study, and committee seats.
+expect "attendance and committees in the sample" "$(sq "select (select count(*) from public.event_attendance) >= 14
+  and (select count(*) from public.project_committee_members) = 5")" t
+expect "stage history and pathway in the sample" "$(sq "select (select count(*) from public.leadership_stage_changes where from_stage_id is not null) = 2
+  and (select count(*) from public.leadership_stage_changes where from_stage_id is null) >= 7
+  and (select count(distinct person_id) from public.person_pathway) = 28")" t
 expect "one input received" "$(sq "select count(*) from public.project_inputs where status = 'received' and received_at is not null")" 1
 expect "approval requests logged" "$(sq "select count(*) from public.audit_log where action = 'serving_approval_requested'")" 2
 expect "serving approvals waiting" "$(sq "select (select count(*) from public.unit_memberships where status = 'pending_approval') || ',' || (select count(*) from public.assignments where status = 'pending_approval')")" "1,1"

@@ -35,6 +35,14 @@ export const NAV: NavGroup[] = [
         roles: ['resident_pastor', 'purpose_head', 'gsquad_coordinator', 'unit_lead', 'deputy_unit_lead', 'operations_lead'],
       },
       { label: 'My Unit', path: '/my-unit', slice: 1, built: true },
+      // Migration 35: counts only, for the roles that read the monthly report.
+      {
+        label: 'Maturity report',
+        path: '/maturity',
+        slice: 7,
+        built: true,
+        roles: ['gsquad_coordinator', 'resident_pastor', 'purpose_head', 'operations_lead', 'pastoral_lead'],
+      },
     ],
   },
   {

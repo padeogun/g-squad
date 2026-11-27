@@ -160,4 +160,7 @@ select (select count(*) from public.people where email like '%@g-squad.example')
        -- Migration 34: settling-in steps, courses and pairings on real people (the sample
        -- ones go with the sample people); expected 0 before go-live, or checked one by one.
        (select count(*) from public.assimilation_steps) + (select count(*) from public.course_completions)
-         + (select count(*) from public.member_mentors) as other_growth_records_to_check;
+         + (select count(*) from public.member_mentors)
+         + (select count(*) from public.person_pathway)                                    -- migration 35: pathway too
+         + (select count(*) from public.event_attendance)
+         + (select count(*) from public.project_committee_members) as other_growth_records_to_check;   -- migration 36

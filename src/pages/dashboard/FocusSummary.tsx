@@ -6,6 +6,7 @@
 // the monthly report (it carries baptism counts, as that report does); the database checks.
 // -------------------------------------------------------------------------------------
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { TEC } from '../../design-system';
 import { friendlyError } from '../../data/errors';
 import { todayIso } from '../../data/sundays';
@@ -37,7 +38,8 @@ export function FocusSummaryCard() {
   return (
     <Card title="Four focus areas">
       <p className="type-caption" style={{ margin: 0 }}>
-        Events are assessed on the four areas; people never are. Counts only.
+        Events are assessed on the four areas; people never are. Counts only. Growth in discipleship and leadership is in the{' '}
+        <Link to="/maturity">quarterly Maturity report</Link>.
       </p>
       <Segmented label="Quarter" options={labels} value={q === thisQ ? labels[0] : labels[1]} onChange={(x) => setQ(x === labels[0] ? thisQ : lastQ)} />
       {summary.error && <Notice tone="danger">{friendlyError(summary.error)}</Notice>}

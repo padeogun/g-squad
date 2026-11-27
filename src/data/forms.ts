@@ -34,7 +34,7 @@ export interface FieldDef {
 
 export interface FormDef {
   id: string; // used in the address: /admin/forms/<id>
-  table: 'purposes' | 'units' | 'church_roles' | 'teci_stages' | 'leadership_stages' | 'community_types' | 'greatness_communities' | 'project_types' | 'course_types';
+  table: 'purposes' | 'units' | 'church_roles' | 'teci_stages' | 'leadership_stages' | 'community_types' | 'greatness_communities' | 'project_types' | 'course_types' | 'pathway_stages';
   title: string; // plural, for the list
   singular: string; // for buttons: "Add a unit"
   description: string;
@@ -190,6 +190,25 @@ export const FORMS: FormDef[] = [
       { key: 'description', label: 'Description', type: 'textarea', maxLength: 2000 },
     ],
   },
+  // Migration 35: the Maturity Team's discipleship pathway (approved at the December 2026
+  // retreat). Members' stages reached are kept like faith fields; this is only the list.
+  {
+    id: 'pathway',
+    table: 'pathway_stages',
+    title: 'Pathway stages',
+    singular: 'pathway stage',
+    description: 'The discipleship pathway: Encounter, Foundation, Community, Depth and Sending (the G-Squad is Stage 5).',
+    owner: 'Operations Lead or G-Squad Coordinator',
+    editRoles: ['operations_lead', 'gsquad_coordinator'],
+    orderBy: 'stage_no',
+    hasActive: true,
+    fields: [
+      { key: 'stage_no', label: 'Stage', type: 'number', required: true, min: 1, max: 20, inList: true },
+      NAME,
+      { key: 'description', label: 'Description', type: 'textarea', maxLength: 2000 },
+      { key: 'marker', label: 'How you know someone is at this stage', type: 'textarea', maxLength: 2000 },
+    ],
+  },
   {
     id: 'community-types',
     table: 'community_types',
@@ -253,6 +272,8 @@ export const FORMS: FormDef[] = [
         inList: true,
       },
       { key: 'newsletter_tag', label: 'Newsletter tag', type: 'text', maxLength: 50, inList: true },
+      // Migration 36: attending an event of this type counts as a maturity habit (Prayer, Bible study).
+      { key: 'maturity_habit', label: 'Attending counts as a maturity habit', type: 'boolean', inList: true },
     ],
   },
 ];

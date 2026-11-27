@@ -265,3 +265,22 @@
 .app-journey li:last-child { border-bottom: 0; }
 .app-journey li > * { min-width: 0; overflow-wrap: anywhere; }
 .app-journey-state { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+
+/* Quarterly Maturity report (migration 35): stacked cards, one bar per stage (a share of
+   members with a stage), and a print layout for the leadership meeting without the app's
+   menu and controls. */
+.app-maturity { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.app-maturity-bars { margin-bottom: var(--space-3); }
+.app-maturity-bars td:last-child { width: 45%; }
+.app-maturity-bar { display: block; height: 10px; border-radius: var(--radius-pill); background: var(--surface-tint); overflow: hidden; }
+.app-maturity-bar > span { display: block; height: 100%; background: var(--lime); border-radius: var(--radius-pill); }
+@media print {
+  .app-nav, .app-phonebar, .app-topbar, .app-no-print, .skip-link { display: none !important; }
+  .app-main, .app-content { margin: 0 !important; padding: 0 !important; max-width: none !important; }
+  .app-maturity .tec-card { break-inside: avoid; box-shadow: none; }
+  .app-maturity-bar { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+}
+
+/* Event check-in (migration 36): ticks in two columns on wide screens, one on a phone. */
+.app-attendance { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-2) var(--space-4); }
+.app-attendance li { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }

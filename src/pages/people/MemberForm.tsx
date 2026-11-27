@@ -30,6 +30,7 @@ import {
 import { FAITH_READERS, hasRole, ledUnitIds, viewedUnitIds, useMe } from '../../auth/useMe';
 import { NotFound } from '../NotFound';
 import { MemberGrowth } from './MemberGrowth';
+import { MemberMaturity } from './MemberMaturity';
 
 const { SectionHeading, Card, Button, TextField, SelectField, Checkbox, Notice, RestrictedPanel, Chip, DataTable } = TEC;
 
@@ -555,6 +556,7 @@ function MemberFormInner({ person }: { person?: Person }) {
       </form>
       {/* Migration 34: settling in, courses completed and mentoring (saved separately). */}
       {person && (
+        <>
         <MemberGrowth
           person={person}
           canEdit={canEditRecord}
@@ -564,6 +566,9 @@ function MemberFormInner({ person }: { person?: Person }) {
           canRecordCourses={mayRecordFaith && (canEditRecord || hasRole(me.data, 'teci_coordinator'))}
           canRemovePairings={hasRole(me.data, 'gsquad_coordinator')}
         />
+        {/* Migration 35: leadership stage history, and the pathway (treated like faith fields). */}
+        <MemberMaturity person={person} canSeePathway={mayRecordFaith} canEditPathway={canEditFaith} />
+        </>
       )}
     </>
   );
