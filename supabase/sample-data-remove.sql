@@ -54,6 +54,10 @@ begin
   -- teams, so they are found by their "(sample)" ending rather than by the team.
   delete from public.unit_focus_reflections
    where church_id = v_church and (went_well like '%(sample)' or next_step like '%(sample)');
+  -- Migration 37: sample programmes and programme reports are on the church's own teams too,
+  -- found by their "(sample)" ending (their linked sample projects have gone above).
+  delete from public.programme_reports where church_id = v_church and commentary like '%(sample)';
+  delete from public.unit_programmes where church_id = v_church and description like '%(sample)';
 
   -- A run of show a tester wrote may name a sample person as leading a part. Deleting the
   -- person would blank that (and a part must be led by someone), so the name is kept as text.
@@ -163,4 +167,6 @@ select (select count(*) from public.people where email like '%@g-squad.example')
          + (select count(*) from public.member_mentors)
          + (select count(*) from public.person_pathway)                                    -- migration 35: pathway too
          + (select count(*) from public.event_attendance)
-         + (select count(*) from public.project_committee_members) as other_growth_records_to_check;   -- migration 36
+         + (select count(*) from public.project_committee_members) as other_growth_records_to_check,   -- migration 36
+       -- Migration 37: programmes and programme reports on real teams (checked before go-live).
+       (select count(*) from public.unit_programmes) + (select count(*) from public.programme_reports) as other_programmes_to_check;

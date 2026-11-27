@@ -783,6 +783,66 @@ begin
                ('Community fun day', 4, 'Chair'), ('Community fun day', 5, null)) as x(name, n, role) on x.name = p.name
   where p.church_id = v_church and p.description like 'Sample data%';
 
+  -- 25. Goal-based projects, a special Sunday, team programmes and a programme report
+  --     (migration 37). Programmes and the report sit on the church's own teams, so they are
+  --     marked "(sample)" for removal; the projects are sample projects as above.
+  insert into public.unit_programmes (church_id, unit_id, name, description, report_area)
+  values (v_church, v_unit_ids[6], 'Discipleship classes', 'Classes for new believers (sample)', 'maturity'),
+         (v_church, v_unit_ids[6], 'Team prayer', 'Praying together each week (sample)', null),
+         (v_church, v_unit_ids[4], 'Outdoor evangelism', 'Monthly outreach in the city centre (sample)', 'evangelism'),
+         (v_church, v_unit_ids[5], 'Welcome and onboarding', 'Welcoming visitors and following up within 48 hours (sample)', 'assimilation'),
+         (v_church, v_unit_ids[3], 'Rehearsals', 'Weekly rehearsal (sample)', null),
+         (v_church, v_unit_ids[3], 'Ministering in services', 'Leading worship on Sundays (sample)', null)
+  on conflict (unit_id, name) do nothing;
+  -- This month's linked activities, with counts, so the reports have something to show.
+  insert into public.projects (church_id, owner_user_id, name, description, level, unit_id, status, starts_at, ends_at, approved_at, programme_id)
+  select v_church, v_owner, x.name, 'Sample data: ' || x.what, 'unit', v_unit_ids[x.u], 'in_progress',
+         (date_trunc('month', current_date)::date + 2 + time '10:00') at time zone 'Europe/London',
+         (date_trunc('month', current_date)::date + 2 + time '13:00') at time zone 'Europe/London',
+         now() - interval '20 days', up.id
+  from (values ('New believers class', 'a discipleship class', 6, 'Discipleship classes'),
+               ('City centre outreach', 'an outreach session', 4, 'Outdoor evangelism')) as x(name, what, u, prog)
+  join public.unit_programmes up on up.unit_id = v_unit_ids[x.u] and up.name = x.prog;
+  insert into public.project_outcomes (church_id, project_id, decisions_for_christ, first_time_guests)
+  select v_church, p.id, case p.name when 'New believers class' then 1 else 3 end, case p.name when 'City centre outreach' then 12 end
+  from public.projects p where p.church_id = v_church and p.description like 'Sample data%' and p.programme_id is not null;
+  -- Two goal-based projects: one waiting for the Resident Pastor, one under way at the
+  -- Maturity purpose's level, each with milestones and a planning committee.
+  insert into public.projects (church_id, owner_user_id, name, description, level, status, starts_at, ends_at, is_event, is_goal)
+  values (v_church, v_owner, 'Building fit-out', 'Sample data: a goal-based project with a committee', 'church', 'submitted',
+          (date_trunc('year', current_date) + interval '1 year')::date at time zone 'Europe/London',
+          (date_trunc('year', current_date) + interval '1 year 9 months')::date at time zone 'Europe/London', false, true)
+  returning id into v_project;
+  insert into public.project_milestones (church_id, project_id, title, output, due_on, sort_order)
+  values (v_church, v_project, 'Design agreed', 'Signed-off floor plan', (date_trunc('year', current_date) + interval '1 year 2 months')::date, 1),
+         (v_church, v_project, 'Contractor chosen', 'Signed contract', (date_trunc('year', current_date) + interval '1 year 4 months')::date, 2),
+         (v_church, v_project, 'Space in use', 'First Sunday in the new space', (date_trunc('year', current_date) + interval '1 year 9 months')::date, 3);
+  insert into public.project_committee_members (church_id, project_id, person_id, role, added_by)
+  values (v_church, v_project, v_people[6], 'Chair', v_owner), (v_church, v_project, v_people[7], 'Budget', v_owner);
+  insert into public.projects (church_id, owner_user_id, name, description, level, status, starts_at, ends_at, approved_at, is_event, is_goal, purpose_id)
+  select v_church, v_owner, 'Discipleship pathway rollout', 'Sample data: a goal-based project at the purpose level', 'church', 'in_progress',
+         (current_date - 60) at time zone 'Europe/London', (current_date + 120) at time zone 'Europe/London', now() - interval '55 days',
+         false, true, u.purpose_id
+  from public.units u where u.id = v_unit_ids[6] and u.purpose_id is not null
+  returning id into v_project;
+  if v_project is not null then
+    insert into public.project_milestones (church_id, project_id, title, output, due_on, done_on, sort_order)
+    values (v_church, v_project, 'Stages agreed', 'Five stages in the app', current_date - 30, current_date - 28, 1),
+           (v_church, v_project, 'Every team briefed', 'Team Leads trained', current_date + 45, null, 2);
+  end if;
+  -- The next sample Sunday is special (guest speaker), with a planning committee.
+  update public.projects set is_special_sunday = true
+   where id = (select p.id from public.projects p where p.church_id = v_church and p.is_sunday_service
+                 and p.description like 'Sample data%' and p.starts_at > now() order by p.starts_at limit 1)
+  returning id into v_project;
+  insert into public.project_committee_members (church_id, project_id, person_id, role, added_by)
+  values (v_church, v_project, v_people[8], 'Guest care', v_owner);
+  -- Last month's Maturity report, submitted.
+  insert into public.programme_reports (church_id, unit_id, area, report_month, figures, commentary, status, submitted_by, submitted_at)
+  values (v_church, v_unit_ids[6], 'maturity', (date_trunc('month', current_date) - interval '1 month')::date,
+          '{"classes_held": 4, "people_completing": 7, "decisions_other": 1}', 'Two classes moved online (sample)', 'submitted', v_owner, now())
+  on conflict (unit_id, area, report_month) do nothing;
+
   raise notice 'Sample data loaded: % people, % Sundays ahead, 8 Sundays past', array_length(v_people, 1), array_length(v_sundays, 1);
 end $$;
 

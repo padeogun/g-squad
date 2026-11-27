@@ -109,7 +109,7 @@ export function CommitteeCard({ p, canManage }: { p: ProjectRow; canManage: bool
   return (
     <Card title="Planning committee">
       <p className="type-caption" style={{ margin: 0 }}>
-        G-Squad members on this event's planning committee. Seats on live events count towards each leader's load, so nobody carries too much.
+        G-Squad members on this planning committee. Seats on live events and projects count towards each leader's load, so nobody carries too much.
       </p>
       {seats.error && <Notice tone="danger">{friendlyError(seats.error)}</Notice>}
       {(seats.data ?? []).length > 0 && (

@@ -36,10 +36,14 @@ export function Projects() {
   // projects in a purpose I head. (A courtesy list; the database checks the approval itself.)
   const myPurposes = (me.data?.roles ?? []).filter((r) => r.role === 'purpose_head').map((r) => r.purpose_id);
   const isOps = hasRole(me.data, 'operations_lead');
+  const isRp = hasRole(me.data, 'resident_pastor');
   const awaiting = (projects.data ?? []).filter(
     (p) =>
       p.status === 'submitted' &&
-      ((p.level === 'church' && isOps) || (p.level === 'unit' && myPurposes.includes(unitMap.get(p.unit_id ?? '')?.purpose_id ?? null))),
+      // Migration 37: goal-based projects wait for the Resident Pastor (see also the Year plan).
+      (p.is_goal
+        ? isRp
+        : (p.level === 'church' && isOps) || (p.level === 'unit' && myPurposes.includes(unitMap.get(p.unit_id ?? '')?.purpose_id ?? null))),
   );
 
   const isPast = (p: Project) => isPastProject(p, today);

@@ -22,6 +22,8 @@ import { Rota } from '../pages/sunday/Rota';
 import { CheckIn } from '../pages/sunday/CheckIn';
 import { Capacity } from '../pages/dashboard/Capacity';
 import { MaturityReport } from '../pages/dashboard/MaturityReport';
+import { ProgrammeReports } from '../pages/dashboard/ProgrammeReports';
+import { YearPlan } from '../pages/projects/YearPlan';
 import { Teci } from '../pages/people/Teci';
 import { ImportMembers } from '../pages/people/ImportMembers';
 import { Projects } from '../pages/projects/Projects';
@@ -63,6 +65,8 @@ export const router = createBrowserRouter([
           { path: '/check-in', element: <CheckIn /> },
           { path: '/capacity', element: <Capacity /> },
           { path: '/maturity', element: <MaturityReport /> },
+          { path: '/programme-reports', element: <ProgrammeReports /> },
+          { path: '/year-plan', element: <YearPlan /> },
           { path: '/teci', element: <Teci /> },
           { path: '/projects', element: <Projects /> },
           { path: '/projects/new', element: <NewProject /> },

@@ -202,7 +202,7 @@ expect "grids by status" "$(sq "select string_agg(s || '=' || n, ',' order by s)
 # team conversations this quarter and last, growth steps on one-to-ones).
 expect "focus areas in the sample" "$(sq "select (select count(*) from public.project_focus) = 12
   and (select count(*) from public.project_focus where is_primary) = 6
-  and (select count(*) from public.project_focus_review) = 2 and (select count(*) from public.project_outcomes) = 1
+  and (select count(*) from public.project_focus_review) = 2 and (select count(*) from public.project_outcomes) = 3
   and (select count(*) from public.unit_focus_reflections) > 0
   and (select count(*) from public.one_to_ones where growth_area is not null) > 0")" t
 # Migration 34: settling-in steps, pairings and courses in the sample.
@@ -212,7 +212,13 @@ expect "settling in, mentors and courses in the sample" "$(sq "select (select co
 # Migration 35: leadership stage history with moves this quarter and last, and pathway stages.
 # Migration 36: attendance at the prayer breakfast and the Bible study, and committee seats.
 expect "attendance and committees in the sample" "$(sq "select (select count(*) from public.event_attendance) >= 14
-  and (select count(*) from public.project_committee_members) = 5")" t
+  and (select count(*) from public.project_committee_members) = 8")" t
+# Migration 37: programmes, two goal-based projects with milestones, a special Sunday, a report.
+# (Outcomes above include the two linked activities; committees the goal project and Sunday.)
+expect "programmes and goal-based projects in the sample" "$(sq "select (select count(*) from public.unit_programmes) = 6
+  and (select count(*) from public.projects where is_goal) = 2 and (select count(*) from public.project_milestones) = 5
+  and (select count(*) from public.projects where is_special_sunday) = 1
+  and (select count(*) from public.programme_reports where status = 'submitted') = 1")" t
 expect "stage history and pathway in the sample" "$(sq "select (select count(*) from public.leadership_stage_changes where from_stage_id is not null) = 2
   and (select count(*) from public.leadership_stage_changes where from_stage_id is null) >= 7
   and (select count(distinct person_id) from public.person_pathway) = 28")" t
@@ -275,6 +281,9 @@ expect "sample settling in, mentors and courses left" "$(sq "select (select coun
 expect "sample focus areas and team notes left" "$(sq "select (select count(*) from public.project_focus where intended_outcome <> 'A tester aim')
   + (select count(*) from public.project_focus_review) + (select count(*) from public.project_outcomes)
   + (select count(*) from public.unit_focus_reflections where went_well like '%(sample)' or next_step like '%(sample)')")" 0
+# Migration 37: sample programmes, reports and milestones go too.
+expect "sample programmes, reports and milestones left" "$(sq "select (select count(*) from public.unit_programmes)
+  + (select count(*) from public.programme_reports) + (select count(*) from public.project_milestones)")" 0
 # SECURITY REVIEW 25 (S06): nothing else is removed, and the team notes left are counted.
 expect "a tester's aim and team notes kept" "$(sq "select (select count(*) from public.project_focus where intended_outcome = 'A tester aim')
   || ',' || (select count(*) from public.unit_focus_reflections where went_well like 'A tester%')")" "1,2"

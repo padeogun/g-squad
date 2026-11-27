@@ -24,6 +24,7 @@ import { ShortfallsCard } from '../dashboard/Shortfalls';
 import { TeamConversation } from './TeamConversation';
 import { SettlingInCard } from './SettlingInCard';
 import { TeamEngagementCard } from './TeamEngagementCard';
+import { ProgrammesCard } from './ProgrammesCard';
 
 const { SectionHeading, Card, SelectField, Notice, DataTable, StatTile, Chip } = TEC;
 
@@ -174,6 +175,8 @@ function Team({ unitId, target, canEdit }: { unitId: string; target: number | nu
       <SettlingInCard unitId={unitId} />
       {/* Migration 36: attending and serving at events as team engagement. */}
       <TeamEngagementCard key={`te-${unitId}`} unitId={unitId} />
+      {/* Migration 37: the team's programmes; reporting ones feed the monthly programme report. */}
+      <ProgrammesCard key={`pg-${unitId}`} unitId={unitId} canEdit={canEdit} />
       <TeamConversation key={unitId} unitId={unitId} canEdit={canEdit} />
       {update.isError && (
         <Notice tone="danger" title="That change wasn't made">

@@ -39,6 +39,7 @@ import {
   type Segment,
 } from '../../data/sundays';
 import { useProject } from '../../data/projects';
+import { SpecialSunday } from './SpecialSunday';
 import { NotFound } from '../NotFound';
 import { GridStatus } from './GridStatus';
 
@@ -129,6 +130,8 @@ function GridScreen({ grid }: { grid: Grid }) {
       <p style={{ margin: 0 }}>
         {sunday ? <Link to="/sundays">All Sundays</Link> : <Link to={`/projects/${grid.project_id}`}>Back to the event</Link>}
       </p>
+      {/* Migration 37: a special Sunday (Resident Pastor's or Operations Lead's call) has a planning committee. */}
+      {sunday && <SpecialSunday projectId={grid.project_id} />}
 
       <Card
         title="Status"
