@@ -2,7 +2,7 @@
 // The quarterly Maturity report (migration 35, decision of 25 Nov 2026): how the G-Squad is
 // growing, in counts only, never names. Leadership stages and moves, the discipleship pathway
 // (Encounter to Sending) and moves on it, courses completed, baptisms, settling in, mentoring
-// and one-to-ones. Any of the last four quarters; printable for the leadership meeting.
+// and one-to-ones, maturity habits and team engagement (migration 36). Any of the last four quarters; printable for the leadership meeting.
 // Read by the roles that read the monthly report (the database checks in maturity_report).
 // -------------------------------------------------------------------------------------
 import { useState } from 'react';
@@ -136,6 +136,19 @@ function Body({ r, prev }: { r: Report; prev: Report | undefined }) {
         </dl>
       </Card>
 
+      {/* Migration 36: attending prayer, Bible study and discipleship events as a maturity habit. */}
+      <Card title="Maturity habits">
+        <dl className="app-focus-counts">
+          <Row label="Members who attended prayer, Bible study or discipleship" value={r.habits.members_attending} prev={prev?.habits.members_attending} />
+          <Row label="Members who attended three or more" value={r.habits.members_attending_3_plus} prev={prev?.habits.members_attending_3_plus} />
+          <Row label="Attendances in all" value={r.habits.attendances} prev={prev?.habits.attendances} />
+          <Row label="Maturity events with check-ins" value={r.habits.maturity_events} prev={prev?.habits.maturity_events} />
+        </dl>
+        <p className="type-caption" style={{ margin: 0 }}>
+          Prayer itself can't be counted; attending prayer and Bible study events can. Facts, never a score for anyone.
+        </p>
+      </Card>
+
       <Card title="Leadership development">
         <StageBars rows={r.leadership.stages} total={withLeadStage} caption={`Members by leadership stage (${withLeadStage} with a stage)`} />
         <dl className="app-focus-counts">
@@ -157,6 +170,40 @@ function Body({ r, prev }: { r: Report; prev: Report | undefined }) {
           <Row label="Water baptisms" value={r.water_baptisms} prev={prev?.water_baptisms} />
           <Row label="Holy Spirit baptisms" value={r.spirit_baptisms} prev={prev?.spirit_baptisms} />
         </dl>
+      </Card>
+
+      <Card title="Team engagement">
+        <div className="tec-table-wrap">
+          <table className="tec-table" aria-label="Members of each team taking part this quarter">
+            <thead>
+              <tr>
+                <th scope="col">Team</th>
+                <th scope="col">Members</th>
+                <th scope="col">Attended or served at an event</th>
+                <th scope="col">Prayer, Bible study or discipleship</th>
+                <th scope="col">On a committee</th>
+              </tr>
+            </thead>
+            <tbody>
+              {r.teams.map((t) => (
+                <tr key={t.team}>
+                  <td>{t.team}</td>
+                  <td>{t.members}</td>
+                  <td>{t.took_part}</td>
+                  {/* SECURITY REVIEW 28 (Ann A01): per team only for the Coordinator and Resident Pastor. */}
+                  <td>{t.attended_maturity ?? '—'}</td>
+                  <td>{t.on_committees}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {r.teams.some((t) => t.attended_maturity === null) && (
+          <p className="type-caption" style={{ margin: 0 }}>
+            In a small team a count can point to one person, so prayer, Bible study and discipleship are shown team by team only to the
+            G-Squad Coordinator and the Resident Pastor, and are left out of the other columns here.
+          </p>
+        )}
       </Card>
 
       <Card title="Settling in and mentoring">

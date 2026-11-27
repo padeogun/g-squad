@@ -742,6 +742,38 @@ begin
   from (values (10, 5, 6), (14, 4, 9), (29, 2, 20)) as x(n, stage_no, days_ago)
   join public.pathway_stages s on s.church_id = v_church and s.stage_no = x.stage_no;
 
+  -- 24. Event attendance, maturity habits and planning committees (migration 36). The prayer
+  --     breakfast becomes a Prayer event and ten members are checked in. A weekly Bible study
+  --     run by the Ushers team this quarter, with members checked in on three Wednesdays.
+  --     Three members on the carol service's planning committee, two on the fun day's. All of
+  --     it hangs off sample projects and people, so removal takes it with them.
+  update public.projects p set type_id = t.id
+    from public.project_types t
+   where p.church_id = v_church and p.name = 'Prayer breakfast' and p.description like 'Sample data%'
+     and t.church_id = v_church and t.name = 'Prayer';
+  insert into public.event_attendance (church_id, project_id, person_id, attended_on, recorded_by)
+  select v_church, p.id, v_people[n], (p.starts_at at time zone 'Europe/London')::date, v_owner
+  from public.projects p, generate_series(1, 10) n
+  where p.church_id = v_church and p.name = 'Prayer breakfast' and p.description like 'Sample data%';
+  insert into public.projects (church_id, owner_user_id, name, description, level, unit_id, status, starts_at, ends_at, approved_at, type_id)
+  select v_church, v_owner, 'Wednesday Bible study', 'Sample data: a weekly Bible study this quarter', 'unit', v_unit_ids[1], 'approved',
+         (date_trunc('quarter', current_date)::date + time '19:00') at time zone 'Europe/London',
+         ((date_trunc('quarter', current_date) + interval '3 months - 1 day')::date + time '21:00') at time zone 'Europe/London',
+         now() - interval '30 days', t.id
+  from public.project_types t where t.church_id = v_church and t.name = 'Bible study'
+  returning id into v_project;
+  insert into public.event_attendance (church_id, project_id, person_id, attended_on, recorded_by)
+  select v_church, v_project, v_people[n], d, v_owner
+  from generate_series(1, 7) n,
+       (select (current_date - (extract(isodow from current_date)::int + 4) % 7 - 7 * k)::date as d from generate_series(0, 2) k) w
+  where w.d >= date_trunc('quarter', current_date)::date and (n <= 4 or w.d < current_date - 7);
+  insert into public.project_committee_members (church_id, project_id, person_id, role, added_by)
+  select v_church, p.id, v_people[x.n], x.role, v_owner
+  from public.projects p
+  join (values ('Christmas carol service', 1, 'Chair'), ('Christmas carol service', 2, 'Music'), ('Christmas carol service', 11, 'Hospitality'),
+               ('Community fun day', 4, 'Chair'), ('Community fun day', 5, null)) as x(name, n, role) on x.name = p.name
+  where p.church_id = v_church and p.description like 'Sample data%';
+
   raise notice 'Sample data loaded: % people, % Sundays ahead, 8 Sundays past', array_length(v_people, 1), array_length(v_sundays, 1);
 end $$;
 

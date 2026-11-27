@@ -153,7 +153,8 @@ export const useShortfalls = (unitId: string | null, enabled = true) =>
 export const useProjectTypes = () =>
   useQuery({
     queryKey: ['ref', 'project_types'],
-    queryFn: () => rows(supabase.from('project_types').select('id, name, default_level, is_active').order('name')),
+    // maturity_habit (migration 36): attending an event of this type counts as a maturity habit.
+    queryFn: () => rows(supabase.from('project_types').select('id, name, default_level, is_active, maturity_habit').order('name')),
   });
 
 export const useSites = () =>

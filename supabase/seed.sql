@@ -79,6 +79,11 @@ begin
     (v_church, 'Prayer',          'church', 'PRAYER'),
     (v_church, 'Newsletter',      'church', null)
   on conflict do nothing;
+  -- Migration 36: attending these counts as a maturity habit (Prayer, and Bible study).
+  update public.project_types set maturity_habit = true where church_id = v_church and name = 'Prayer';
+  insert into public.project_types (church_id, name, default_level, newsletter_tag, maturity_habit)
+  values (v_church, 'Bible study', 'unit', null, true)
+  on conflict do nothing;
 
   -- Reusable blocks for the Sunday Service Grid; the Operations Lead pastes in the wording.
   insert into public.reusable_blocks (church_id, name, body) values

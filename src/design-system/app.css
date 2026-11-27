@@ -280,3 +280,7 @@
   .app-maturity .tec-card { break-inside: avoid; box-shadow: none; }
   .app-maturity-bar { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 }
+
+/* Event check-in (migration 36): ticks in two columns on wide screens, one on a phone. */
+.app-attendance { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-2) var(--space-4); }
+.app-attendance li { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }

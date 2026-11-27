@@ -272,6 +272,8 @@ export const FORMS: FormDef[] = [
         inList: true,
       },
       { key: 'newsletter_tag', label: 'Newsletter tag', type: 'text', maxLength: 50, inList: true },
+      // Migration 36: attending an event of this type counts as a maturity habit (Prayer, Bible study).
+      { key: 'maturity_habit', label: 'Attending counts as a maturity habit', type: 'boolean', inList: true },
     ],
   },
 ];

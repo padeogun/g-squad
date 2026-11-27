@@ -17,7 +17,7 @@ describe('fair share bands', () => {
 // SECURITY REVIEW 20 (F03): a cleared or out-of-range box is refused, not saved as 0, and only
 // changed rules are sent.
 describe('servingRulesPatch', () => {
-  const current = { serving_limit_per_month: 3, hours_per_slot: 3, sundays_off_per_month: 1, leader_roles_max: 2, projects_before_approval: 2 };
+  const current = { serving_limit_per_month: 3, hours_per_slot: 3, sundays_off_per_month: 1, leader_roles_max: 2, projects_before_approval: 2, committees_max: 2 };
   it('refuses a cleared box instead of saving 0 Sundays off', () => {
     expect(servingRulesPatch({ sundays_off_per_month: '' }, current).error).toMatch(/Sundays off/);
     expect(servingRulesPatch({ sundays_off_per_month: '4' }, current).error).toBeTruthy();
@@ -46,7 +46,7 @@ describe('approvalSubject', () => {
 });
 
 describe('servingRulesPatch: overlapping events', () => {
-  const current = { serving_limit_per_month: 3, hours_per_slot: 3, sundays_off_per_month: 1, leader_roles_max: 2, projects_before_approval: 2 };
+  const current = { serving_limit_per_month: 3, hours_per_slot: 3, sundays_off_per_month: 1, leader_roles_max: 2, projects_before_approval: 2, committees_max: 2 };
   it('accepts 1 to 10 and refuses 0', () => {
     expect(servingRulesPatch({ projects_before_approval: '3' }, current).patch).toEqual({ projects_before_approval: 3 });
     expect(servingRulesPatch({ projects_before_approval: '0' }, current).error).toMatch(/Overlapping events before approval/);

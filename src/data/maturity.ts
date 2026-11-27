@@ -51,6 +51,9 @@ export interface MaturityReport {
   day_90_held: number;
   pairings: Array<{ kind: MentorKind; open: number; started: number }>;
   one_to_ones: number;
+  // Migration 36: attending maturity events, and engagement per team. Counts only.
+  habits: { maturity_events: number; attendances: number; members_attending: number; members_attending_3_plus: number };
+  teams: Array<{ team: string; members: number; took_part: number; attended_maturity: number | null; on_committees: number }>;   // null: SECURITY REVIEW 28 (Ann A01)
 }
 
 // A move is to a later stage; the first entry (no "from") is where someone started.

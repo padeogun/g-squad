@@ -42,6 +42,7 @@ import {
 } from '../../data/oneToOnes';
 import { hasRole, ledUnitIds, useMe } from '../../auth/useMe';
 import { NotFound } from '../NotFound';
+import { engagementFacts, usePersonEngagement } from '../../data/attendance';
 import { FOCUS_AREAS, focusName, GROWTH_PROGRESS, previousQuarter, type FocusArea, type GrowthProgress } from '../../data/focus';
 
 const { SectionHeading, Card, Notice, Button, TextField, SelectField, Checkbox } = TEC;
@@ -314,6 +315,8 @@ function Form({ oto, unitId, personId }: { oto: OneToOne | null; unitId: string;
             One area they would like to grow in this quarter, and one next step. A commitment between you, never a score. Keep anything
             personal about their faith in Personal walk with God.
           </p>
+          {/* Migration 36 (27 Nov 2026): this quarter's facts to talk about, never a score. */}
+          {personId && <TakingPartLine personId={personId} quarter={oto?.quarter_start ?? q} />}
           {lastTime.data?.growth_step && (
             <p style={{ margin: 0 }}>
               <span className="type-caption">Last time ({focusName(lastTime.data.growth_area)}): </span>
@@ -445,5 +448,18 @@ function Recognise({ personId, unitId, name }: { personId: string; unitId: strin
         </Button>
       </div>
     </Card>
+  );
+}
+
+// This quarter's taking part (events attended, prayer and Bible study among them, events served
+// at, committees), from check-ins and the rota. Facts to talk about, never a score.
+function TakingPartLine({ personId, quarter }: { personId: string; quarter: string }) {
+  const e = usePersonEngagement(personId, quarter);
+  if (!e.data) return null;
+  return (
+    <p style={{ margin: 0 }}>
+      <span className="type-caption">Taking part this quarter: </span>
+      {engagementFacts(e.data).join(' · ')}
+    </p>
   );
 }

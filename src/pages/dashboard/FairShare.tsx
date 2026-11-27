@@ -60,7 +60,7 @@ export function FairShareCard({ month }: { month: string }) {
             <StatTile
               label="Leaders carrying a lot"
               value={f.leaders_over}
-              note="more leadership roles and live projects than the church allows"
+              note="more leadership roles, live projects or planning committees than the church allows"
               tone={f.leaders_over ? 'danger' : 'default'}
             />
           </div>
@@ -75,6 +75,9 @@ export function FairShareCard({ month }: { month: string }) {
                 <strong>{l.display_name}</strong>
                 <span className="type-caption">
                   {l.team_roles} team lead or deputy role{l.team_roles === 1 ? '' : 's'}, {l.live_projects} live project{l.live_projects === 1 ? '' : 's'}
+                  {/* Migration 36: planning committee seats, a separate and lighter count with its own limit. */}
+                  , {l.committee_seats} planning committee{l.committee_seats === 1 ? '' : 's'}
+                  {l.committees_over && !l.roles_over ? ' (committees over the limit)' : ''}
                 </span>
               </li>
             ))}
@@ -119,6 +122,7 @@ export function ServingRulesCard() {
     sundays_off_per_month: Number(s.sundays_off_per_month),
     leader_roles_max: Number(s.leader_roles_max),
     projects_before_approval: Number(s.projects_before_approval),
+    committees_max: Number(s.committees_max),
   };
   const off = current.sundays_off_per_month;
   const submit = (e: React.FormEvent) => {
