@@ -156,4 +156,8 @@ select (select count(*) from public.people where email like '%@g-squad.example')
        (select count(*) from public.people) as other_people_to_check,
        (select count(*) from public.projects) as other_projects_to_check,
        -- SECURITY REVIEW 25 (S06): team conversation notes (migration 33) are on real teams.
-       (select count(*) from public.unit_focus_reflections) as other_team_notes_to_check;
+       (select count(*) from public.unit_focus_reflections) as other_team_notes_to_check,
+       -- Migration 34: settling-in steps, courses and pairings on real people (the sample
+       -- ones go with the sample people); expected 0 before go-live, or checked one by one.
+       (select count(*) from public.assimilation_steps) + (select count(*) from public.course_completions)
+         + (select count(*) from public.member_mentors) as other_growth_records_to_check;

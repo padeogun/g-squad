@@ -205,6 +205,10 @@ expect "focus areas in the sample" "$(sq "select (select count(*) from public.pr
   and (select count(*) from public.project_focus_review) = 2 and (select count(*) from public.project_outcomes) = 1
   and (select count(*) from public.unit_focus_reflections) > 0
   and (select count(*) from public.one_to_ones where growth_area is not null) > 0")" t
+# Migration 34: settling-in steps, pairings and courses in the sample.
+expect "settling in, mentors and courses in the sample" "$(sq "select (select count(*) from public.assimilation_steps) = 5
+  and (select count(*) from public.member_mentors where ended_on is null) = 3
+  and (select count(*) from public.course_completions) > 30")" t
 expect "one input received" "$(sq "select count(*) from public.project_inputs where status = 'received' and received_at is not null")" 1
 expect "approval requests logged" "$(sq "select count(*) from public.audit_log where action = 'serving_approval_requested'")" 2
 expect "serving approvals waiting" "$(sq "select (select count(*) from public.unit_memberships where status = 'pending_approval') || ',' || (select count(*) from public.assignments where status = 'pending_approval')")" "1,1"
@@ -259,6 +263,8 @@ expect "test roles left switched on" "$(sq "select count(*) from public.role_ass
 expect "sample newsletter issue, communities and questions left" "$(sq "select (select count(*) from public.newsletter_issues) + (select count(*) from public.greatness_communities) + (select count(*) from public.one_to_one_prompts)")" 0
 expect "sample faith rows, notes and flags left" "$(sq "select (select count(*) from public.person_faith) + (select count(*) from public.pastoral_notes) + (select count(*) from public.checkin_flags)")" 0
 expect "a tester's run of show keeps the leader's name as text" "$(sq "select led_by_text from public.service_segments s join public.service_grids g on g.id = s.grid_id join public.projects p on p.id = g.project_id where p.name = 'Typed-in second event'")" "Ife Balogun"
+expect "sample settling in, mentors and courses left" "$(sq "select (select count(*) from public.assimilation_steps)
+  + (select count(*) from public.member_mentors) + (select count(*) from public.course_completions)")" 0
 expect "sample focus areas and team notes left" "$(sq "select (select count(*) from public.project_focus where intended_outcome <> 'A tester aim')
   + (select count(*) from public.project_focus_review) + (select count(*) from public.project_outcomes)
   + (select count(*) from public.unit_focus_reflections where went_well like '%(sample)' or next_step like '%(sample)')")" 0

@@ -29,6 +29,7 @@ import {
 } from '../../data/people';
 import { FAITH_READERS, hasRole, ledUnitIds, viewedUnitIds, useMe } from '../../auth/useMe';
 import { NotFound } from '../NotFound';
+import { MemberGrowth } from './MemberGrowth';
 
 const { SectionHeading, Card, Button, TextField, SelectField, Checkbox, Notice, RestrictedPanel, Chip, DataTable } = TEC;
 
@@ -552,6 +553,18 @@ function MemberFormInner({ person }: { person?: Person }) {
           <Link to="/members">{canSave ? 'Cancel' : 'Back to members'}</Link>
         </div>
       </form>
+      {/* Migration 34: settling in, courses completed and mentoring (saved separately). */}
+      {person && (
+        <MemberGrowth
+          person={person}
+          canEdit={canEditRecord}
+          // Courses are treated like faith details (25 Nov 2026): shown to those app.can_see_faith
+          // lets in, recorded by them when they edit the record (or are the TECi Coordinator).
+          canSeeCourses={mayRecordFaith}
+          canRecordCourses={mayRecordFaith && (canEditRecord || hasRole(me.data, 'teci_coordinator'))}
+          canRemovePairings={hasRole(me.data, 'gsquad_coordinator')}
+        />
+      )}
     </>
   );
 }

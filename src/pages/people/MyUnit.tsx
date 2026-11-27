@@ -22,6 +22,7 @@ import { shortDate } from '../../data/sundays';
 import { EngagementBar } from '../dashboard/EngagementBar';
 import { ShortfallsCard } from '../dashboard/Shortfalls';
 import { TeamConversation } from './TeamConversation';
+import { SettlingInCard } from './SettlingInCard';
 
 const { SectionHeading, Card, SelectField, Notice, DataTable, StatTile, Chip } = TEC;
 
@@ -168,6 +169,8 @@ function Team({ unitId, target, canEdit }: { unitId: string; target: number | nu
         </>
       )}
       {/* Migration 33: the team's quarterly conversation on the four focus areas. */}
+      {/* Migration 34: new members settling in (steps are ticked on each member's record). */}
+      <SettlingInCard unitId={unitId} />
       <TeamConversation key={unitId} unitId={unitId} canEdit={canEdit} />
       {update.isError && (
         <Notice tone="danger" title="That change wasn't made">
