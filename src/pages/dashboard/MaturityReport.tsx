@@ -190,13 +190,20 @@ function Body({ r, prev }: { r: Report; prev: Report | undefined }) {
                   <td>{t.team}</td>
                   <td>{t.members}</td>
                   <td>{t.took_part}</td>
-                  <td>{t.attended_maturity}</td>
+                  {/* SECURITY REVIEW 28 (Ann A01): per team only for the Coordinator and Resident Pastor. */}
+                  <td>{t.attended_maturity ?? '—'}</td>
                   <td>{t.on_committees}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        {r.teams.some((t) => t.attended_maturity === null) && (
+          <p className="type-caption" style={{ margin: 0 }}>
+            In a small team a count can point to one person, so prayer, Bible study and discipleship are shown team by team only to the
+            G-Squad Coordinator and the Resident Pastor, and are left out of the other columns here.
+          </p>
+        )}
       </Card>
 
       <Card title="Settling in and mentoring">

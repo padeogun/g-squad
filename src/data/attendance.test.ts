@@ -32,6 +32,17 @@ describe('engagementFacts', () => {
       }),
     ).toEqual(['Attended 4 events, 2 of them prayer, Bible study or discipleship', 'Served at 1 event']);
   });
+  it('says when maturity events are not shown to this reader (SECURITY REVIEW 28, Ann A01)', () => {
+    expect(
+      engagementFacts({
+        quarter_start: '2026-10-01',
+        events_attended: 1,
+        maturity_attended: null,
+        events_served: 0,
+        committees: 0,
+      }),
+    ).toEqual(['Attended 1 event (prayer, Bible study and discipleship events not shown)', 'Served at 0 events']);
+  });
   it('mentions committees only when there are any', () => {
     expect(
       engagementFacts({

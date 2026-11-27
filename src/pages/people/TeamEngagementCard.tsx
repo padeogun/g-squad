@@ -23,10 +23,13 @@ export function TeamEngagementCard({ unitId }: { unitId: string }) {
           <dt>Attended an event</dt>
           <dd>{of(t.attended)}</dd>
         </div>
-        <div>
-          <dt>Attended prayer, Bible study or discipleship</dt>
-          <dd>{of(t.attended_maturity)}</dd>
-        </div>
+        {/* SECURITY REVIEW 28 (Ann A01): null unless the reader may see the team's faith. */}
+        {t.attended_maturity !== null && (
+          <div>
+            <dt>Attended prayer, Bible study or discipleship</dt>
+            <dd>{of(t.attended_maturity)}</dd>
+          </div>
+        )}
         <div>
           <dt>Served at an event (not Sundays)</dt>
           <dd>{of(t.served)}</dd>

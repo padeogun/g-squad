@@ -31,11 +31,16 @@ export function AttendanceCard({ p, maturity }: { p: ProjectRow; maturity: boole
   const [today] = useState(todayIso);
   const days = attendanceDays(p.starts_at, p.ends_at, today);
   const [day, setDay] = useState(() => defaultAttendanceDay(days, today));
-  const list = useCandidates(p.id, day, days.length > 0);
+  // SECURITY REVIEW 28 (Ann A02): the database opens the list only for a day of an approved
+  // event, so it is not asked for otherwise.
+  const open = ['approved', 'in_progress', 'done'].includes(p.status);
+  const list = useCandidates(p.id, day, open && days.length > 0);
   const mark = useMarkAttendance(p.id, day);
   const [filter, setFilter] = useState('');
   // Only approved events that have started take attendance (the database checks too).
-  if (!['approved', 'in_progress', 'done'].includes(p.status) || days.length === 0) return null;
+  if (!open || days.length === 0) return null;
+  // Nobody this leader may record (an editor, or a Team Lead with no members to tick): no card.
+  if (list.data && list.data.length === 0) return null;
   const rows = (list.data ?? []).filter((c) => c.display_name.toLowerCase().includes(filter.trim().toLowerCase()));
   const marked = (list.data ?? []).filter((c) => c.attended).length;
   return (
@@ -59,9 +64,6 @@ export function AttendanceCard({ p, maturity }: { p: ProjectRow; maturity: boole
       </div>
       {list.error && <Notice tone="danger">{friendlyError(list.error)}</Notice>}
       {list.isPending && <p style={{ margin: 0 }}>Loading…</p>}
-      {list.data && list.data.length === 0 && (
-        <p style={{ margin: 0 }}>There is nobody here you can record. Team Leads record the members they look after.</p>
-      )}
       {rows.length > 0 && (
         <ul className="app-attendance">
           {rows.map((c) => (

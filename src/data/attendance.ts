@@ -15,7 +15,9 @@ export type CommitteeSeat = Database['public']['Tables']['project_committee_memb
 export interface PersonEngagement {
   quarter_start: string;
   events_attended: number;
-  maturity_attended: number;
+  // SECURITY REVIEW 28 (Ann A01): null for a reader who may not see the member's faith; then
+  // events_attended leaves maturity events out too.
+  maturity_attended: number | null;
   events_served: number;
   committees: number;
 }
@@ -23,7 +25,7 @@ export interface TeamEngagement {
   quarter_start: string;
   members: number;
   attended: number;
-  attended_maturity: number;
+  attended_maturity: number | null;   // SECURITY REVIEW 28 (Ann A01): null unless the reader may see the team's faith
   served: number;
   on_committees: number;
 }
@@ -45,8 +47,16 @@ export const defaultAttendanceDay = (days: string[], today: string) => (days.inc
 // "Attended 4 events this quarter, 2 of them prayer or Bible study", as plain facts.
 export function engagementFacts(e: PersonEngagement): string[] {
   const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many}`;
+  // SECURITY REVIEW 28 (Ann A01): when maturity events are not shown, say so, so the count
+  // is not read as every event the member came to.
+  const maturity =
+    e.maturity_attended === null
+      ? ' (prayer, Bible study and discipleship events not shown)'
+      : e.maturity_attended
+        ? `, ${e.maturity_attended} of them prayer, Bible study or discipleship`
+        : '';
   const facts = [
-    `Attended ${n(e.events_attended, 'event', 'events')}${e.maturity_attended ? `, ${e.maturity_attended} of them prayer, Bible study or discipleship` : ''}`,
+    `Attended ${n(e.events_attended, 'event', 'events')}${maturity}`,
     `Served at ${n(e.events_served, 'event', 'events')}`,
   ];
   if (e.committees) facts.push(`On ${n(e.committees, 'planning committee', 'planning committees')}`);

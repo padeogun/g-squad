@@ -19,6 +19,10 @@
 --    separate, lighter count with its own limit (church_settings.committees_max, default 2);
 --    over either limit flags a pastoral check-in as before (flag, never block).
 -- Anonymising removes attendance and committee seats; export_person includes them.
+-- SECURITY REVIEW 28 (Ann): attendance at maturity events is read (and counted per person or
+-- per team) only by those who may see the member's faith, and by the event's own owner (A01);
+-- the check-in list opens only for a day of an approved event (A02); committee seats count in
+-- leaders' load once the event is approved (A03).
 -- =====================================================================================
 
 -- -------------------------------------------------------------------------------------
@@ -67,13 +71,39 @@ comment on table public.event_attendance is
 
 -- Who may record a member's attendance at an event: the event's manager, for anyone they can
 -- see; or the member's Team Lead or the G-Squad Coordinator (app.can_edit_person).
+-- SECURITY REVIEW 28 (Ann A01): attending a prayer, Bible study or discipleship event (a
+-- maturity event) tells of a member's faith practice, so it is handled as courses and the
+-- pathway are (decisions of 25 Nov 2026): the Operations Lead records it only at events they
+-- own. Before, the Operations Lead could record, and so read, anyone at any maturity event.
 create or replace function app.can_record_attendance(p_project uuid, p_person uuid) returns boolean
 language sql stable security definer set search_path = ''
 as $$
-  select (app.can_manage_project(p_project) and app.can_read_person(p_person)) or app.can_edit_person(p_person)
+  select (app.can_read_person(p_person)
+          and (app.owns_project(p_project)
+               or (app.has_role('operations_lead') and not app.is_maturity_event(p_project))))
+      or app.can_edit_person(p_person)
 $$;
 revoke all on function app.can_record_attendance(uuid, uuid) from public, anon;
 grant execute on function app.can_record_attendance(uuid, uuid) to authenticated, service_role;
+
+-- SECURITY REVIEW 28 (Ann A01): who may read an entry. The event's owner, for their own event
+-- (they ran it); the Operations Lead, for events that are not maturity events; and those who
+-- can read the member, except that an entry at a maturity event needs someone who may see the
+-- member's faith (Team Lead, Deputy, Coordinator, Resident Pastor, TECi Coordinator) or edit
+-- the member. Before, anyone who could read the member (Pastoral Lead, Purpose Heads, owners
+-- of projects the member served on) and the Operations Lead read who came to prayer meetings.
+create or replace function app.can_read_attendance(p_project uuid, p_person uuid) returns boolean
+language sql stable security definer set search_path = ''
+as $$
+  select app.owns_project(p_project)
+      or (not app.is_maturity_event(p_project)
+          and (app.has_role('operations_lead') or app.can_read_person(p_person)))
+      or (app.is_maturity_event(p_project)
+          and app.can_read_person(p_person)
+          and (app.can_see_faith(p_person) or app.can_edit_person(p_person)))
+$$;
+revoke all on function app.can_read_attendance(uuid, uuid) from public, anon;
+grant execute on function app.can_read_attendance(uuid, uuid) to authenticated, service_role;
 
 create or replace function app.event_attendance_guard() returns trigger
 language plpgsql security definer set search_path = ''
@@ -131,9 +161,9 @@ alter table public.event_attendance enable row level security;
 revoke all on public.event_attendance from public, anon, authenticated;
 grant select, insert, delete on public.event_attendance to authenticated;
 -- Read: those who can read the member, and the event's manager for their own event.
+-- SECURITY REVIEW 28 (Ann A01): maturity events only for those who may see faith (above).
 create policy event_attendance_read on public.event_attendance for select to authenticated
-  using (church_id = (select app.current_church_id())
-         and (app.can_read_person(person_id) or app.can_manage_project(project_id)));
+  using (church_id = (select app.current_church_id()) and app.can_read_attendance(project_id, person_id));
 create policy event_attendance_insert on public.event_attendance for insert to authenticated
   with check (church_id = (select app.current_church_id()) and app.can_record_attendance(project_id, person_id));
 create policy event_attendance_delete on public.event_attendance for delete to authenticated
@@ -146,9 +176,21 @@ create or replace function public.event_attendance_candidates(p_project uuid, p_
 returns table (person_id uuid, display_name text, rsvp boolean, attended boolean)
 language plpgsql stable security definer set search_path = ''
 as $$
+declare
+  v_today date := (now() at time zone 'Europe/London')::date;
 begin
   if not exists (select 1 from public.projects p where p.id = p_project and p.church_id = app.current_church_id()) then
     raise exception 'Not allowed' using errcode = '42501';
+  end if;
+  -- SECURITY REVIEW 28 (Ann A02): only for a day on which attendance can be recorded (as the
+  -- guard checks). RSVPs are otherwise read by no signed-in user (only counts, migration 6);
+  -- before, any leader could list their members' RSVPs to any project, draft or not, at any time.
+  if not exists (select 1 from public.projects p
+                 where p.id = p_project and p.is_event and p.status in ('approved', 'in_progress', 'done')
+                   and p_on <= v_today
+                   and p_on between (p.starts_at at time zone 'Europe/London')::date and (p.ends_at at time zone 'Europe/London')::date)
+     or app.is_sunday_project(p_project) then
+    raise exception 'Choose a day of an approved event that has come' using errcode = '23514';
   end if;
   return query
     select x.id, (x.first_name || ' ' || x.surname)::text,
@@ -270,10 +312,14 @@ as $$
                       where p.owner_user_id = u.id and p.status in ('submitted', 'approved', 'in_progress')
                         and not app.is_sunday_project(p.id)) pr
   -- Seats on live events' committees, through the leader's own G-Squad record.
+  -- SECURITY REVIEW 28 (Ann A03): only once the event is approved, so someone other than the
+  -- event's owner has agreed to it. Before, a Team Lead could create events, submit them and
+  -- name another leader they can see on each committee, putting that leader by name on the
+  -- "carrying a lot" list and raising a pastoral check-in on them, without anyone else's say.
   cross join lateral (select count(*)::int as n from public.project_committee_members c
                       join public.projects p on p.id = c.project_id
                       where u.person_id is not null and c.person_id = u.person_id
-                        and p.status in ('submitted', 'approved', 'in_progress')) cm
+                        and p.status in ('approved', 'in_progress')) cm
   where u.is_active and (p_church is null or u.church_id = p_church)
 $$;
 revoke all on function app.leader_loads(uuid) from public, anon, authenticated;
@@ -308,22 +354,31 @@ as $$
 declare
   v_q date := date_trunc('quarter', coalesce(p_quarter, (now() at time zone 'Europe/London')::date))::date;
   v_end date := (v_q + interval '3 months')::date;
+  v_faith boolean;
 begin
   if not app.can_read_person(p_person) then
     raise exception 'Not allowed' using errcode = '42501';
   end if;
+  -- SECURITY REVIEW 28 (Ann A01): maturity events are counted only for a caller who may see
+  -- the member's faith (or edit the member); for others maturity_attended is null and
+  -- events_attended leaves maturity events out, so the one can't be worked out from the other.
+  v_faith := app.can_see_faith(p_person) or app.can_edit_person(p_person);
   return jsonb_build_object(
     'quarter_start', v_q,
     'events_attended', (select count(*) from public.event_attendance a
-                        where a.person_id = p_person and a.attended_on >= v_q and a.attended_on < v_end),
-    'maturity_attended', (select count(*) from public.event_attendance a
-                          where a.person_id = p_person and a.attended_on >= v_q and a.attended_on < v_end
-                            and app.is_maturity_event(a.project_id)),
+                        where a.person_id = p_person and a.attended_on >= v_q and a.attended_on < v_end
+                          and (v_faith or not app.is_maturity_event(a.project_id))),
+    'maturity_attended', case when v_faith then
+                          (select count(*) from public.event_attendance a
+                           where a.person_id = p_person and a.attended_on >= v_q and a.attended_on < v_end
+                             and app.is_maturity_event(a.project_id)) end,
     'events_served', (select count(distinct a.project_id) from public.assignments a
                       where a.person_id = p_person and a.status in ('planned', 'served')
                         and a.serve_date >= v_q and a.serve_date < v_end and not app.is_sunday_project(a.project_id)),
+    -- SECURITY REVIEW 28 (Ann A03): approved events only, not drafts an owner has not put forward.
     'committees', (select count(*) from public.project_committee_members c join public.projects p on p.id = c.project_id
-                   where c.person_id = p_person and p.starts_at < v_end and p.ends_at >= v_q and p.status <> 'cancelled'));
+                   where c.person_id = p_person and p.starts_at < v_end and p.ends_at >= v_q
+                     and p.status in ('approved', 'in_progress', 'done')));
 end $$;
 revoke all on function public.person_engagement(uuid, date) from public, anon;
 grant execute on function public.person_engagement(uuid, date) to authenticated, service_role;
@@ -336,28 +391,36 @@ declare
   v_q date := date_trunc('quarter', coalesce(p_quarter, (now() at time zone 'Europe/London')::date))::date;
   v_end date := (v_q + interval '3 months')::date;
   v jsonb;
+  v_faith boolean;
 begin
   if not exists (select 1 from public.units u where u.id = p_unit and u.church_id = app.current_church_id())
      or not app.can_view_unit(p_unit) then
     raise exception 'Not allowed' using errcode = '42501';
   end if;
+  -- SECURITY REVIEW 28 (Ann A01): in a small team a count is a person. Maturity events are
+  -- counted only for those who may see these members' faith: the team's Lead or Deputy, the
+  -- Coordinator, the Resident Pastor. For the Operations Lead and Purpose Heads,
+  -- attended_maturity is null and "attended" leaves maturity events out.
+  v_faith := app.sees_unit(p_unit) or app.has_any_role(array['resident_pastor','gsquad_coordinator']::public.app_role[]);
   select jsonb_build_object(
            'quarter_start', v_q,
            'members', count(distinct m.person_id),
            'attended', count(distinct m.person_id) filter (where exists (
                select 1 from public.event_attendance ea
-               where ea.person_id = m.person_id and ea.attended_on >= v_q and ea.attended_on < v_end)),
-           'attended_maturity', count(distinct m.person_id) filter (where exists (
+               where ea.person_id = m.person_id and ea.attended_on >= v_q and ea.attended_on < v_end
+                 and (v_faith or not app.is_maturity_event(ea.project_id)))),
+           'attended_maturity', case when v_faith then count(distinct m.person_id) filter (where exists (
                select 1 from public.event_attendance ea
                where ea.person_id = m.person_id and ea.attended_on >= v_q and ea.attended_on < v_end
-                 and app.is_maturity_event(ea.project_id))),
+                 and app.is_maturity_event(ea.project_id))) end,
            'served', count(distinct m.person_id) filter (where exists (
                select 1 from public.assignments a
                where a.person_id = m.person_id and a.unit_id = p_unit and a.status in ('planned', 'served')
                  and a.serve_date >= v_q and a.serve_date < v_end and not app.is_sunday_project(a.project_id))),
            'on_committees', count(distinct m.person_id) filter (where exists (
                select 1 from public.project_committee_members c join public.projects p on p.id = c.project_id
-               where c.person_id = m.person_id and p.starts_at < v_end and p.ends_at >= v_q and p.status <> 'cancelled')))
+               where c.person_id = m.person_id and p.starts_at < v_end and p.ends_at >= v_q
+                 and p.status in ('approved', 'in_progress', 'done'))))   -- SECURITY REVIEW 28 (Ann A03)
     into v
     from public.unit_memberships m join public.people pp on pp.id = m.person_id
     where m.unit_id = p_unit and m.status = 'active' and pp.status = 'active' and pp.anonymised_at is null;
@@ -494,10 +557,13 @@ begin
                                 where x.person_id = p_person)
                      end,
     -- Migration 36: events attended and planning committee seats.
+    -- SECURITY REVIEW 28 (Ann A01): maturity events only for a caller who may see the
+    -- member's faith (the Resident Pastor), as courses and the pathway above.
     'events_attended', (select coalesce(jsonb_agg(jsonb_build_object('event', p.name, 'attended_on', ea.attended_on)
                                                   order by ea.attended_on), '[]')
                         from public.event_attendance ea join public.projects p on p.id = ea.project_id
-                        where ea.person_id = p_person),
+                        where ea.person_id = p_person
+                          and (app.can_see_faith(p_person) or not app.is_maturity_event(ea.project_id))),
     'committees',      (select coalesce(jsonb_agg(jsonb_build_object('event', p.name, 'role', cm.role) order by p.starts_at), '[]')
                         from public.project_committee_members cm join public.projects p on p.id = cm.project_id
                         where cm.person_id = p_person)
@@ -523,12 +589,19 @@ declare
   v_leadership jsonb;
   v_pathway jsonb;
   v_rest jsonb;
+  v_faith boolean;
 begin
   -- The roles that read the monthly report and the four focus areas.
   if not app.has_any_role(array['gsquad_coordinator','resident_pastor','purpose_head',
                                 'operations_lead','pastoral_lead']::public.app_role[]) then
     raise exception 'Not allowed' using errcode = '42501';
   end if;
+  -- SECURITY REVIEW 28 (Ann A01): team by team, a count in a small team is a person, so
+  -- maturity events are counted per team only for the Coordinator and the Resident Pastor (who
+  -- may see every member's faith). For the others the team's attended_maturity is null and
+  -- took_part leaves maturity events out. Church-wide habit totals stay for all five roles,
+  -- as the pathway counts do (review 27, P05).
+  v_faith := app.has_any_role(array['gsquad_coordinator','resident_pastor']::public.app_role[]);
 
   -- Leadership: members at each stage now (active members in a live team place, counted once
   -- per stage), and moves to a later stage during the quarter.
@@ -644,19 +717,21 @@ begin
                        select count(distinct m.person_id) as members,
                               count(distinct m.person_id) filter (where
                                 exists (select 1 from public.event_attendance ea
-                                        where ea.person_id = m.person_id and ea.attended_on >= v_q and ea.attended_on < v_end)
+                                        where ea.person_id = m.person_id and ea.attended_on >= v_q and ea.attended_on < v_end
+                                          and (v_faith or not app.is_maturity_event(ea.project_id)))
                                 or exists (select 1 from public.assignments a
                                            where a.person_id = m.person_id and a.unit_id = m.unit_id
                                              and a.status in ('planned', 'served') and a.serve_date >= v_q and a.serve_date < v_end
                                              and not app.is_sunday_project(a.project_id))) as took_part,
-                              count(distinct m.person_id) filter (where
+                              case when v_faith then count(distinct m.person_id) filter (where
                                 exists (select 1 from public.event_attendance ea
                                         where ea.person_id = m.person_id and ea.attended_on >= v_q and ea.attended_on < v_end
-                                          and app.is_maturity_event(ea.project_id))) as maturity,
+                                          and app.is_maturity_event(ea.project_id))) end as maturity,
                               count(distinct m.person_id) filter (where
                                 exists (select 1 from public.project_committee_members cm join public.projects p on p.id = cm.project_id
                                         where cm.person_id = m.person_id and p.starts_at < v_end
-                                          and (p.ends_at >= v_q) and p.status <> 'cancelled')) as committees
+                                          and (p.ends_at >= v_q)
+                                          and p.status in ('approved', 'in_progress', 'done'))) as committees   -- SECURITY REVIEW 28 (Ann A03)
                        from public.unit_memberships m join public.people pp on pp.id = m.person_id
                        where m.unit_id = u.id and m.status = 'active' and pp.status = 'active' and pp.anonymised_at is null) t
                      where u.church_id = v_church and u.is_active))
