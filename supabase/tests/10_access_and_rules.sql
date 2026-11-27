@@ -3965,7 +3965,8 @@ select test.ok(exists (select 1 from public.service_grids where id = current_set
 
 -- SECURITY REVIEW 23 (R07): an event's run of show on a Sunday does not block that Sunday's service.
 select test.login('ul_a'); set role authenticated;
-select set_config('test.sun', (current_date + 150 + (7 - extract(isodow from current_date + 150))::int)::text, false);
+-- A Sunday about 20 months ahead, clear of the Sundays other sections set up (which vary with today's date).
+select set_config('test.sun', (current_date + 600 + (7 - extract(isodow from current_date + 600))::int)::text, false);
 select test.lives(format($q$insert into public.projects (level, unit_id, name, starts_at, ends_at)
                            values ('unit', %L, 'Sunday picnic', (%L::date + time '14:00') at time zone 'Europe/London', (%L::date + time '17:00') at time zone 'Europe/London')$q$,
                          test.id('A1'), current_setting('test.sun'), current_setting('test.sun')),
@@ -4799,6 +4800,123 @@ reset role;
 select test.login('');
 select test.ok((select ended_on from public.member_mentors where person_id = test.id('pF')) = current_date + 5,
                'P04: ... and that pairing ends the day it would have started');
+
+-- ---------- 36. Event attendance, maturity habits, team engagement, committees ----------
+select test.login('');
+insert into test.ids select 'tBible', id from public.project_types where church_id = test.id('churchA') and name = 'Bible study';
+select test.ok((select maturity_habit from public.project_types where id = test.id('tBible'))
+               and (select maturity_habit from public.project_types where church_id = test.id('churchA') and name = 'Prayer'),
+               'R36: Bible study and Prayer count as maturity habits');
+do $$
+declare v uuid;
+begin
+  -- A Bible study that ran two days ago, owned by ul_a.
+  insert into public.projects (church_id, level, unit_id, name, type_id, starts_at, ends_at, status, is_event, owner_user_id)
+  values (test.id('churchA'), 'unit', test.id('A1'), 'Tuesday Bible study', test.id('tBible'),
+          now() - interval '2 days', now() - interval '2 days' + interval '2 hours', 'approved', true, test.id('ul_a')) returning id into v;
+  insert into test.ids values ('evBible', v);
+  -- A draft event, and a live event (for committees) owned by ul_a.
+  insert into public.projects (church_id, level, unit_id, name, starts_at, ends_at, status, is_event, owner_user_id)
+  values (test.id('churchA'), 'unit', test.id('A1'), 'Draft picnic', now() - interval '1 day', now() - interval '1 day' + interval '2 hours', 'draft', true, test.id('ul_a')) returning id into v;
+  insert into test.ids values ('evDraft', v);
+  insert into public.projects (church_id, level, unit_id, name, starts_at, ends_at, status, is_event, owner_user_id)
+  values (test.id('churchA'), 'unit', test.id('A1'), 'Spring outreach', now() + interval '60 days', now() + interval '60 days 3 hours', 'submitted', true, test.id('ul_a')) returning id into v;
+  insert into test.ids values ('evLive1', v);
+  insert into public.projects (church_id, level, unit_id, name, starts_at, ends_at, status, is_event, owner_user_id)
+  values (test.id('churchA'), 'unit', test.id('A1'), 'Summer fete', now() + interval '90 days', now() + interval '90 days 3 hours', 'submitted', true, test.id('ul_a')) returning id into v;
+  insert into test.ids values ('evLive2', v);
+end $$;
+
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$insert into public.event_attendance (project_id, person_id, attended_on) values (%L, %L, (now() - interval '2 days')::date)$q$,
+                         test.id('evBible'), test.id('pN')),
+                  'R36: the Team Lead (and owner) records a member at the Bible study');
+select test.ok((select recorded_by from public.event_attendance where project_id = test.id('evBible') and person_id = test.id('pN')) = test.id('ul_a'),
+               'R36: ... and the database stamps who recorded it');
+select test.throws(format($q$insert into public.event_attendance (project_id, person_id, attended_on) values (%L, %L, current_date + 1)$q$,
+                          test.id('evBible'), test.id('pM')),
+                   'R36: not on a day that has not come');
+select test.throws(format($q$insert into public.event_attendance (project_id, person_id, attended_on) values (%L, %L, current_date - 20)$q$,
+                          test.id('evBible'), test.id('pM')),
+                   'R36: not on a day outside the event');
+select test.throws(format($q$insert into public.event_attendance (project_id, person_id, attended_on) values (%L, %L, (now() - interval '1 day')::date)$q$,
+                          test.id('evDraft'), test.id('pM')),
+                   'R36: not at an event that is not approved');
+select test.throws(format($q$update public.event_attendance set attended_on = attended_on where project_id = %L$q$, test.id('evBible')),
+                   'R36: an entry is not rewritten (remove and record again)');
+select test.ok((select attended from public.event_attendance_candidates(test.id('evBible'), (now() - interval '2 days')::date) where person_id = test.id('pN')),
+               'R36: the check-in list shows the member as marked');
+select test.ok((public.person_engagement(test.id('pN')) ->> 'maturity_attended')::int = 1,
+               'R36: the member''s facts count one maturity event this quarter');
+select test.ok((public.team_engagement(test.id('A1')) ->> 'attended_maturity')::int >= 1, 'R36: ... and the team''s engagement counts them');
+reset role;
+select test.login('editor'); set role authenticated;
+select test.throws(format($q$insert into public.event_attendance (project_id, person_id, attended_on) values (%L, %L, (now() - interval '2 days')::date)$q$,
+                          test.id('evBible'), test.id('pM')),
+                   'R36: an editor records no attendance');
+select test.ok((select count(*) from public.event_attendance where person_id = test.id('pN')) = 0, 'R36: ... nor reads it');
+select test.throws(format('select public.person_engagement(%L)', test.id('pN')), 'R36: ... nor a member''s facts');
+select test.throws(format('select public.team_engagement(%L)', test.id('A1')), 'R36: ... nor a team''s engagement');
+select test.ok((select count(*) from public.event_attendance_candidates(test.id('evBible'), current_date)) = 0,
+               'R36: ... and gets an empty check-in list');
+reset role;
+select test.login('ul_b'); set role authenticated;   -- Deputy of A1
+select test.throws(format($q$insert into public.event_attendance (project_id, person_id, attended_on) values (%L, %L, (now() - interval '2 days')::date)$q$,
+                          test.id('evBible'), test.id('pM')),
+                   'R36: the Deputy does not record attendance');
+reset role;
+select test.login('coord'); set role authenticated;
+select test.lives(format($q$insert into public.event_attendance (project_id, person_id, attended_on) values (%L, %L, (now() - interval '2 days')::date)$q$,
+                         test.id('evBible'), test.id('pM')),
+                  'R36: the Coordinator records a member');
+select test.ok((public.maturity_report() -> 'habits' ->> 'members_attending')::int >= 2
+               and jsonb_array_length(public.maturity_report() -> 'teams') >= 1,
+               'R36: the Maturity report counts maturity habits and team engagement');
+select test.ok(position(test.id('pN')::text in public.maturity_report()::text) = 0, 'R36: ... and names no one');
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$delete from public.event_attendance where project_id = %L and person_id = %L$q$, test.id('evBible'), test.id('pM')),
+                  'R36: the owner removes an entry made in error');
+reset role;
+
+-- Committees and leaders' load.
+select test.login('');
+update public.app_users set person_id = test.id('pN') where id = test.id('ul_a');
+update public.church_settings set committees_max = 1 where church_id = test.id('churchA');
+select test.login('ph'); set role authenticated;
+select test.throws(format($q$insert into public.project_committee_members (project_id, person_id) values (%L, %L)$q$, test.id('evLive1'), test.id('pN')),
+                   'R36: only the event''s manager names its committee');
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.lives(format($q$insert into public.project_committee_members (project_id, person_id, role) values (%L, %L, 'Chair')$q$, test.id('evLive1'), test.id('pN')),
+                  'R36: the owner names a committee member');
+select test.lives(format($q$insert into public.project_committee_members (project_id, person_id) values (%L, %L)$q$, test.id('evLive2'), test.id('pN')),
+                  'R36: ... on a second live event');
+select test.throws(format($q$update public.project_committee_members set person_id = %L where project_id = %L$q$, test.id('pM'), test.id('evLive1')),
+                   'R36: only the role on the committee changes');
+reset role;
+select test.login('coord'); set role authenticated;
+select test.ok(exists (select 1 from public.leaders_carrying_too_much() where user_id = test.id('ul_a') and committee_seats = 2 and committees_over),
+               'R36: two committee seats over a limit of one shows the leader for care');
+reset role;
+select test.login('');
+update public.church_settings set committees_max = 2 where church_id = test.id('churchA');
+update public.app_users set person_id = null where id = test.id('ul_a');
+
+-- Anonymising removes attendance and committee seats.
+do $$
+declare v uuid;
+begin
+  insert into public.people (church_id, first_name, surname, email, date_joined)
+  values (test.id('churchA'), 'Rae', 'Gone', 'rae.gone@example.org', current_date - 60) returning id into v;
+  insert into test.ids values ('pR36', v);
+  insert into public.event_attendance (church_id, project_id, person_id, attended_on) values (test.id('churchA'), test.id('evBible'), v, (now() - interval '2 days')::date);
+  insert into public.project_committee_members (church_id, project_id, person_id) values (test.id('churchA'), test.id('evLive1'), v);
+end $$;
+select app.anonymise(test.id('pR36'));
+select test.ok((select count(*) from public.event_attendance where person_id = test.id('pR36')) = 0
+               and (select count(*) from public.project_committee_members where person_id = test.id('pR36')) = 0,
+               'R36: anonymising removes attendance and committee seats');
 
 -- ---------- report ---------------------------------------------------------------------
 select n, case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail

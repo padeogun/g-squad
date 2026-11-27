@@ -234,6 +234,8 @@ export interface ServingRules {
   leader_roles_max: number;
   // Migration 32: overlapping projects (not Sundays) before the G-Squad Coordinator approves another.
   projects_before_approval: number;
+  // Migration 36: planning committee seats on live events before a leader is flagged for care.
+  committees_max: number;
 }
 export const SERVING_RULES: { key: keyof ServingRules; label: string; min: number; max: number; step: number }[] = [
   { key: 'serving_limit_per_month', label: 'Usual slots a month', min: 1, max: 31, step: 1 },
@@ -241,6 +243,7 @@ export const SERVING_RULES: { key: keyof ServingRules; label: string; min: numbe
   { key: 'sundays_off_per_month', label: 'Sundays off a month', min: 0, max: 3, step: 1 },
   { key: 'leader_roles_max', label: 'Leadership roles at once', min: 1, max: 10, step: 1 },
   { key: 'projects_before_approval', label: 'Overlapping events before approval', min: 1, max: 10, step: 1 },
+  { key: 'committees_max', label: 'Planning committees at once', min: 1, max: 10, step: 1 },
 ];
 
 export function servingRulesPatch(

@@ -32,6 +32,8 @@ import { EventPlanCard } from './EventPlanCard';
 import { DemandCard, InputsCard, ReadinessCard } from './ProjectSide';
 import { RunOfShowCard } from './RunOfShowCard';
 import { FocusAreasCard } from './FocusAreasCard';
+import { AttendanceCard, CommitteeCard } from './AttendanceCards';
+import { useProjectFocus } from '../../data/focus';
 
 const { SectionHeading, Card, Notice, Button, TextField, SelectField } = TEC;
 
@@ -53,6 +55,7 @@ function ProjectPage({ p }: { p: ProjectRow }) {
   const types = useProjectTypes();
   const leaders = useLeaders();
   const plan = useEventPlan(p.id);
+  const focus = useProjectFocus(p.id);
   const ready = useReadiness(p.id);
   const refresh = useRefreshProject(p.id);
 
@@ -64,6 +67,10 @@ function ProjectPage({ p }: { p: ProjectRow }) {
   const canManage = !!r?.can_manage;
   const canApprove = !!r?.can_approve;
   const isEvent = !!plan.data;
+  // Migration 36: a maturity event (its type is marked, or its primary aim is Discipleship &
+  // Maturity) counts towards members' maturity habits; the database decides the same way.
+  const isMaturity =
+    !!(p.type_id && byId(types.data).get(p.type_id)?.maturity_habit) || !!focus.data?.some((f) => f.is_primary && f.area === 'discipleship');
 
   return (
     <>
@@ -112,6 +119,9 @@ function ProjectPage({ p }: { p: ProjectRow }) {
           {plan.error && <Notice tone="danger">{friendlyError(plan.error)}</Notice>}
           {plan.data && <EventPlanCard plan={plan.data} projectId={p.id} canManage={canManage} canApprove={canApprove} status={p.status} />}
           {plan.data === null && <StartPlan projectId={p.id} status={p.status} canManage={canManage} onDone={refresh} />}
+          {/* Migration 36: check-in at the event, and its planning committee. */}
+          {p.is_event && !p.is_sunday_service && <AttendanceCard p={p} maturity={isMaturity} />}
+          {p.is_event && !p.is_sunday_service && <CommitteeCard p={p} canManage={canManage} />}
         </div>
         <aside className="app-project-side" aria-label="Approval, volunteers and inputs">
           {r && <ReadinessCard r={r} />}

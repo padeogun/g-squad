@@ -2,6 +2,8 @@
 // On a member's record (migration 35, decisions of 25 Nov 2026):
 //   Leadership stage history  each time their leadership stage in a team was set or changed,
 //                             written by the database. Read by those who can read the member.
+//   Taking part this quarter  events attended (prayer, Bible study and discipleship among them),
+//                             events served at, committees: facts, never a score (migration 36).
 //   Discipleship pathway      the stages they have reached (Encounter to Sending), treated like
 //                             the faith fields: offered only to faith readers, loaded only when
 //                             asked for (every view is logged), recorded by their Team Lead or
@@ -14,6 +16,7 @@ import { friendlyError } from '../../data/errors';
 import type { Person } from '../../data/people';
 import { useLeadershipStages, useUnits } from '../../data/reference';
 import { shortDate, todayIso } from '../../data/sundays';
+import { engagementFacts, usePersonEngagement } from '../../data/attendance';
 import { currentPathway, describeChange, usePathway, usePathwayStages, useRemovePathway, useSetPathway, useStageHistory } from '../../data/maturity';
 
 const { Card, Button, Chip, Notice, SelectField, TextField } = TEC;
@@ -21,9 +24,31 @@ const { Card, Button, Chip, Notice, SelectField, TextField } = TEC;
 export function MemberMaturity({ person, canSeePathway, canEditPathway }: { person: Person; canSeePathway: boolean; canEditPathway: boolean }) {
   return (
     <>
+      <TakingPart person={person} />
       <StageHistory person={person} />
       {canSeePathway && <Pathway person={person} canEdit={canEditPathway} />}
     </>
+  );
+}
+
+// Migration 36 (decision of 27 Nov 2026): attending maturity events is a habit worth seeing, so
+// the record states the quarter's facts. Never a score or a rating of the person.
+function TakingPart({ person }: { person: Person }) {
+  const e = usePersonEngagement(person.id);
+  if (!e.data) return e.error ? <Notice tone="danger">{friendlyError(e.error)}</Notice> : null;
+  return (
+    <Card title="Taking part this quarter">
+      <ul className="app-journey">
+        {engagementFacts(e.data).map((f) => (
+          <li key={f}>
+            <span>{f}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="type-caption" style={{ margin: 0 }}>
+        From event check-ins, the rota and planning committees. Facts to talk about, never a score.
+      </p>
+    </Card>
   );
 }
 
