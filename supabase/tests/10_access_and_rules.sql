@@ -5127,6 +5127,13 @@ select test.login('ul_a'); set role authenticated;
 select test.lives(format($q$insert into public.project_committee_members (project_id, person_id, role) values (%L, %L, 'Chair')$q$, test.id('goal'), test.id('pN')),
                   'M37: a goal-based project has a planning committee');
 select test.lives(format($q$update public.projects set status = 'in_progress' where id = %L$q$, test.id('goal')), 'M37: under way');
+-- SECURITY REVIEW 30 (G01): the approved plan's milestones are fixed; only met or not met.
+select test.throws(format($q$delete from public.project_milestones where project_id = %L$q$, test.id('goal')),
+                   'R30: an approved plan''s milestones are not removed');
+select test.throws(format($q$insert into public.project_milestones (project_id, title, due_on) values (%L, 'Extra', current_date + 9)$q$, test.id('goal')),
+                   'R30: ... nor added to');
+select test.throws(format($q$update public.project_milestones set title = 'Easier' where project_id = %L$q$, test.id('goal')),
+                   'R30: ... nor reworded');
 select test.throws(format($q$update public.projects set status = 'done' where id = %L$q$, test.id('goal')),
                    'M37: it closes only when every milestone is met');
 select test.lives(format($q$update public.project_milestones set done_on = current_date where project_id = %L$q$, test.id('goal')),
@@ -5222,6 +5229,8 @@ select test.lives(format($q$insert into public.programme_reports (unit_id, area,
                   'M37: the Team Lead submits the month''s report');
 select test.ok((select submitted_by = test.id('ul_a') and submitted_at is not null from public.programme_reports where unit_id = test.id('A1')),
                'M37: who submitted and when are recorded');
+select test.ok((select (computed_figures ->> 'decisions_for_christ')::int = 2 and ever_submitted from public.programme_reports where unit_id = test.id('A1')),
+               'R30: the app''s counts are kept as submitted');
 select test.throws(format($q$update public.programme_reports set figures = '{"classes_held": 5}' where unit_id = %L$q$, test.id('A1')),
                    'M37: a submitted report is not changed by the team');
 select test.ok((public.programme_report_figures(test.id('A1'), 'maturity', current_date) ->> 'decisions_for_christ')::int = 2
@@ -5244,6 +5253,26 @@ select test.login('coord'); set role authenticated;
 select test.lives(format($q$update public.programme_reports set status = 'draft' where unit_id = %L$q$, test.id('A1')),
                   'M37: the Coordinator returns it for changes');
 select test.ok((select submitted_at is null from public.programme_reports where unit_id = test.id('A1')), 'M37: ... as a draft again');
+reset role;
+select test.login('ul_a'); set role authenticated;
+select test.throws(format($q$delete from public.programme_reports where unit_id = %L$q$, test.id('A1')),
+                   'R30: a report that was submitted is never deleted');
+reset role; select test.login('');
+select test.ok(exists (select 1 from public.audit_log where action = 'programme_report_returned' and actor_id = test.id('coord')),
+               'R30: returning a report is logged');
+select test.ok(app.is_maturity_event(test.id('classEv')), 'R30: a project linked to a maturity programme is a maturity event');
+-- SECURITY REVIEW 30 (G03): a church project links to a team's programme only through those responsible for the team.
+select test.login('ul_b'); set role authenticated;
+do $$
+declare v uuid;
+begin
+  insert into public.unit_programmes (unit_id, name, report_area) values (test.id('A2'), 'Street outreach', 'evangelism') returning id into v;
+  perform set_config('test.prog2', v::text, false);
+end $$;
+reset role;
+select test.login('ph'); set role authenticated;
+select test.throws(format($q$insert into public.projects (church_id, level, name, starts_at, ends_at, programme_id) values (app.current_church_id(), 'church', 'Not my team', now() + interval '1 day', now() + interval '2 days', %L)$q$, current_setting('test.prog2')),
+                   'R30: a Purpose Head does not link a church event to another purpose''s team programme');
 reset role;
 select test.login('ul_a'); set role authenticated;
 select test.throws(format($q$delete from public.unit_programmes where id = %L$q$, test.id('prog')),

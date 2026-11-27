@@ -1112,14 +1112,14 @@ isOneToOne: false
                   ]
                 },"programme_reports": {
                   Row: {
-                    "area": Database["public"]['Enums']["programme_area"],"church_id": string,"commentary": string | null,"figures": NonNullable<Json>,"id": string,"report_month": string,"status": Database["public"]['Enums']["report_status"],"submitted_at": string | null,"submitted_by": string | null,"unit_id": string,"updated_at": string,"updated_by": string | null
+                    "area": Database["public"]['Enums']["programme_area"],"church_id": string,"commentary": string | null,"computed_figures": Json | null,"ever_submitted": boolean,"figures": NonNullable<Json>,"id": string,"report_month": string,"status": Database["public"]['Enums']["report_status"],"submitted_at": string | null,"submitted_by": string | null,"unit_id": string,"updated_at": string,"updated_by": string | null
                   }
                   ComputedFields: never
                   Insert: {
-                    "area": Database["public"]['Enums']["programme_area"],"church_id"?: string,"commentary"?: string | null,"figures"?: NonNullable<Json>,"id"?: string,"report_month": string,"status"?: Database["public"]['Enums']["report_status"],"submitted_at"?: string | null,"submitted_by"?: string | null,"unit_id": string,"updated_at"?: string,"updated_by"?: string | null
+                    "area": Database["public"]['Enums']["programme_area"],"church_id"?: string,"commentary"?: string | null,"computed_figures"?: Json | null,"ever_submitted"?: boolean,"figures"?: NonNullable<Json>,"id"?: string,"report_month": string,"status"?: Database["public"]['Enums']["report_status"],"submitted_at"?: string | null,"submitted_by"?: string | null,"unit_id": string,"updated_at"?: string,"updated_by"?: string | null
                   }
                   Update: {
-                    "area"?: Database["public"]['Enums']["programme_area"],"church_id"?: string,"commentary"?: string | null,"figures"?: NonNullable<Json>,"id"?: string,"report_month"?: string,"status"?: Database["public"]['Enums']["report_status"],"submitted_at"?: string | null,"submitted_by"?: string | null,"unit_id"?: string,"updated_at"?: string,"updated_by"?: string | null
+                    "area"?: Database["public"]['Enums']["programme_area"],"church_id"?: string,"commentary"?: string | null,"computed_figures"?: Json | null,"ever_submitted"?: boolean,"figures"?: NonNullable<Json>,"id"?: string,"report_month"?: string,"status"?: Database["public"]['Enums']["report_status"],"submitted_at"?: string | null,"submitted_by"?: string | null,"unit_id"?: string,"updated_at"?: string,"updated_by"?: string | null
                   }
                   Relationships: [
                     {

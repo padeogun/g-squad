@@ -802,7 +802,9 @@ begin
          now() - interval '20 days', up.id
   from (values ('New believers class', 'a discipleship class', 6, 'Discipleship classes'),
                ('City centre outreach', 'an outreach session', 4, 'Outdoor evangelism')) as x(name, what, u, prog)
-  join public.unit_programmes up on up.unit_id = v_unit_ids[x.u] and up.name = x.prog;
+  -- SECURITY REVIEW 30 (G07): only the sample programme (its "(sample)" description), never a
+  -- tester's programme of the same name.
+  join public.unit_programmes up on up.unit_id = v_unit_ids[x.u] and up.name = x.prog and up.description like '%(sample)';
   insert into public.project_outcomes (church_id, project_id, decisions_for_christ, first_time_guests)
   select v_church, p.id, case p.name when 'New believers class' then 1 else 3 end, case p.name when 'City centre outreach' then 12 end
   from public.projects p where p.church_id = v_church and p.description like 'Sample data%' and p.programme_id is not null;
@@ -835,12 +837,13 @@ begin
    where id = (select p.id from public.projects p where p.church_id = v_church and p.is_sunday_service
                  and p.description like 'Sample data%' and p.starts_at > now() order by p.starts_at limit 1)
   returning id into v_project;
+  -- (Review 30 G07: only when there is such a Sunday.)
   insert into public.project_committee_members (church_id, project_id, person_id, role, added_by)
-  values (v_church, v_project, v_people[8], 'Guest care', v_owner);
+  select v_church, v_project, v_people[8], 'Guest care', v_owner where v_project is not null;
   -- Last month's Maturity report, submitted.
-  insert into public.programme_reports (church_id, unit_id, area, report_month, figures, commentary, status, submitted_by, submitted_at)
+  insert into public.programme_reports (church_id, unit_id, area, report_month, figures, commentary, status, submitted_by, submitted_at, ever_submitted)
   values (v_church, v_unit_ids[6], 'maturity', (date_trunc('month', current_date) - interval '1 month')::date,
-          '{"classes_held": 4, "people_completing": 7, "decisions_other": 1}', 'Two classes moved online (sample)', 'submitted', v_owner, now())
+          '{"classes_held": 4, "people_completing": 7, "decisions_other": 1}', 'Two classes moved online (sample)', 'submitted', v_owner, now(), true)
   on conflict (unit_id, area, report_month) do nothing;
 
   raise notice 'Sample data loaded: % people, % Sundays ahead, 8 Sundays past', array_length(v_people, 1), array_length(v_sundays, 1);

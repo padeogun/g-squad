@@ -23,7 +23,10 @@ export function MilestonesCard({ p, canManage }: { p: Project; canManage: boolea
   const [v, setV] = useState({ title: '', output: '', due_on: '' });
   const [err, setErr] = useState('');
   const open = !['done', 'cancelled'].includes(p.status);
-  const editable = canManage && open;
+  // SECURITY REVIEW 30 (G01): the plan is changed only as a draft; once submitted or approved,
+  // only whether each milestone is met (approved or under way).
+  const editable = canManage && p.status === 'draft';
+  const canMark = canManage && open && p.status !== 'submitted';
 
   // Every change refreshes the list and the readiness (which counts open milestones).
   const done = () => {
@@ -83,7 +86,7 @@ export function MilestonesCard({ p, canManage }: { p: Project; canManage: boolea
               <th scope="col">Output</th>
               <th scope="col">Due</th>
               <th scope="col">Met</th>
-              {editable && <th scope="col"><span className="app-visually-hidden">Actions</span></th>}
+              {canMark && <th scope="col"><span className="app-visually-hidden">Actions</span></th>}
             </tr>
           </thead>
           <tbody>
@@ -93,7 +96,7 @@ export function MilestonesCard({ p, canManage }: { p: Project; canManage: boolea
                 <td style={{ whiteSpace: 'pre-wrap' }}>{m.output ?? '—'}</td>
                 <td>{m.due_on}</td>
                 <td>{m.done_on ?? (m.due_on < today ? 'Overdue' : 'Not yet')}</td>
-                {editable && (
+                {canMark && (
                   <td className="tec-row" style={{ padding: 0 }}>
                     {m.done_on ? (
                       <Button variant="quiet" disabled={change.isPending} onClick={() => change.mutate({ id: m.id, patch: { done_on: null } })}>
@@ -104,15 +107,17 @@ export function MilestonesCard({ p, canManage }: { p: Project; canManage: boolea
                         Met today
                       </Button>
                     )}
-                    <Button
-                      variant="quiet"
-                      disabled={remove.isPending}
-                      onClick={() => {
-                        if (window.confirm(`Remove "${m.title}"?`)) remove.mutate(m.id);
-                      }}
-                    >
-                      Remove
-                    </Button>
+                    {editable && (
+                      <Button
+                        variant="quiet"
+                        disabled={remove.isPending}
+                        onClick={() => {
+                          if (window.confirm(`Remove "${m.title}"?`)) remove.mutate(m.id);
+                        }}
+                      >
+                        Remove
+                      </Button>
+                    )}
                   </td>
                 )}
               </tr>
@@ -121,6 +126,11 @@ export function MilestonesCard({ p, canManage }: { p: Project; canManage: boolea
         </table>
       )}
       {list.length === 0 && !ms.isPending && <p style={{ margin: 0 }}>No milestones yet.</p>}
+      {canManage && open && p.status !== 'draft' && (
+        <p className="type-caption" style={{ margin: 0 }}>
+          To change the plan, move the project back to draft and submit it again.
+        </p>
+      )}
       {failed && <Notice tone="danger">{friendlyError(failed)}</Notice>}
       {editable && (
         <form onSubmit={onAdd} noValidate className="app-form">

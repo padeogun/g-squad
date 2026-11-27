@@ -22,6 +22,11 @@
 --    Coordinator) and submitted to the Coordinator; read by the monthly-report roles and the
 --    team's own Lead and Deputy. Counts the app holds come from linked projects
 --    (programme_report_figures); the Team Lead types the rest. Counts only, no names.
+-- SECURITY REVIEW 30: an approved plan's milestones are fixed (only met or not met) and a goal
+-- project closes with at least one (G01); a project linked to a maturity programme is a
+-- maturity event (G02); programme links are made by those responsible for the team and fixed
+-- once a project ends (G03); a submitted report keeps the app's counts as they stood (G04);
+-- a report that was ever submitted is not deleted (G05).
 -- =====================================================================================
 
 -- -------------------------------------------------------------------------------------
@@ -89,6 +94,7 @@ language plpgsql security definer set search_path = ''
 as $$
 declare
   v_prog record;
+  v_brief boolean := false;
 begin
   if app.is_system() then return new; end if;
   if tg_op = 'INSERT' then
@@ -109,10 +115,11 @@ begin
     end if;
     if new.is_event is distinct from old.is_event or new.is_goal is distinct from old.is_goal then
       -- The Brief's own project is marked by the newsletter trigger (migration 32).
-      if not new.is_event and not new.is_goal and new.is_goal is not distinct from old.is_goal
-         and exists (select 1 from public.newsletter_issues i where i.project_id = new.id) then
-        return new;
-      end if;
+      -- SECURITY REVIEW 30 (G06): it skips only the kind checks, not the rest of this guard.
+      v_brief := not new.is_event and not new.is_goal and new.is_goal is not distinct from old.is_goal
+                 and exists (select 1 from public.newsletter_issues i where i.project_id = new.id);
+    end if;
+    if (new.is_event is distinct from old.is_event or new.is_goal is distinct from old.is_goal) and not v_brief then
       if old.status <> 'draft' then
         raise exception 'Whether this is an event, a routine activity or a goal-based project is decided before it is submitted'
           using errcode = '23514';
@@ -165,6 +172,14 @@ begin
     raise exception 'Only the purpose''s head, the Operations Lead or the Coordinator sets a project at that purpose''s level'
       using errcode = '42501';
   end if;
+  -- SECURITY REVIEW 30 (G03): the link is fixed once the project has ended, so a month's
+  -- counts are not moved afterwards; goal-based projects are not linked (they have milestones).
+  if tg_op = 'UPDATE' and new.programme_id is distinct from old.programme_id and old.status in ('done', 'cancelled') then
+    raise exception 'This project has ended: its programme link stays as it is' using errcode = '23514';
+  end if;
+  if new.programme_id is not null and new.is_goal then
+    raise exception 'A goal-based project is not linked to a programme' using errcode = '23514';
+  end if;
   -- A project linked to a programme: a team project to its own team's programme; an active one.
   if new.programme_id is not null and (tg_op = 'INSERT' or new.programme_id is distinct from old.programme_id
                                        or new.unit_id is distinct from old.unit_id) then
@@ -175,6 +190,14 @@ begin
     end if;
     if new.level = 'unit' and new.unit_id <> v_prog.unit_id then
       raise exception 'A team project is linked to one of its own team''s programmes' using errcode = '23514';
+    end if;
+    -- SECURITY REVIEW 30 (G03): a church project counts towards a team's report only when linked
+    -- by those responsible for that team: its Team Lead or Purpose Head, the Coordinator or the
+    -- Operations Lead. Before, any church project's owner could add counts to any team's report.
+    if new.level = 'church' and not (app.is_unit_lead_of(v_prog.unit_id) or app.is_purpose_head_of_unit(v_prog.unit_id)
+                                     or app.has_any_role(array['operations_lead','gsquad_coordinator']::public.app_role[])) then
+      raise exception 'Only the team''s Team Lead or Purpose Head, the Coordinator or the Operations Lead links a church project to its programme'
+        using errcode = '42501';
     end if;
     if new.is_sunday_service then
       raise exception 'Sundays are not linked to a programme' using errcode = '23514';
@@ -307,6 +330,8 @@ begin
   if old.status in ('approved', 'in_progress') and new.status in ('approved', 'in_progress', 'done') and
      (new.starts_at <> old.starts_at or new.ends_at <> old.ends_at or new.level <> old.level
       or new.unit_id is distinct from old.unit_id or new.purpose_id is distinct from old.purpose_id) then
+    -- (Review 30 G08: a purpose change is in fact refused earlier, by app.project_kind_guard,
+    -- once a project leaves draft; kept here so the rule still holds if that ever changes.)
     new.status := 'submitted';
     new.approved_by := null;
     new.approved_at := null;
@@ -486,6 +511,16 @@ begin
   if p.status in ('done', 'cancelled') then
     raise exception 'This project has closed' using errcode = '23514';
   end if;
+  -- SECURITY REVIEW 30 (G01): the Resident Pastor approved this plan. While it is approved or
+  -- under way only whether each milestone is met changes; to change the plan, move the project
+  -- back to draft and submit it again. Before, an owner could delete every milestone and close.
+  if p.status in ('submitted', 'approved', 'in_progress') then
+    if tg_op <> 'UPDATE'
+       or (to_jsonb(new) - array['done_on','updated_at']) <> (to_jsonb(old) - array['done_on','updated_at']) then
+      raise exception 'The plan is with the Resident Pastor or approved: move the project back to draft to change its milestones'
+        using errcode = '23514';
+    end if;
+  end if;
   if tg_op = 'DELETE' then return old; end if;
   if new.done_on is not null and new.done_on > v_today then
     raise exception 'A milestone is met on a day that has come' using errcode = '23514';
@@ -535,8 +570,10 @@ begin
      and not exists (select 1 from public.project_milestones m where m.project_id = new.id) then
     raise exception 'Name at least one milestone, with its output, before the project goes for approval' using errcode = '23514';
   end if;
+  -- SECURITY REVIEW 30 (G01): and at least one, so "every milestone met" is never empty.
   if new.status = 'done'
-     and exists (select 1 from public.project_milestones m where m.project_id = new.id and m.done_on is null) then
+     and (not exists (select 1 from public.project_milestones m where m.project_id = new.id)
+          or exists (select 1 from public.project_milestones m where m.project_id = new.id and m.done_on is null)) then
     raise exception 'Every milestone must be met before the project closes' using errcode = '23514';
   end if;
   return new;
@@ -660,6 +697,10 @@ create table public.programme_reports (
   report_month  date not null check (extract(day from report_month) = 1),
   figures       jsonb not null default '{}'::jsonb,     -- the typed counts (keys by area, below)
   commentary    text check (length(commentary) <= 4000),
+  -- SECURITY REVIEW 30 (G04): the app's counts as they stood when submitted (null in draft).
+  computed_figures jsonb,
+  -- SECURITY REVIEW 30 (G05): once submitted, a report is never deleted, even if returned.
+  ever_submitted boolean not null default false,
   status        public.report_status not null default 'draft',
   submitted_by  uuid,
   submitted_at  timestamptz,
@@ -715,7 +756,7 @@ declare
 begin
   if app.is_system() then return coalesce(new, old); end if;
   if tg_op = 'DELETE' then
-    if old.status <> 'draft' then
+    if old.status <> 'draft' or old.ever_submitted then
       raise exception 'A submitted report is kept' using errcode = '23514';
     end if;
     if not app.can_write_programme_report(old.unit_id) then
@@ -766,12 +807,24 @@ begin
   if new.status = 'submitted' and (tg_op = 'INSERT' or old.status <> 'submitted') then
     new.submitted_by := (select auth.uid());
     new.submitted_at := now();
+    new.ever_submitted := true;
+    -- SECURITY REVIEW 30 (G04): keep the app's counts as submitted.
+    new.computed_figures := public.programme_report_figures(new.unit_id, new.area, new.report_month);
   elsif new.status = 'draft' then
     new.submitted_by := null;
     new.submitted_at := null;
+    new.computed_figures := null;
+    new.ever_submitted := tg_op = 'UPDATE' and old.ever_submitted;
+    -- SECURITY REVIEW 30 (G05): returning a submitted report for changes is logged.
+    if tg_op = 'UPDATE' and old.status = 'submitted' then
+      perform app.audit('programme_report_returned', 'programme_reports', new.id,
+                        jsonb_build_object('area', new.area, 'month', new.report_month));
+    end if;
   else
     new.submitted_by := old.submitted_by;
     new.submitted_at := old.submitted_at;
+    new.computed_figures := old.computed_figures;
+    new.ever_submitted := old.ever_submitted;
   end if;
   new.church_id := (select app.current_church_id());
   new.updated_by := (select auth.uid());
@@ -920,3 +973,21 @@ begin
 end $$;
 revoke all on function public.project_readiness(uuid) from public, anon;
 grant execute on function public.project_readiness(uuid) to authenticated, service_role;
+
+-- -------------------------------------------------------------------------------------
+-- 7. SECURITY REVIEW 30 (G02): a project linked to a programme that reports on Maturity (a
+--    discipleship class, say) is a maturity event, so its attendance is treated like faith
+--    data, as for prayer and Bible study (reviews 28 and 29). Re-created from migration 36.
+-- -------------------------------------------------------------------------------------
+create or replace function app.is_maturity_event(p_project uuid) returns boolean
+language sql stable security definer set search_path = ''
+as $$
+  select exists (select 1 from public.projects p join public.project_types t on t.id = p.type_id
+                 where p.id = p_project and t.maturity_habit)
+      or exists (select 1 from public.project_focus f
+                 where f.project_id = p_project and f.is_primary and f.area = 'discipleship')
+      or exists (select 1 from public.projects p join public.unit_programmes up on up.id = p.programme_id
+                 where p.id = p_project and up.report_area = 'maturity')
+$$;
+revoke all on function app.is_maturity_event(uuid) from public, anon;
+grant execute on function app.is_maturity_event(uuid) to authenticated, service_role;

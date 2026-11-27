@@ -35,6 +35,7 @@ import { FocusAreasCard } from './FocusAreasCard';
 import { AttendanceCard, CommitteeCard } from './AttendanceCards';
 import { useProjectFocus } from '../../data/focus';
 import { MilestonesCard } from './MilestonesCard';
+import { useProgrammes } from '../../data/programmes';
 
 const { SectionHeading, Card, Notice, Button, TextField, SelectField } = TEC;
 
@@ -71,8 +72,12 @@ function ProjectPage({ p }: { p: ProjectRow }) {
   const isEvent = !!plan.data;
   // Migration 36: a maturity event (its type is marked, or its primary aim is Discipleship &
   // Maturity) counts towards members' maturity habits; the database decides the same way.
+  // Migration 37 (review 30 G02): or it is linked to a programme that reports on Maturity.
+  const programmes = useProgrammes();
   const isMaturity =
-    !!(p.type_id && byId(types.data).get(p.type_id)?.maturity_habit) || !!focus.data?.some((f) => f.is_primary && f.area === 'discipleship');
+    !!(p.type_id && byId(types.data).get(p.type_id)?.maturity_habit) ||
+    !!focus.data?.some((f) => f.is_primary && f.area === 'discipleship') ||
+    !!(p.programme_id && byId(programmes.data).get(p.programme_id)?.report_area === 'maturity');
 
   return (
     <>

@@ -222,7 +222,8 @@ function ReportForm({
   ) : (
     <Chip tone="neutral">Not started</Chip>
   );
-  const appFig = app.data as unknown as Record<string, number> | undefined;
+  // SECURITY REVIEW 30 (G04): a submitted report shows the app's counts as they stood then.
+  const appFig = (submitted && report?.computed_figures ? report.computed_figures : app.data) as unknown as Record<string, number> | undefined;
   const body = (
     <>
       <div className="tec-fields">
@@ -247,13 +248,13 @@ function ReportForm({
         )}
       </div>
       <p className="type-caption" style={{ margin: 0 }}>
-        Counted by the app from linked events and activities:{' '}
-        {app.error
-          ? friendlyError(app.error)
-          : app.data
-            ? AREAS[area].app.map((f) => `${f.label} ${appFig?.[f.key] ?? 0}`).join(' · ')
+        {submitted ? 'Counted by the app when submitted' : 'Counted by the app from linked events and activities'}:{' '}
+        {appFig
+          ? AREAS[area].app.map((f) => `${f.label} ${appFig[f.key] ?? 0}`).join(' · ')
+          : app.error
+            ? friendlyError(app.error)
             : '…'}
-        {area !== 'assimilation' && app.data ? ` · Decisions for Christ in all: ${totalDecisions(app.data, typedNow)}` : ''}
+        {area !== 'assimilation' && appFig ? ` · Decisions for Christ in all: ${totalDecisions(appFig, typedNow)}` : ''}
       </p>
       {editable ? (
         <label className="tec-field app-field-wide" htmlFor={`pr-${unitId}-${area}-c`}>
