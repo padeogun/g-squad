@@ -43,6 +43,14 @@ export const NAV: NavGroup[] = [
         built: true,
         roles: ['gsquad_coordinator', 'resident_pastor', 'purpose_head', 'operations_lead', 'pastoral_lead'],
       },
+      // Migration 37: monthly reports of teams' reporting programmes (the team's own leaders too).
+      {
+        label: 'Programme reports',
+        path: '/programme-reports',
+        slice: 7,
+        built: true,
+        roles: ['gsquad_coordinator', 'resident_pastor', 'purpose_head', 'operations_lead', 'pastoral_lead', 'unit_lead', 'deputy_unit_lead'],
+      },
     ],
   },
   {
@@ -74,6 +82,8 @@ export const NAV: NavGroup[] = [
       { label: 'Rota', path: '/rota', slice: 2, built: true },
       { label: 'Sunday check-in', path: '/check-in', slice: 2, built: true, roles: ['unit_lead', 'operations_lead'] },
       { label: 'Projects and events', path: '/projects', slice: 4, built: true },
+      // Migration 37: the year's projects together, as the leadership approves them.
+      { label: 'Year plan', path: '/year-plan', slice: 4, built: true },
     ],
   },
   {

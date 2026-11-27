@@ -97,6 +97,8 @@ export interface Readiness {
   review_done: boolean | null;
   // Migration 33: the four focus areas (events only; null otherwise).
   focus: { named: number; ok: boolean; unrated: number } | null;
+  // Migration 37: a goal-based project's milestones (null for other projects).
+  milestones?: { named: number; open: number } | null;
   can_manage: boolean;
   can_approve: boolean;
   // The caller would approve a project they own (allowed for the Operations Lead; flagged).

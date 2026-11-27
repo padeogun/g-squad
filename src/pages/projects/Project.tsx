@@ -12,7 +12,7 @@ import { useMutation } from '@tanstack/react-query';
 import { TEC } from '../../design-system';
 import { supabase } from '../../lib/supabase';
 import { friendlyError } from '../../data/errors';
-import { byId, useLeaders, useUnits } from '../../data/reference';
+import { byId, useLeaders, usePurposes, useUnits } from '../../data/reference';
 import {
   formatWhen,
   isoToLondon,
@@ -34,6 +34,8 @@ import { RunOfShowCard } from './RunOfShowCard';
 import { FocusAreasCard } from './FocusAreasCard';
 import { AttendanceCard, CommitteeCard } from './AttendanceCards';
 import { useProjectFocus } from '../../data/focus';
+import { MilestonesCard } from './MilestonesCard';
+import { useProgrammes } from '../../data/programmes';
 
 const { SectionHeading, Card, Notice, Button, TextField, SelectField } = TEC;
 
@@ -58,6 +60,7 @@ function ProjectPage({ p }: { p: ProjectRow }) {
   const focus = useProjectFocus(p.id);
   const ready = useReadiness(p.id);
   const refresh = useRefreshProject(p.id);
+  const purposes = usePurposes();
 
   const unit = p.unit_id ? byId(units.data).get(p.unit_id) : undefined;
   const typeName = p.type_id ? byId(types.data).get(p.type_id)?.name : undefined;
@@ -69,13 +72,19 @@ function ProjectPage({ p }: { p: ProjectRow }) {
   const isEvent = !!plan.data;
   // Migration 36: a maturity event (its type is marked, or its primary aim is Discipleship &
   // Maturity) counts towards members' maturity habits; the database decides the same way.
+  // Migration 37 (review 30 G02): or it is linked to a programme that reports on Maturity.
+  const programmes = useProgrammes();
   const isMaturity =
-    !!(p.type_id && byId(types.data).get(p.type_id)?.maturity_habit) || !!focus.data?.some((f) => f.is_primary && f.area === 'discipleship');
+    !!(p.type_id && byId(types.data).get(p.type_id)?.maturity_habit) ||
+    !!focus.data?.some((f) => f.is_primary && f.area === 'discipleship') ||
+    !!(p.programme_id && byId(programmes.data).get(p.programme_id)?.report_area === 'maturity');
 
   return (
     <>
       <SectionHeading
-        eyebrow={`${p.level === 'church' ? 'Church project' : `${unit?.name ?? 'Unit'} project`}${typeName ? ` · ${typeName}` : ''}${p.is_event ? '' : ' · Routine team activity'}`}
+        eyebrow={`${
+          p.purpose_id ? `${byId(purposes.data).get(p.purpose_id)?.name ?? 'Purpose'} project` : p.level === 'church' ? 'Church project' : `${unit?.name ?? 'Unit'} project`
+        }${typeName ? ` · ${typeName}` : ''}${p.is_goal ? ' · Goal-based' : p.is_event ? '' : ' · Routine team activity'}`}
         title={p.name}
         rule
       >
@@ -118,10 +127,14 @@ function ProjectPage({ p }: { p: ProjectRow }) {
           {plan.isPending && <p>Loading the event plan…</p>}
           {plan.error && <Notice tone="danger">{friendlyError(plan.error)}</Notice>}
           {plan.data && <EventPlanCard plan={plan.data} projectId={p.id} canManage={canManage} canApprove={canApprove} status={p.status} />}
-          {plan.data === null && <StartPlan projectId={p.id} status={p.status} canManage={canManage} onDone={refresh} />}
+          {/* A goal-based project has milestones, not an event plan (migration 37). */}
+          {plan.data === null && !p.is_goal && <StartPlan projectId={p.id} status={p.status} canManage={canManage} onDone={refresh} />}
           {/* Migration 36: check-in at the event, and its planning committee. */}
           {p.is_event && !p.is_sunday_service && <AttendanceCard p={p} maturity={isMaturity} />}
           {p.is_event && !p.is_sunday_service && <CommitteeCard p={p} canManage={canManage} />}
+          {/* Migration 37: a goal-based project has milestones and outputs, and may have a committee. */}
+          {p.is_goal && <MilestonesCard p={p} canManage={canManage} />}
+          {p.is_goal && <CommitteeCard p={p} canManage={canManage} />}
         </div>
         <aside className="app-project-side" aria-label="Approval, volunteers and inputs">
           {r && <ReadinessCard r={r} />}
@@ -146,7 +159,11 @@ function StatusFlow({ p }: { p: ProjectRow }) {
   const steps: { key: ProjectRow['status']; label: string }[] = [
     { key: 'draft', label: 'Draft' },
     { key: 'submitted', label: 'Submitted' },
-    { key: 'approved', label: p.level === 'church' ? 'Approved by the Operations Lead' : 'Approved by the Purpose Head' },
+    {
+      key: 'approved',
+      // Migration 37: goal-based projects are decided by the Resident Pastor with the leadership.
+      label: p.is_goal ? 'Approved by the Resident Pastor' : p.level === 'church' ? 'Approved by the Operations Lead' : 'Approved by the Purpose Head',
+    },
     { key: 'in_progress', label: 'In progress' },
     { key: 'done', label: 'Done' },
   ];

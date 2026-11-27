@@ -1110,6 +1110,32 @@ isOneToOne: false
       referencedColumns: ["church_id","id"]
     }
                   ]
+                },"programme_reports": {
+                  Row: {
+                    "area": Database["public"]['Enums']["programme_area"],"church_id": string,"commentary": string | null,"computed_figures": Json | null,"ever_submitted": boolean,"figures": NonNullable<Json>,"id": string,"report_month": string,"status": Database["public"]['Enums']["report_status"],"submitted_at": string | null,"submitted_by": string | null,"unit_id": string,"updated_at": string,"updated_by": string | null
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "area": Database["public"]['Enums']["programme_area"],"church_id"?: string,"commentary"?: string | null,"computed_figures"?: Json | null,"ever_submitted"?: boolean,"figures"?: NonNullable<Json>,"id"?: string,"report_month": string,"status"?: Database["public"]['Enums']["report_status"],"submitted_at"?: string | null,"submitted_by"?: string | null,"unit_id": string,"updated_at"?: string,"updated_by"?: string | null
+                  }
+                  Update: {
+                    "area"?: Database["public"]['Enums']["programme_area"],"church_id"?: string,"commentary"?: string | null,"computed_figures"?: Json | null,"ever_submitted"?: boolean,"figures"?: NonNullable<Json>,"id"?: string,"report_month"?: string,"status"?: Database["public"]['Enums']["report_status"],"submitted_at"?: string | null,"submitted_by"?: string | null,"unit_id"?: string,"updated_at"?: string,"updated_by"?: string | null
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "programme_reports_church_id_fkey"
+      columns: ["church_id"]
+isOneToOne: false
+      referencedRelation: "churches"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "programme_reports_church_id_unit_id_fkey"
+      columns: ["church_id","unit_id"]
+isOneToOne: false
+      referencedRelation: "units"
+      referencedColumns: ["church_id","id"]
+    }
+                  ]
                 },"project_committee_members": {
                   Row: {
                     "added_by": string | null,"church_id": string,"created_at": string,"id": string,"person_id": string,"project_id": string,"role": string | null
@@ -1220,6 +1246,32 @@ isOneToOne: false
       referencedColumns: ["church_id","id"]
     }
                   ]
+                },"project_milestones": {
+                  Row: {
+                    "church_id": string,"created_at": string,"created_by": string | null,"done_on": string | null,"due_on": string,"id": string,"output": string | null,"project_id": string,"sort_order": number,"title": string,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "church_id"?: string,"created_at"?: string,"created_by"?: string | null,"done_on"?: string | null,"due_on": string,"id"?: string,"output"?: string | null,"project_id": string,"sort_order"?: number,"title": string,"updated_at"?: string
+                  }
+                  Update: {
+                    "church_id"?: string,"created_at"?: string,"created_by"?: string | null,"done_on"?: string | null,"due_on"?: string,"id"?: string,"output"?: string | null,"project_id"?: string,"sort_order"?: number,"title"?: string,"updated_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "project_milestones_church_id_fkey"
+      columns: ["church_id"]
+isOneToOne: false
+      referencedRelation: "churches"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "project_milestones_church_id_project_id_fkey"
+      columns: ["church_id","project_id"]
+isOneToOne: false
+      referencedRelation: "projects"
+      referencedColumns: ["church_id","id"]
+    }
+                  ]
                 },"project_outcomes": {
                   Row: {
                     "care_followups": number | null,"church_id": string,"connected_to_community": number | null,"decisions_for_christ": number | null,"first_time_guests": number | null,"guests_contacted_48h": number | null,"next_step_signups": number | null,"project_id": string,"updated_at": string,"updated_by": string | null
@@ -1262,14 +1314,14 @@ isOneToOne: false
                   ]
                 },"projects": {
                   Row: {
-                    "approved_at": string | null,"approved_by": string | null,"church_id": string,"created_at": string,"decision_note": string | null,"description": string | null,"ends_at": string,"id": string,"is_event": boolean,"is_sunday_service": boolean,"level": Database["public"]['Enums']["project_level"],"name": string,"origin": Database["public"]['Enums']["project_origin"],"origin_note": string | null,"owner_user_id": string,"self_approved": boolean,"shortfall_action": Database["public"]['Enums']["shortfall_action"] | null,"shortfall_action_note": string | null,"site_id": string | null,"starts_at": string,"status": Database["public"]['Enums']["project_status"],"type_id": string | null,"unit_id": string | null,"updated_at": string
+                    "approved_at": string | null,"approved_by": string | null,"church_id": string,"created_at": string,"decision_note": string | null,"description": string | null,"ends_at": string,"id": string,"is_event": boolean,"is_goal": boolean,"is_special_sunday": boolean,"is_sunday_service": boolean,"level": Database["public"]['Enums']["project_level"],"name": string,"origin": Database["public"]['Enums']["project_origin"],"origin_note": string | null,"owner_user_id": string,"programme_id": string | null,"purpose_id": string | null,"self_approved": boolean,"shortfall_action": Database["public"]['Enums']["shortfall_action"] | null,"shortfall_action_note": string | null,"site_id": string | null,"starts_at": string,"status": Database["public"]['Enums']["project_status"],"type_id": string | null,"unit_id": string | null,"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "approved_at"?: string | null,"approved_by"?: string | null,"church_id"?: string,"created_at"?: string,"decision_note"?: string | null,"description"?: string | null,"ends_at": string,"id"?: string,"is_event"?: boolean,"is_sunday_service"?: boolean,"level": Database["public"]['Enums']["project_level"],"name": string,"origin"?: Database["public"]['Enums']["project_origin"],"origin_note"?: string | null,"owner_user_id"?: string,"self_approved"?: boolean,"shortfall_action"?: Database["public"]['Enums']["shortfall_action"] | null,"shortfall_action_note"?: string | null,"site_id"?: string | null,"starts_at": string,"status"?: Database["public"]['Enums']["project_status"],"type_id"?: string | null,"unit_id"?: string | null,"updated_at"?: string
+                    "approved_at"?: string | null,"approved_by"?: string | null,"church_id"?: string,"created_at"?: string,"decision_note"?: string | null,"description"?: string | null,"ends_at": string,"id"?: string,"is_event"?: boolean,"is_goal"?: boolean,"is_special_sunday"?: boolean,"is_sunday_service"?: boolean,"level": Database["public"]['Enums']["project_level"],"name": string,"origin"?: Database["public"]['Enums']["project_origin"],"origin_note"?: string | null,"owner_user_id"?: string,"programme_id"?: string | null,"purpose_id"?: string | null,"self_approved"?: boolean,"shortfall_action"?: Database["public"]['Enums']["shortfall_action"] | null,"shortfall_action_note"?: string | null,"site_id"?: string | null,"starts_at": string,"status"?: Database["public"]['Enums']["project_status"],"type_id"?: string | null,"unit_id"?: string | null,"updated_at"?: string
                   }
                   Update: {
-                    "approved_at"?: string | null,"approved_by"?: string | null,"church_id"?: string,"created_at"?: string,"decision_note"?: string | null,"description"?: string | null,"ends_at"?: string,"id"?: string,"is_event"?: boolean,"is_sunday_service"?: boolean,"level"?: Database["public"]['Enums']["project_level"],"name"?: string,"origin"?: Database["public"]['Enums']["project_origin"],"origin_note"?: string | null,"owner_user_id"?: string,"self_approved"?: boolean,"shortfall_action"?: Database["public"]['Enums']["shortfall_action"] | null,"shortfall_action_note"?: string | null,"site_id"?: string | null,"starts_at"?: string,"status"?: Database["public"]['Enums']["project_status"],"type_id"?: string | null,"unit_id"?: string | null,"updated_at"?: string
+                    "approved_at"?: string | null,"approved_by"?: string | null,"church_id"?: string,"created_at"?: string,"decision_note"?: string | null,"description"?: string | null,"ends_at"?: string,"id"?: string,"is_event"?: boolean,"is_goal"?: boolean,"is_special_sunday"?: boolean,"is_sunday_service"?: boolean,"level"?: Database["public"]['Enums']["project_level"],"name"?: string,"origin"?: Database["public"]['Enums']["project_origin"],"origin_note"?: string | null,"owner_user_id"?: string,"programme_id"?: string | null,"purpose_id"?: string | null,"self_approved"?: boolean,"shortfall_action"?: Database["public"]['Enums']["shortfall_action"] | null,"shortfall_action_note"?: string | null,"site_id"?: string | null,"starts_at"?: string,"status"?: Database["public"]['Enums']["project_status"],"type_id"?: string | null,"unit_id"?: string | null,"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -1295,6 +1347,18 @@ isOneToOne: false
       columns: ["church_id","unit_id"]
 isOneToOne: false
       referencedRelation: "units"
+      referencedColumns: ["church_id","id"]
+    },{
+      foreignKeyName: "projects_programme_fk"
+      columns: ["church_id","programme_id"]
+isOneToOne: false
+      referencedRelation: "unit_programmes"
+      referencedColumns: ["church_id","id"]
+    },{
+      foreignKeyName: "projects_purpose_fk"
+      columns: ["church_id","purpose_id"]
+isOneToOne: false
+      referencedRelation: "purposes"
       referencedColumns: ["church_id","id"]
     }
                   ]
@@ -1640,6 +1704,32 @@ isOneToOne: false
       referencedColumns: ["church_id","id"]
     }
                   ]
+                },"unit_programmes": {
+                  Row: {
+                    "church_id": string,"created_at": string,"description": string | null,"id": string,"is_active": boolean,"name": string,"report_area": Database["public"]['Enums']["programme_area"] | null,"unit_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "church_id"?: string,"created_at"?: string,"description"?: string | null,"id"?: string,"is_active"?: boolean,"name": string,"report_area"?: Database["public"]['Enums']["programme_area"] | null,"unit_id": string
+                  }
+                  Update: {
+                    "church_id"?: string,"created_at"?: string,"description"?: string | null,"id"?: string,"is_active"?: boolean,"name"?: string,"report_area"?: Database["public"]['Enums']["programme_area"] | null,"unit_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "unit_programmes_church_id_fkey"
+      columns: ["church_id"]
+isOneToOne: false
+      referencedRelation: "churches"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "unit_programmes_church_id_unit_id_fkey"
+      columns: ["church_id","unit_id"]
+isOneToOne: false
+      referencedRelation: "units"
+      referencedColumns: ["church_id","id"]
+    }
+                  ]
                 },"units": {
                   Row: {
                     "church_id": string,"created_at": string,"id": string,"is_active": boolean,"name": string,"objectives": string | null,"purpose_id": string | null,"regular_monthly_need": number,"scope": string | null,"target_headcount": number | null
@@ -1913,6 +2003,9 @@ isOneToOne: false
 "person_engagement":
 { Args: { "p_person": string,"p_quarter"?: string }; Returns: Json
                            },
+"programme_report_figures":
+{ Args: { "p_area": Database["public"]['Enums']["programme_area"],"p_month": string,"p_unit": string }; Returns: Json
+                           },
 "project_readiness":
 { Args: { "p_project": string }; Returns: Json
                            },
@@ -1979,7 +2072,7 @@ isOneToOne: false
                            }
           }
           Enums: {
-            "action_status": "open"|"done","app_role": "resident_pastor"|"purpose_head"|"gsquad_coordinator"|"teci_coordinator"|"unit_lead"|"deputy_unit_lead"|"operations_lead"|"pastoral_lead"|"newsletter_editor"|"finance","asset_status": "not_started"|"in_progress"|"done","assignment_status": "planned"|"served"|"no_show"|"cancelled"|"pending_approval","assimilation_step": "welcomed"|"values_session"|"first_serve_with_buddy"|"met_other_teams"|"day_30_conversation"|"day_90_conversation","budget_status": "not_needed"|"pending"|"approved"|"rejected","calendar_check": "not_checked"|"confirmed"|"conflict","community_category": "interest"|"location","course_kind": "discipleship"|"leadership","event_complexity": "low"|"moderate"|"high","event_size": "small"|"medium"|"large","flag_source": "inactive"|"over_limit_two_months"|"new_90_days"|"many_units"|"manual"|"leader_load","flag_status": "open"|"closed","focus_area": "discipleship"|"assimilation"|"pastoral_care"|"soul_winning","funding_kind": "free"|"ticketed"|"ministry_budget","grid_status": "draft"|"finalised"|"approved","growth_progress": "done"|"in_progress"|"not_yet","input_status": "requested"|"received","issue_status": "draft"|"awaiting_coordinator"|"awaiting_pastor"|"approved"|"sent","link_purpose": "rsvp"|"react"|"unsubscribe","marital_status": "single"|"married","membership_status": "pending_approval"|"active"|"ended","mentor_kind": "buddy"|"apprentice"|"discipleship","newsletter_item_kind": "win"|"notice","person_status": "active"|"paused"|"left","project_level": "unit"|"church","project_origin": "tec"|"network"|"global","project_status": "draft"|"submitted"|"approved"|"in_progress"|"done"|"cancelled","reaction_kind": "heart"|"pray"|"fire"|"clap","report_status": "draft"|"submitted","role_permanence": "operational"|"project","serving_feeling": "thriving"|"doing_well"|"finding_it_hard"|"overstretched","shortfall_action": "move"|"scale_down"|"borrow"|"recruit","support_need": "none"|"training"|"fewer_slots"|"change_of_role"|"pastoral_check_in","venue_kind": "internal"|"external"
+            "action_status": "open"|"done","app_role": "resident_pastor"|"purpose_head"|"gsquad_coordinator"|"teci_coordinator"|"unit_lead"|"deputy_unit_lead"|"operations_lead"|"pastoral_lead"|"newsletter_editor"|"finance","asset_status": "not_started"|"in_progress"|"done","assignment_status": "planned"|"served"|"no_show"|"cancelled"|"pending_approval","assimilation_step": "welcomed"|"values_session"|"first_serve_with_buddy"|"met_other_teams"|"day_30_conversation"|"day_90_conversation","budget_status": "not_needed"|"pending"|"approved"|"rejected","calendar_check": "not_checked"|"confirmed"|"conflict","community_category": "interest"|"location","course_kind": "discipleship"|"leadership","event_complexity": "low"|"moderate"|"high","event_size": "small"|"medium"|"large","flag_source": "inactive"|"over_limit_two_months"|"new_90_days"|"many_units"|"manual"|"leader_load","flag_status": "open"|"closed","focus_area": "discipleship"|"assimilation"|"pastoral_care"|"soul_winning","funding_kind": "free"|"ticketed"|"ministry_budget","grid_status": "draft"|"finalised"|"approved","growth_progress": "done"|"in_progress"|"not_yet","input_status": "requested"|"received","issue_status": "draft"|"awaiting_coordinator"|"awaiting_pastor"|"approved"|"sent","link_purpose": "rsvp"|"react"|"unsubscribe","marital_status": "single"|"married","membership_status": "pending_approval"|"active"|"ended","mentor_kind": "buddy"|"apprentice"|"discipleship","newsletter_item_kind": "win"|"notice","person_status": "active"|"paused"|"left","programme_area": "maturity"|"evangelism"|"assimilation","project_level": "unit"|"church","project_origin": "tec"|"network"|"global","project_status": "draft"|"submitted"|"approved"|"in_progress"|"done"|"cancelled","reaction_kind": "heart"|"pray"|"fire"|"clap","report_status": "draft"|"submitted","role_permanence": "operational"|"project","serving_feeling": "thriving"|"doing_well"|"finding_it_hard"|"overstretched","shortfall_action": "move"|"scale_down"|"borrow"|"recruit","support_need": "none"|"training"|"fewer_slots"|"change_of_role"|"pastoral_check_in","venue_kind": "internal"|"external"
           }
           CompositeTypes: {
             [_ in never]: never
@@ -2095,7 +2188,7 @@ export type CompositeTypes<
 export const Constants = {
   "public": {
           Enums: {
-            "action_status": ["open", "done"],"app_role": ["resident_pastor", "purpose_head", "gsquad_coordinator", "teci_coordinator", "unit_lead", "deputy_unit_lead", "operations_lead", "pastoral_lead", "newsletter_editor", "finance"],"asset_status": ["not_started", "in_progress", "done"],"assignment_status": ["planned", "served", "no_show", "cancelled", "pending_approval"],"assimilation_step": ["welcomed", "values_session", "first_serve_with_buddy", "met_other_teams", "day_30_conversation", "day_90_conversation"],"budget_status": ["not_needed", "pending", "approved", "rejected"],"calendar_check": ["not_checked", "confirmed", "conflict"],"community_category": ["interest", "location"],"course_kind": ["discipleship", "leadership"],"event_complexity": ["low", "moderate", "high"],"event_size": ["small", "medium", "large"],"flag_source": ["inactive", "over_limit_two_months", "new_90_days", "many_units", "manual", "leader_load"],"flag_status": ["open", "closed"],"focus_area": ["discipleship", "assimilation", "pastoral_care", "soul_winning"],"funding_kind": ["free", "ticketed", "ministry_budget"],"grid_status": ["draft", "finalised", "approved"],"growth_progress": ["done", "in_progress", "not_yet"],"input_status": ["requested", "received"],"issue_status": ["draft", "awaiting_coordinator", "awaiting_pastor", "approved", "sent"],"link_purpose": ["rsvp", "react", "unsubscribe"],"marital_status": ["single", "married"],"membership_status": ["pending_approval", "active", "ended"],"mentor_kind": ["buddy", "apprentice", "discipleship"],"newsletter_item_kind": ["win", "notice"],"person_status": ["active", "paused", "left"],"project_level": ["unit", "church"],"project_origin": ["tec", "network", "global"],"project_status": ["draft", "submitted", "approved", "in_progress", "done", "cancelled"],"reaction_kind": ["heart", "pray", "fire", "clap"],"report_status": ["draft", "submitted"],"role_permanence": ["operational", "project"],"serving_feeling": ["thriving", "doing_well", "finding_it_hard", "overstretched"],"shortfall_action": ["move", "scale_down", "borrow", "recruit"],"support_need": ["none", "training", "fewer_slots", "change_of_role", "pastoral_check_in"],"venue_kind": ["internal", "external"]
+            "action_status": ["open", "done"],"app_role": ["resident_pastor", "purpose_head", "gsquad_coordinator", "teci_coordinator", "unit_lead", "deputy_unit_lead", "operations_lead", "pastoral_lead", "newsletter_editor", "finance"],"asset_status": ["not_started", "in_progress", "done"],"assignment_status": ["planned", "served", "no_show", "cancelled", "pending_approval"],"assimilation_step": ["welcomed", "values_session", "first_serve_with_buddy", "met_other_teams", "day_30_conversation", "day_90_conversation"],"budget_status": ["not_needed", "pending", "approved", "rejected"],"calendar_check": ["not_checked", "confirmed", "conflict"],"community_category": ["interest", "location"],"course_kind": ["discipleship", "leadership"],"event_complexity": ["low", "moderate", "high"],"event_size": ["small", "medium", "large"],"flag_source": ["inactive", "over_limit_two_months", "new_90_days", "many_units", "manual", "leader_load"],"flag_status": ["open", "closed"],"focus_area": ["discipleship", "assimilation", "pastoral_care", "soul_winning"],"funding_kind": ["free", "ticketed", "ministry_budget"],"grid_status": ["draft", "finalised", "approved"],"growth_progress": ["done", "in_progress", "not_yet"],"input_status": ["requested", "received"],"issue_status": ["draft", "awaiting_coordinator", "awaiting_pastor", "approved", "sent"],"link_purpose": ["rsvp", "react", "unsubscribe"],"marital_status": ["single", "married"],"membership_status": ["pending_approval", "active", "ended"],"mentor_kind": ["buddy", "apprentice", "discipleship"],"newsletter_item_kind": ["win", "notice"],"person_status": ["active", "paused", "left"],"programme_area": ["maturity", "evangelism", "assimilation"],"project_level": ["unit", "church"],"project_origin": ["tec", "network", "global"],"project_status": ["draft", "submitted", "approved", "in_progress", "done", "cancelled"],"reaction_kind": ["heart", "pray", "fire", "clap"],"report_status": ["draft", "submitted"],"role_permanence": ["operational", "project"],"serving_feeling": ["thriving", "doing_well", "finding_it_hard", "overstretched"],"shortfall_action": ["move", "scale_down", "borrow", "recruit"],"support_need": ["none", "training", "fewer_slots", "change_of_role", "pastoral_check_in"],"venue_kind": ["internal", "external"]
           }
         }
 } as const

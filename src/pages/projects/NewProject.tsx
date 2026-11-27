@@ -7,6 +7,10 @@
 //   * church projects: Operations Lead, G-Squad Coordinator, Purpose Heads (the Resident Pastor
 //     does not own projects: decision of 25 Oct 2026);
 //   * unit projects: the unit's Team Lead or Purpose Head, the Coordinator or Ops Lead.
+// Migration 37 (decisions of 27 Nov 2026): a project is an event, a routine team activity
+// (team only) or a goal-based project (milestones and outputs, no run of show, decided by the
+// Resident Pastor). A church goal-based project may be led for one purpose (the purpose level).
+// An event or routine activity may be linked to a team programme, for its monthly report.
 // Times are London wall-clock times (see londonToIso).
 // -------------------------------------------------------------------------------------
 import { useState, type FormEvent } from 'react';
@@ -15,12 +19,13 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { TEC } from '../../design-system';
 import { supabase } from '../../lib/supabase';
 import { friendlyError } from '../../data/errors';
-import { useUnits } from '../../data/reference';
+import { usePurposes, useUnits } from '../../data/reference';
+import { useProgrammes } from '../../data/programmes';
 import { londonToIso, PROJECT_CREATORS, useProjectTypes, useSites } from '../../data/projects';
 import { hasRole, ledUnitIds, useMe } from '../../auth/useMe';
 import { todayIso } from '../../data/sundays';
 
-const { SectionHeading, Card, Notice, Button, TextField, SelectField, Checkbox } = TEC;
+const { SectionHeading, Card, Notice, Button, TextField, SelectField } = TEC;
 
 export function NewProject() {
   const me = useMe();
@@ -29,6 +34,8 @@ export function NewProject() {
   const units = useUnits();
   const types = useProjectTypes();
   const sites = useSites();
+  const purposes = usePurposes();
+  const programmes = useProgrammes();
   const [today] = useState(todayIso);
 
   const wide = hasRole(me.data, 'operations_lead', 'gsquad_coordinator');
@@ -49,7 +56,9 @@ export function NewProject() {
     end_date: '',
     end_time: '13:00',
     description: '',
-    is_event: true,
+    kind: 'event' as 'event' | 'routine' | 'goal',
+    purpose_id: '',
+    programme_id: '',
     size: 'small',
     complexity: 'low',
   });
@@ -71,14 +80,18 @@ export function NewProject() {
           starts_at: starts,
           ends_at: ends,
           description: v.description.trim() || null,
-          is_event: v.level === 'church' || v.is_event,
+          // The database also decides: a goal-based project is never an event.
+          is_event: v.kind === 'event',
+          is_goal: v.kind === 'goal',
+          purpose_id: v.kind === 'goal' && v.level === 'church' ? v.purpose_id || null : null,
+          programme_id: v.kind !== 'goal' ? v.programme_id || null : null,
         })
         .select('id')
         .single();
       if (error) throw error;
       // An event starts its planning form now; if that step fails, the project still exists
       // and the form can be started from the project page.
-      if (v.level === 'church' || v.is_event) {
+      if (v.kind === 'event') {
         const { error: planError } = await supabase
           .from('event_plans')
           .insert({ project_id: data.id, size: v.size as 'small', complexity: v.complexity as 'low' });
@@ -97,6 +110,7 @@ export function NewProject() {
     const found: Record<string, string> = {};
     if (!v.name.trim()) found.name = 'Give it a name';
     if (v.level === 'unit' && !v.unit_id) found.unit_id = 'Choose the unit';
+    if (v.level === 'church' && v.kind === 'routine') found.kind = 'Only a team project can be a routine activity';
     if (!v.start_date) found.start_date = 'Choose the start date';
     else if (v.start_date < today) found.start_date = 'The start date has passed';
     if (v.end_date && v.end_date < v.start_date) found.end_date = 'Ends before it starts';
@@ -191,20 +205,58 @@ export function NewProject() {
           </p>
         </Card>
 
-        <Card title="Event planning">
-          {v.level === 'unit' ? (
-            <Checkbox
-              id="np-event"
-              label="This is an event: plan it with the High-level Event Planning form and give it a run of show (untick for a routine team activity such as a rehearsal, training or team meeting)"
-              checked={v.is_event}
-              onChange={(e) => set('is_event', e.target.checked)}
+        <Card title="What kind of project">
+          <div className="tec-fields">
+            <SelectField
+              id="np-kind"
+              label="Kind"
+              hint={hint('kind')}
+              value={v.kind}
+              onChange={(e) => set('kind', e.target.value)}
+              options={[
+                { value: 'event', label: 'An event (planning form and run of show)' },
+                ...(v.level === 'unit' ? [{ value: 'routine', label: 'A routine team activity (rehearsal, training, team meeting)' }] : []),
+                { value: 'goal', label: 'A goal-based project (milestones and outputs, can run for months)' },
+              ]}
+              aria-invalid={!!errors.kind || undefined}
             />
-          ) : (
+            {/* The purpose level: a church goal-based project led for one purpose. */}
+            {v.kind === 'goal' && v.level === 'church' && (
+              <SelectField
+                id="np-purpose"
+                label="Led for"
+                hint="(optional) the purpose it belongs to"
+                value={v.purpose_id}
+                onChange={(e) => set('purpose_id', e.target.value)}
+                options={[
+                  { value: '', label: 'The whole church' },
+                  ...(purposes.data ?? []).filter((x) => wide || myPurposes.includes(x.id)).map((x) => ({ value: x.id, label: x.name })),
+                ]}
+              />
+            )}
+            {/* A programme link feeds the team's monthly programme report. */}
+            {v.kind !== 'goal' && (
+              <SelectField
+                id="np-programme"
+                label="Part of a team programme"
+                hint="(optional) counts towards that team's monthly report"
+                value={v.programme_id}
+                onChange={(e) => set('programme_id', e.target.value)}
+                options={[
+                  { value: '', label: 'None' },
+                  ...(programmes.data ?? [])
+                    .filter((x) => x.is_active && (v.level === 'church' || x.unit_id === v.unit_id))
+                    .map((x) => ({ value: x.id, label: `${(units.data ?? []).find((u) => u.id === x.unit_id)?.name ?? 'Team'}: ${x.name}` })),
+                ]}
+              />
+            )}
+          </div>
+          {v.kind === 'goal' && (
             <p className="type-caption" style={{ margin: 0 }}>
-              A church project is an event: it uses the High-level Event Planning form and has a run of show.
+              Name its milestones and outputs on the next page. The Resident Pastor decides goal-based projects with the leadership, usually in the year plan.
             </p>
           )}
-          {(v.level === 'church' || v.is_event) && (
+          {v.kind === 'event' && (
             <div className="tec-fields">
               <SelectField
                 id="np-size"

@@ -56,7 +56,16 @@ export function ReadinessCard({ r }: { r: Readiness }) {
         ? { tone: 'ok', tag: 'Pass', text: `Focus areas named (${r.focus.named}), one primary.` }
         : { tone: 'danger', tag: 'Block', text: 'Name the event\u2019s focus areas and choose the primary one (Four focus areas).' },
     );
+  // Migration 37: a goal-based project goes for approval with a milestone and closes when all are met.
+  if (r.milestones && (r.status === 'draft' || r.status === 'submitted'))
+    checks.push(
+      r.milestones.named > 0
+        ? { tone: 'ok', tag: 'Pass', text: `${r.milestones.named} milestone${r.milestones.named > 1 ? 's' : ''} named.` }
+        : { tone: 'danger', tag: 'Block', text: 'Name at least one milestone and its output.' },
+    );
   if (r.status === 'approved' || r.status === 'in_progress') {
+    if (r.milestones && r.milestones.open > 0)
+      checks.push({ tone: 'warn', tag: 'To close', text: `${r.milestones.open} milestone${r.milestones.open > 1 ? 's' : ''} still to meet.` });
     if (r.inputs_outstanding > 0)
       checks.push({ tone: 'warn', tag: 'To close', text: `${r.inputs_outstanding} required input${r.inputs_outstanding > 1 ? 's' : ''} still to come.` });
     if (r.review_done === false) checks.push({ tone: 'warn', tag: 'To close', text: 'Complete the event review (section 12).' });
